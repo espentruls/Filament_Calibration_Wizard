@@ -76,3 +76,26 @@ export type {
   PreparedJobPlan,
   PrepareJobInput
 } from './projectPreparation';
+
+// --- engine layer (Stage 5) ------------------------------------------------
+
+export { nativeEngineBridge, fromRawCapabilities } from './engineBridge';
+export type {
+  EngineNativeBridge,
+  RawEngineDetection,
+  RawEngineCapabilities,
+  RawSliceRun,
+  RunSliceArgs
+} from './engineBridge';
+
+export { InstalledOrcaEngine } from './engines/installedOrcaEngine';
+export { ManualExportEngine } from './engines/manualExportEngine';
+export {
+  baseName,
+  inspectSlicedJob,
+  notSlicedJob,
+  splitRawDetection
+} from './engines/engineSupport';
+
+export { createEngines, discoverEngines } from './engineRegistry';
+export type { EngineStatus, EngineDiagnostics } from './engineRegistry';

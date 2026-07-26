@@ -83,6 +83,40 @@ Defined in [`src/automatedCalibration/types.ts`](../src/automatedCalibration/typ
 - **`CalibrationAssetDefinition`** — licensed, versioned, checksummed calibration
   model/registry entry (bundled, downloaded, or user-provided).
 
+### Engine layer (Stage 5)
+
+Two engines implement `SlicingEngine` so far:
+
+- **`ManualExportEngine`** — always available, needs no external slicer. It
+  reports export capability but **not** slice capability; `slice()` returns a
+  deliberately not-sliced job (never a fake "printer-ready" one). This is the
+  guaranteed fallback for browser builds and users without Orca.
+- **`InstalledOrcaEngine`** — drives an OrcaSlicer install the user already has
+  (auto-detected, or an executable they select manually) as an external process.
+
+Discovery, validation, and slicing are delegated to native Tauri commands in
+[`src-tauri/src/slicer_integration/engine.rs`](../src-tauri/src/slicer_integration/engine.rs):
+
+- **Capability validation is by structure, not name.** An executable is trusted
+  as a slicing engine only when it ships `resources/calib` and `resources/profiles`
+  beside it — the assets the pipeline depends on — so a mis-named or unrelated
+  binary is rejected rather than name-trusted.
+- **A tamper-evident engine manifest** (id, executable path, version, sha256
+  checksum, capabilities) is written under a PerfectFit-managed root. The slice
+  runner launches only the manifest-vetted binary; the frontend never passes a
+  raw executable path.
+- **The process runner** captures exit code and duration, enforces a timeout,
+  honors a cancellation token, and always reaps the child — but **never captures
+  stdout**. Success is judged from the output artifact (present, non-empty) and
+  the engine's `<datadir>/log/`.
+- **Isolated per-job paths.** The frontend passes validated session/job ids, and
+  the runner resolves them to `sessions/<id>/jobs/<id>/{workspace,datadir,out}`
+  under the managed root — never touching the user's real Orca configuration.
+
+`discoverEngines()` summarizes engine status (detected / valid / capabilities /
+recommended engine) for the diagnostics screen; the rendered panel lands with
+the Stage 7 UX (a visible screen now would be dead code while the flag is off).
+
 ### Relationship to existing code
 
 The automated session **extends the existing `CalibrationProject`** — it is not a

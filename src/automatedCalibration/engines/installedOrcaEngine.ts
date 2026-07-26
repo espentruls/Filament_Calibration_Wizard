@@ -1,0 +1,191 @@
+// ---------------------------------------------------------------------------
+// Automated Calibration Pipeline — Installed OrcaSlicer engine (Stage 5).
+//
+// Drives an OrcaSlicer install the user already has (auto-detected, or an
+// executable they selected manually) strictly as an external process. Discovery
+// and capability validation are delegated to the native side, which validates
+// by *structure* (resources/calib + resources/profiles), never by trusting the
+// executable's name, and records a tamper-evident manifest. Slicing runs through
+// the safe native process runner; success is judged from the output artifact and
+// the engine log, never stdout.
+//
+// Project assembly (resolvePrinterPreset / prepareProject) is Stage 6 — those
+// methods reject clearly until then. Everything degrades to "not detected" in a
+// browser/PWA build with no desktop bridge.
+// ---------------------------------------------------------------------------
+
+import type {
+  AutomatedCalibrationSession,
+  CalibrationStepDefinition,
+  EngineDetectionResult,
+  EngineValidationResult,
+  PreparedCalibrationProject,
+  PrinterSelection,
+  ResolvedPrinterPreset,
+  SliceOptions,
+  SlicedCalibrationJob,
+  SlicedJobInspection,
+  SlicingEngine,
+  SlicingEngineCapabilities
+} from '../types';
+import { emptyEngineCapabilities } from '../capabilities';
+import { type EngineNativeBridge, nativeEngineBridge, type RawEngineDetection } from '../engineBridge';
+import type { EngineStatus } from '../engineRegistry';
+import {
+  baseName,
+  inspectSlicedJob,
+  notSlicedJob,
+  notUntilStage6,
+  splitRawDetection
+} from './engineSupport';
+
+const ENGINE_ID = 'installed_orca' as const;
+
+export class InstalledOrcaEngine implements SlicingEngine {
+  readonly id = ENGINE_ID;
+  readonly displayName = 'Installed OrcaSlicer';
+
+  private readonly bridge: EngineNativeBridge;
+  private lastRaw: RawEngineDetection | null = null;
+  private lastVersion: string | null = null;
+
+  constructor(bridge: EngineNativeBridge = nativeEngineBridge) {
+    this.bridge = bridge;
+  }
+
+  get version(): string | undefined {
+    return this.lastVersion ?? undefined;
+  }
+
+  /** Web-build fallback used whenever no desktop bridge is present. */
+  private notDesktopRaw(): RawEngineDetection {
+    return {
+      engine_id: ENGINE_ID,
+      detected: false,
+      display_name: this.displayName,
+      version: null,
+      executable_path: null,
+      source: 'none',
+      checksum_sha256: null,
+      capabilities: {
+        slice: false,
+        export_3mf: false,
+        export_gcode: false,
+        multi_plate: false,
+        multi_extruder: false
+      },
+      valid: false,
+      errors: ['Automated slicing requires the PerfectFit desktop app.'],
+      warnings: [],
+      notes: []
+    };
+  }
+
+  private remember(raw: RawEngineDetection): RawEngineDetection {
+    this.lastRaw = raw;
+    this.lastVersion = raw.version;
+    return raw;
+  }
+
+  /** Detect the engine, optionally from a user-selected executable path. */
+  async detect(manualExePath?: string): Promise<EngineDetectionResult> {
+    const raw = this.remember(
+      this.bridge.isDesktop()
+        ? await this.bridge.detectSlicingEngine(ENGINE_ID, manualExePath)
+        : this.notDesktopRaw()
+    );
+    return splitRawDetection(raw).detection;
+  }
+
+  /** Re-validate a previously-detected engine from its persisted manifest. */
+  async validate(): Promise<EngineValidationResult> {
+    if (!this.bridge.isDesktop()) return splitRawDetection(this.notDesktopRaw()).validation;
+    const raw = this.remember(await this.bridge.validateSlicingEngine(ENGINE_ID));
+    return splitRawDetection(raw).validation;
+  }
+
+  async getCapabilities(): Promise<SlicingEngineCapabilities> {
+    if (this.lastRaw?.valid) return splitRawDetection(this.lastRaw).capabilities;
+    const raw = this.remember(
+      this.bridge.isDesktop()
+        ? await this.bridge.detectSlicingEngine(ENGINE_ID)
+        : this.notDesktopRaw()
+    );
+    return raw.valid ? splitRawDetection(raw).capabilities : emptyEngineCapabilities();
+  }
+
+  /** Combined status for the engine-status diagnostics view (one native call). */
+  async status(): Promise<EngineStatus> {
+    const raw = this.remember(
+      this.bridge.isDesktop()
+        ? await this.bridge.detectSlicingEngine(ENGINE_ID)
+        : this.notDesktopRaw()
+    );
+    const { detection, validation, capabilities } = splitRawDetection(raw);
+    return {
+      engineId: ENGINE_ID,
+      displayName: detection.displayName,
+      detected: detection.detected,
+      valid: validation.valid,
+      version: detection.version,
+      source: detection.source,
+      executablePath: detection.executablePath,
+      capabilities: validation.valid ? capabilities : emptyEngineCapabilities(),
+      errors: validation.errors,
+      warnings: validation.warnings,
+      notes: detection.notes
+    };
+  }
+
+  // --- Stage 6 territory (project assembly) ---------------------------------
+
+  resolvePrinterPreset(_selection: PrinterSelection): Promise<ResolvedPrinterPreset> {
+    return notUntilStage6<ResolvedPrinterPreset>('resolvePrinterPreset');
+  }
+
+  prepareProject(
+    _session: AutomatedCalibrationSession,
+    _step: CalibrationStepDefinition
+  ): Promise<PreparedCalibrationProject> {
+    return notUntilStage6<PreparedCalibrationProject>('prepareProject');
+  }
+
+  /** Slice a staged project via the native runner. The prepared project's
+   *  identifiers map onto the managed job layout: the project id is the session
+   *  id, the prepared-project id is the job id, and the assembled 3mf's file
+   *  name is passed through. Never accepts a raw executable path — the runner
+   *  launches only the manifest-vetted engine binary. */
+  async slice(
+    project: PreparedCalibrationProject,
+    options: SliceOptions
+  ): Promise<SlicedCalibrationJob> {
+    if (!this.bridge.isDesktop() || !project.projectFilePath) {
+      return notSlicedJob(project.id, project.stepId, ENGINE_ID, this.lastVersion);
+    }
+    const raw = await this.bridge.runCalibrationSlice({
+      engineId: ENGINE_ID,
+      sessionId: project.projectId,
+      jobId: project.id,
+      projectFileName: baseName(project.projectFilePath),
+      timeoutMs: options.timeoutMs,
+      cancellationToken: options.cancellationToken
+    });
+    return {
+      preparedProjectId: project.id,
+      stepId: project.stepId,
+      outputGcodePath: raw.gcode_path,
+      outputArtifactPaths: raw.artifact_paths,
+      engineId: ENGINE_ID,
+      engineVersion: this.lastVersion,
+      exitCode: raw.exit_code,
+      durationMs: raw.duration_ms,
+      logPath: raw.log_dir,
+      sliced: raw.succeeded,
+      succeeded: raw.succeeded
+    };
+  }
+
+  async inspectOutput(job: SlicedCalibrationJob): Promise<SlicedJobInspection> {
+    return inspectSlicedJob(job);
+  }
+}
