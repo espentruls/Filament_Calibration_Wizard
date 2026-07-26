@@ -103,6 +103,15 @@ export interface ResolvePresetArgs {
   filament: string;
 }
 
+export interface RawMachinePreset {
+  vendor: string;
+  name: string;
+  printer_model: string | null;
+  nozzle_diameter: string | null;
+  default_print_profile: string | null;
+  default_filament_profile: string | null;
+}
+
 /** The native surface the engines depend on. Injectable for tests. */
 export interface EngineNativeBridge {
   isDesktop(): boolean;
@@ -117,6 +126,9 @@ export interface EngineNativeBridge {
   /** Resolve an Orca printer/process/filament selection (by exact preset names)
    *  into a flat project_settings.config via the vendor `inherits` chains. */
   resolvePresetByNames(args: ResolvePresetArgs): Promise<RawResolvedPreset>;
+  /** Enumerate the installed slicer's user-selectable machine presets across
+   *  vendors, for mapping a printer selection to (vendor, machine, process). */
+  listInstalledMachines(engineId: EngineId): Promise<RawMachinePreset[]>;
 }
 
 // --- production implementation (Tauri via window.__TAURI__) ------------------
@@ -184,6 +196,9 @@ export const nativeEngineBridge: EngineNativeBridge = {
       processName: args.process,
       filamentName: args.filament
     });
+  },
+  listInstalledMachines(engineId) {
+    return invoke<RawMachinePreset[]>('list_installed_machines', { engineId });
   }
 };
 

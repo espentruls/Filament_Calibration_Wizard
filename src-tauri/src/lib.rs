@@ -85,6 +85,7 @@ pub fn run() {
       project_assembly::read_project_config,
       project_assembly::assemble_calibration_project,
       preset_resolver::resolve_printer_preset,
+      preset_resolver::list_installed_machines,
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

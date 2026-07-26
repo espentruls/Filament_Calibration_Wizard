@@ -89,8 +89,12 @@ export type {
   RawAssembledProject,
   AssembleProjectArgs,
   RawResolvedPreset,
-  ResolvePresetArgs
+  ResolvePresetArgs,
+  RawMachinePreset
 } from './engineBridge';
+
+export { mapPrinterToOrca, formatNozzle } from './printerMapping';
+export type { OrcaMachineMapping } from './printerMapping';
 
 export { InstalledOrcaEngine } from './engines/installedOrcaEngine';
 export { ManualExportEngine } from './engines/manualExportEngine';

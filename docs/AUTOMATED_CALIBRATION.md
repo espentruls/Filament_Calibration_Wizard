@@ -154,10 +154,18 @@ merged child-overrides-parent, and the three resolved objects combine into one
 flat `project_settings.config`. Verified on the live install: resolving a Bambu
 X1 Carbon selection yields that printer's config (364 keys, correct
 `printer_model`/`nozzle_diameter`), and Orca slices a project built from it
-(117 KB `plate_1.gcode`, exit 0 — distinct from the N1 template's output). The
-resolver takes exact Orca preset names today; mapping a PerfectFit printer-DB
-selection to those names is the remaining piece before `resolvePrinterPreset` is
-wired end-to-end.
+(117 KB `plate_1.gcode`, exit 0 — distinct from the N1 template's output).
+
+A PerfectFit printer selection is mapped to those exact preset names by
+[`printerMapping.ts`](../src/automatedCalibration/printerMapping.ts): a
+PerfectFit printer's `model` equals Orca's machine `printer_model`, so the
+native `list_installed_machines` index is matched on model + nozzle to the
+machine leaf, whose `default_print_profile` gives the process
+(`InstalledOrcaEngine.resolveForPrinter(selection, filamentName)`). Filament is
+a **separate selection**: Orca machine leaves carry no default filament, and in
+a calibration the material is the thing being tuned, so the caller supplies the
+filament preset. What remains for a full guided session is the material →
+filament-preset choice and the Stage 7 UX around it.
 
 ### Relationship to existing code
 

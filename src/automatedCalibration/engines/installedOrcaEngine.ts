@@ -35,6 +35,8 @@ import { getAsset, resolveAsset } from '../assets';
 import { inputFingerprintForStep } from '../workflow';
 import { workspaceDirName } from '../projectPreparation';
 import { mergeCalibrationIntoProjectConfig } from '../orcaProjectConfig';
+import { mapPrinterToOrca, type OrcaMachineMapping } from '../printerMapping';
+import { getPrinterSpec } from '../../data/printerDatabase';
 import {
   baseName,
   inspectSlicedJob,
@@ -170,16 +172,58 @@ export class InstalledOrcaEngine implements SlicingEngine {
   }
 
   /**
-   * Resolve from a PerfectFit `PrinterSelection`. The vendor `inherits` resolver
-   * is implemented (see `resolvePresetByNames`); what remains is mapping a
-   * printer-DB selection to the exact Orca vendor/preset names, which is the
-   * next increment — so this rejects clearly until that mapping lands.
+   * Map a PerfectFit `PrinterSelection` to the installed Orca machine +
+   * process. Filament is intentionally not included — Orca machine leaves carry
+   * no default filament, and the material is a separate calibration choice — so
+   * the full config comes from `resolveForPrinter(selection, filamentName)`.
+   * Throws `PRINTER_NOT_IN_ORCA` when the printer/nozzle isn't installed.
    */
-  resolvePrinterPreset(_selection: PrinterSelection): Promise<ResolvedPrinterPreset> {
-    return Promise.reject(
-      new Error(
-        'PRINTER_DB_MAPPING_NOT_IMPLEMENTED: mapping a printer-DB selection to Orca preset names is the next increment; use resolvePresetByNames with exact names.'
-      )
+  async mapSelection(selection: PrinterSelection): Promise<OrcaMachineMapping> {
+    if (!this.bridge.isDesktop()) {
+      throw new Error('NOT_DESKTOP: printer mapping requires the desktop app.');
+    }
+    const spec = getPrinterSpec(selection.printerProfileId);
+    if (!spec) {
+      throw new Error(`PRINTER_NOT_FOUND: no printer-DB entry for '${selection.printerProfileId}'.`);
+    }
+    const machines = await this.bridge.listInstalledMachines(ENGINE_ID);
+    const mapping = mapPrinterToOrca(spec.model, selection.nozzleDiameterMm, machines);
+    if (!mapping) {
+      throw new Error(
+        `PRINTER_NOT_IN_ORCA: no installed OrcaSlicer machine preset for "${spec.model}" at ${selection.nozzleDiameterMm}mm nozzle.`
+      );
+    }
+    return mapping;
+  }
+
+  /**
+   * Resolve a complete printer+process+filament config for a PerfectFit printer
+   * selection plus a chosen filament preset name — the full end-to-end path.
+   */
+  async resolveForPrinter(
+    selection: PrinterSelection,
+    filamentPresetName: string
+  ): Promise<ResolvedPrinterPreset> {
+    const mapping = await this.mapSelection(selection);
+    return this.resolvePresetByNames({
+      vendor: mapping.vendor,
+      machine: mapping.machineName,
+      process: mapping.process,
+      filament: filamentPresetName
+    });
+  }
+
+  /**
+   * `SlicingEngine` contract entry. A complete Orca config also needs a base
+   * filament preset (the material being calibrated), which a `PrinterSelection`
+   * does not carry — so this maps the printer and then directs the caller to
+   * `resolveForPrinter` with a filament. The printer mapping itself is done.
+   */
+  async resolvePrinterPreset(selection: PrinterSelection): Promise<ResolvedPrinterPreset> {
+    const mapping = await this.mapSelection(selection);
+    throw new Error(
+      `FILAMENT_SELECTION_REQUIRED: mapped to Orca machine "${mapping.machineName}" + process "${mapping.process}"; ` +
+        'call resolveForPrinter(selection, filamentPresetName) with the material being calibrated.'
     );
   }
 

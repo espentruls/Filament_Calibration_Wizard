@@ -7,7 +7,8 @@ import {
   fromRawCapabilities,
   getStepDefinition,
   buildWorkingProfile,
-  applyStepResult
+  applyStepResult,
+  mapPrinterToOrca
 } from '../../src/automatedCalibration';
 import type {
   EngineNativeBridge,
@@ -95,9 +96,29 @@ function fakeBridge(overrides: Partial<EngineNativeBridge> = {}): EngineNativeBr
     readProjectConfig: async () => TEMPLATE_CONFIG,
     assembleCalibrationProject: async () => ASSEMBLED,
     resolvePresetByNames: async () => RESOLVED_PRESET,
+    listInstalledMachines: async () => INSTALLED_MACHINES,
     ...overrides
   };
 }
+
+const INSTALLED_MACHINES = [
+  {
+    vendor: 'BBL',
+    name: 'Bambu Lab X1 Carbon 0.4 nozzle',
+    printer_model: 'Bambu Lab X1 Carbon',
+    nozzle_diameter: '0.4',
+    default_print_profile: '0.20mm Standard @BBL X1C',
+    default_filament_profile: null
+  },
+  {
+    vendor: 'BBL',
+    name: 'Bambu Lab X1 Carbon 0.6 nozzle',
+    printer_model: 'Bambu Lab X1 Carbon',
+    nozzle_diameter: '0.6',
+    default_print_profile: '0.30mm Standard @BBL X1C 0.6 nozzle',
+    default_filament_profile: null
+  }
+];
 
 const RESOLVED_PRESET = {
   settings_json: JSON.stringify({
@@ -235,11 +256,64 @@ describe('InstalledOrcaEngine (desktop)', () => {
     expect(preset.printerSettingsId).toBe('Bambu Lab X1 Carbon 0.4 nozzle');
   });
 
-  it('resolvePrinterPreset (from a printer-DB selection) rejects until the mapping lands', async () => {
+  it('maps a printer-DB selection to the installed Orca machine + process', async () => {
+    const engine = new InstalledOrcaEngine(fakeBridge());
+    const mapping = await engine.mapSelection({
+      printerProfileId: 'bambu-lab-x1-carbon',
+      nozzleDiameterMm: 0.4,
+      slicer: 'orca'
+    });
+    expect(mapping.vendor).toBe('BBL');
+    expect(mapping.machineName).toBe('Bambu Lab X1 Carbon 0.4 nozzle');
+    expect(mapping.process).toBe('0.20mm Standard @BBL X1C');
+  });
+
+  it('resolveForPrinter resolves the full config given a filament', async () => {
+    let captured: { vendor: string; machine: string; process: string; filament: string } | null = null;
+    const engine = new InstalledOrcaEngine(
+      fakeBridge({
+        resolvePresetByNames: async (a) => {
+          captured = a;
+          return RESOLVED_PRESET;
+        }
+      })
+    );
+    const preset = await engine.resolveForPrinter(
+      { printerProfileId: 'bambu-lab-x1-carbon', nozzleDiameterMm: 0.4, slicer: 'orca' },
+      'Bambu PLA Basic @BBL X1C'
+    );
+    expect(captured!.machine).toBe('Bambu Lab X1 Carbon 0.4 nozzle');
+    expect(captured!.process).toBe('0.20mm Standard @BBL X1C');
+    expect(captured!.filament).toBe('Bambu PLA Basic @BBL X1C');
+    expect(preset.printerModel).toBe('Bambu Lab X1 Carbon');
+  });
+
+  it('throws PRINTER_NOT_IN_ORCA when the printer/nozzle is not installed', async () => {
     const engine = new InstalledOrcaEngine(fakeBridge());
     await expect(
-      engine.resolvePrinterPreset({ printerProfileId: 'p', nozzleDiameterMm: 0.4, slicer: 'orca' })
-    ).rejects.toThrow(/PRINTER_DB_MAPPING_NOT_IMPLEMENTED/);
+      engine.mapSelection({ printerProfileId: 'bambu-lab-x1-carbon', nozzleDiameterMm: 0.8, slicer: 'orca' })
+    ).rejects.toThrow(/PRINTER_NOT_IN_ORCA/);
+  });
+
+  it('resolvePrinterPreset maps then asks for a filament (contract entry)', async () => {
+    const engine = new InstalledOrcaEngine(fakeBridge());
+    await expect(
+      engine.resolvePrinterPreset({ printerProfileId: 'bambu-lab-x1-carbon', nozzleDiameterMm: 0.4, slicer: 'orca' })
+    ).rejects.toThrow(/FILAMENT_SELECTION_REQUIRED/);
+  });
+});
+
+describe('mapPrinterToOrca (pure)', () => {
+  it('matches on exact model + nozzle and requires a default process', () => {
+    const machines = [
+      { vendor: 'BBL', name: 'A 0.4 nozzle', printer_model: 'A', nozzle_diameter: '0.4', default_print_profile: 'P', default_filament_profile: null },
+      { vendor: 'BBL', name: 'A 0.6 nozzle', printer_model: 'A', nozzle_diameter: '0.6', default_print_profile: null, default_filament_profile: null }
+    ];
+    expect(mapPrinterToOrca('A', 0.4, machines)?.machineName).toBe('A 0.4 nozzle');
+    // 0.6 has no default process → no usable match
+    expect(mapPrinterToOrca('A', 0.6, machines)).toBeNull();
+    // unknown model
+    expect(mapPrinterToOrca('B', 0.4, machines)).toBeNull();
   });
 });
 

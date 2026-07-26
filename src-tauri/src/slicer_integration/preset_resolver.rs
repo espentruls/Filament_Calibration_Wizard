@@ -255,6 +255,76 @@ pub fn resolve_printer_preset(
     })
 }
 
+/// Identity of one user-selectable (instantiation) machine preset, for mapping
+/// a PerfectFit printer selection to the Orca preset names the resolver needs.
+#[derive(Serialize, Clone)]
+pub struct RawMachinePreset {
+    pub vendor: String,
+    pub name: String,
+    pub printer_model: Option<String>,
+    pub nozzle_diameter: Option<String>,
+    pub default_print_profile: Option<String>,
+    pub default_filament_profile: Option<String>,
+}
+
+/// First string of a field that may be a bare string or an array of strings.
+fn first_string(v: &Value, key: &str) -> Option<String> {
+    match v.get(key) {
+        Some(Value::String(s)) => Some(s.clone()),
+        Some(Value::Array(a)) => a.first().and_then(|x| x.as_str()).map(|s| s.to_string()),
+        _ => None,
+    }
+}
+
+/// Enumerate the installed slicer's user-selectable machine presets across all
+/// vendors, so the frontend can map a printer selection to (vendor, machine,
+/// process). Read-only, under the vetted engine's resources root.
+#[tauri::command]
+pub fn list_installed_machines(engine_id: String) -> Result<Vec<RawMachinePreset>, String> {
+    let resources = engine::engine_resources_root(&engine_id)
+        .ok_or_else(|| "Engine resources root unknown — detect the engine first".to_string())?;
+    let profiles = resources.join("profiles");
+    let mut out = Vec::new();
+    let Ok(vendors) = std::fs::read_dir(&profiles) else {
+        return Ok(out);
+    };
+    for v in vendors.flatten() {
+        let vpath = v.path();
+        if !vpath.is_dir() {
+            continue;
+        }
+        let vendor = v.file_name().to_string_lossy().to_string();
+        let Ok(files) = std::fs::read_dir(vpath.join("machine")) else {
+            continue;
+        };
+        for f in files.flatten() {
+            let p = f.path();
+            if p.extension().and_then(|x| x.to_str()) != Some("json") {
+                continue;
+            }
+            let Ok(txt) = std::fs::read_to_string(&p) else {
+                continue;
+            };
+            let Ok(val) = serde_json::from_str::<Value>(&txt) else {
+                continue;
+            };
+            // Only user-selectable leaves (bases are instantiation-absent/false).
+            if val.get("instantiation").and_then(|x| x.as_str()) != Some("true") {
+                continue;
+            }
+            out.push(RawMachinePreset {
+                vendor: vendor.clone(),
+                name: val.get("name").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                printer_model: val.get("printer_model").and_then(|x| x.as_str()).map(|s| s.to_string()),
+                nozzle_diameter: first_string(&val, "nozzle_diameter"),
+                default_print_profile: first_string(&val, "default_print_profile"),
+                default_filament_profile: first_string(&val, "default_filament_profile"),
+            });
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -345,6 +415,50 @@ mod tests {
         assert_eq!(flat.get("filament_settings_id").unwrap(), &serde_json::json!(["PLA"]));
         assert_eq!(flat.get("layer_height").unwrap(), "0.2");
         assert_eq!(flat.get("filament_flow_ratio").unwrap(), &serde_json::json!(["1"]));
+    }
+
+    /// Supervised: does mapping a printer via the installed machine index yield
+    /// preset names that actually RESOLVE (incl. the machine's default filament)?
+    /// Run with `cargo test -- --ignored probe_real_machine_index`.
+    #[test]
+    #[ignore]
+    fn probe_real_machine_index_and_defaults() {
+        let resources = PathBuf::from("C:/Program Files/OrcaSlicer/resources");
+        if !resources.is_dir() {
+            eprintln!("SKIP: Orca not present");
+            return;
+        }
+        // Emulate list_installed_machines without a manifest: scan BBL directly.
+        let mdir = resources.join("profiles/BBL/machine");
+        let mut x1c: Option<(String, String, String)> = None; // (name, process, filament)
+        for f in std::fs::read_dir(&mdir).unwrap().flatten() {
+            let p = f.path();
+            if p.extension().and_then(|x| x.to_str()) != Some("json") {
+                continue;
+            }
+            let val: Value = serde_json::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap_or(Value::Null);
+            if val.get("instantiation").and_then(|x| x.as_str()) != Some("true") {
+                continue;
+            }
+            if val.get("name").and_then(|x| x.as_str()) == Some("Bambu Lab X1 Carbon 0.4 nozzle") {
+                x1c = Some((
+                    "Bambu Lab X1 Carbon 0.4 nozzle".into(),
+                    first_string(&val, "default_print_profile").unwrap_or_default(),
+                    first_string(&val, "default_filament_profile").unwrap_or_default(),
+                ));
+            }
+        }
+        let (machine, process, filament) = x1c.expect("X1 Carbon 0.4 nozzle machine leaf");
+        println!("machine='{machine}' default_process='{process}' default_filament='{filament}'");
+        assert!(!process.is_empty(), "machine should declare default_print_profile");
+
+        // Do those default names actually resolve?
+        let bbl = resources.join("profiles/BBL");
+        assert!(PresetDir::new(bbl.join("machine")).resolve(&machine).is_ok());
+        assert!(PresetDir::new(bbl.join("process")).resolve(&process).is_ok(), "default process must resolve");
+        let filament_resolves = !filament.is_empty()
+            && PresetDir::new(bbl.join("filament")).resolve(&filament).is_ok();
+        println!("default filament '{filament}' resolves in BBL/filament: {filament_resolves}");
     }
 
     /// Supervised real-install proof: resolve a real BBL X1 Carbon selection and
