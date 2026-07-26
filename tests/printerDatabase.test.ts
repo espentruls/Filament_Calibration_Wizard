@@ -176,7 +176,7 @@ describe('backward compatibility / migration', () => {
       exportedAt: '2026-01-01T00:00:00Z', projects: [], printers: [oldPrinter]
     } as unknown as BackupFile;
     const out = migrate(file);
-    expect(out.schemaVersion).toBe(4);
+    expect(out.schemaVersion).toBe(5);
     expect(out.printers[0].isManual).toBe(true);
     // Existing values are preserved, not reset.
     expect(out.printers[0].maxNozzleTemp).toBe(260);

@@ -110,7 +110,7 @@ export async function importBackup(json: string): Promise<ImportResult> {
   };
 }
 
-/** Migrate older schema versions forward. v4 is current. */
+/** Migrate older schema versions forward. v5 is current. */
 export function migrate(file: BackupFile): BackupFile {
   const v = file.schemaVersion ?? 1;
   let out = file;
@@ -134,6 +134,13 @@ export function migrate(file: BackupFile): BackupFile {
     }
     out = { ...out, schemaVersion: 4 };
   }
+  if ((out.schemaVersion ?? 1) < 5) {
+    // v4 → v5: CalibrationProject gained optional automated-calibration session
+    // fields. Additive — projects without them are already valid (no automated
+    // session). The defensive normalization below tidies the arrays when the
+    // fields are present. Nothing to transform otherwise.
+    out = { ...out, schemaVersion: 5 };
+  }
   // Defensive normalization regardless of version:
   for (const p of out.projects ?? []) {
     p.timeline = Array.isArray(p.timeline) ? p.timeline : [];
@@ -144,6 +151,12 @@ export function migrate(file: BackupFile): BackupFile {
     for (const key of Object.keys(p.steps ?? {})) {
       const st = (p.steps as Record<string, { history?: unknown[] }>)[key];
       if (st && !Array.isArray(st.history)) st.history = [];
+    }
+    // Automated session fields: only normalize when a session is present, so we
+    // never fabricate a session on a plain manual project.
+    if (p.sessionStatus !== undefined || p.workingProfile !== undefined) {
+      p.generatedJobs = Array.isArray(p.generatedJobs) ? p.generatedJobs : [];
+      p.sessionWarnings = Array.isArray(p.sessionWarnings) ? p.sessionWarnings : [];
     }
     ensureProjectSteps(p);
   }

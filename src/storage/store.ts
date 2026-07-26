@@ -15,8 +15,13 @@ import { idb } from './db';
  *     Diameters, buildVolume, maxPrintSpeed/Acceleration, firmware, extruder-
  *     Count, multiMaterialCompatibility, releaseYear, databasePrinterId,
  *     isManual). Purely additive — existing printers load unchanged.
+ * v5: adds optional automated-calibration session fields to CalibrationProject
+ *     (slicerMode, sessionStatus, workingProfile, generatedJobs, sessionWarnings,
+ *     selectedEngineId, automatedSchemaVersion). Purely additive and gated behind
+ *     the disabled `automatedCalibration` flag — existing projects load unchanged
+ *     and IndexedDB persists the new optional fields with no store changes.
  */
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 // --- ids -------------------------------------------------------------------
 

@@ -23,3 +23,21 @@ export {
 } from './capabilities';
 
 export { isAutomatedCalibrationEnabled } from './featureFlag';
+
+export {
+  AUTOMATED_SESSION_SCHEMA,
+  buildWorkingProfile,
+  beginSession,
+  canTransition,
+  setSessionStatus,
+  cancelSession,
+  completeSession,
+  failSession,
+  validateWorkingProfile,
+  validateSession,
+  loadSessionSafe,
+  hasAutomatedSession,
+  isResumable,
+  resumableSessions
+} from './sessionManager';
+export type { WorkingProfileSeed, TransitionResult, SafeSessionLoad } from './sessionManager';
