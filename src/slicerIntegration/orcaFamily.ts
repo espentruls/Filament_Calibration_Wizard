@@ -250,8 +250,9 @@ function presetKeyLabel(key: string): string {
  * Rules (see docs/SLICER_PROFILE_RESEARCH.md):
  * - Every field not owned by a patch is preserved byte-for-byte (deep clone).
  * - Identity fields are re-assigned: name, filament_settings_id; from = "User";
- *   version is copied from the base (never invented); inherits is preserved
- *   (delta presets keep resolving through the system parent).
+ *   filament_id is always fresh. Cloning a system preset sets inherits to that
+ *   preset's name (how Bambu saves user presets) and fills version from the
+ *   resolved inheritance chain; cloning a user preset preserves both.
  * - Per-extruder arrays keep their shape. A patch writes only the target
  *   extruder index unless applyToAllExtruders is set; other positions keep
  *   their original value (including "nil").
@@ -276,6 +277,11 @@ export function freshFilamentId(seed: string): string {
   return 'P' + h.toString(16).padStart(8, '0').slice(0, 7);
 }
 
+/** Slot legend for Bambu machines, in slot order. Observed on a real install:
+ * H2S/P1S presets use [Standard, High Flow]; H2D TPU presets add a third
+ * TPU High Flow slot; X1-era single-slot presets use [Standard]. */
+const BAMBU_EXTRUDER_VARIANTS = ['Direct Drive Standard', 'Direct Drive High Flow', 'Direct Drive TPU High Flow'];
+
 export function cloneAndPatch(args: {
   base: ParsedFilamentProfile;
   newName: string;
@@ -299,25 +305,55 @@ export function cloneAndPatch(args: {
   data.name = newName;
   data.from = 'User';
   if ('filament_settings_id' in data || true) data.filament_settings_id = [newName];
-  // 'version' and 'inherits' are intentionally preserved from the base.
   // Cloud/account identity of the source must never leak into the clone.
   delete data.setting_id;
   delete data.user_id;
   // Bambu-lineage slicers dedupe filament presets by `filament_id` when signed
   // in: a clone that keeps its parent's id is hidden behind the cloud-synced
-  // parent (verified in Bambu Studio 2.7.x — the clone never appears in the
-  // filament list). Assign a fresh unique id so the generated preset shows as
-  // its own filament, mirroring Bambu's "duplicate filament" behavior.
-  if (typeof data.filament_id === 'string' && data.filament_id) {
-    data.filament_id = freshFilamentId(newName);
+  // parent, and a preset with NO id at all is not adopted by the account
+  // loader either (verified in Bambu Studio 2.7.x — neither ever appears in
+  // the filament list). System leaves don't even declare a literal
+  // filament_id (it lives in their abstract "@base" parent), so the id must
+  // be assigned unconditionally, mirroring Bambu's "duplicate filament"
+  // behavior.
+  data.filament_id = freshFilamentId(newName);
+  // A user preset Bambu Studio creates from a system preset inherits that
+  // concrete preset by NAME (e.g. "Generic ASA @BBL H2S 0.4 nozzle"), never
+  // the abstract "@base" parent a system leaf's own `inherits` points to.
+  // Cloning a user preset keeps its inherits (already a concrete system name).
+  if (base.profile.sourceType === 'system' && base.profile.name) {
+    data.inherits = base.profile.name;
+  }
+  // Bambu-created user presets always carry a `version` — the vendor library
+  // version from system/{Vendor}.json (resolved by the scanner); no preset in
+  // the library declares it. Fill it when the clone would otherwise lack one.
+  if (typeof data.version !== 'string' && base.profile.profileVersion) {
+    data.version = base.profile.profileVersion;
+  }
+  // Bambu Studio user presets never carry system-preset plumbing: `type`,
+  // `instantiation`, and `include` appear in NO preset Bambu itself writes
+  // into an account folder (verified across a real account's 70+ presets),
+  // and `include` references template files that do not resolve from user
+  // dirs. Everything they provided still flows through `inherits` → the
+  // concrete system leaf. Working presets also all declare
+  // `filament_extruder_variant` — the legend mapping each per-slot array
+  // position to hardware; variant-aware Bambu Studio (2.7+) does not show a
+  // user preset without it.
+  if (base.profile.slicerId === 'bambu') {
+    delete data.type;
+    delete data.instantiation;
+    delete data.include;
+    if (!Array.isArray(data.filament_extruder_variant)) {
+      data.filament_extruder_variant = BAMBU_EXTRUDER_VARIANTS.slice(0, Math.max(1, extruders));
+    }
   }
 
   // Keys that may not hold "nil" (the slicer requires a concrete value).
-  const NO_NIL = new Set(['nozzle_temperature', 'nozzle_temperature_initial_layer', 'filament_flow_ratio', 'filament_max_volumetric_speed', 'pressure_advance']);
+  const NO_NIL = new Set(['nozzle_temperature', 'nozzle_temperature_initial_layer', 'filament_flow_ratio', 'filament_max_volumetric_speed', 'pressure_advance', 'filament_shrink']);
 
   for (const patch of patches) {
     const key = patch.presetKey;
-    const after = formatPresetNumber(patch.value);
+    const after = formatPresetNumber(patch.value) + (patch.valueSuffix ?? '');
     const existing = data[key];
     let arr: string[];
     if (Array.isArray(existing) && existing.every(x => typeof x === 'string') && existing.length > 0) {
@@ -428,6 +464,16 @@ export function buildInfoSidecar(args: { baseId: string | null; nowUnixSeconds?:
     `updated_time = ${t}`,
     ''
   ].join('\n');
+}
+
+/**
+ * Stamp the owning account into a .info sidecar. Presets Bambu Studio itself
+ * writes into an account folder carry `user_id = <account>`; a preset with an
+ * empty user_id in a signed-in account folder is not adopted into the account's
+ * preset list. Called at install time, when the target location is known.
+ */
+export function withInfoUserId(infoText: string, userId: string): string {
+  return infoText.replace(/^user_id\s*=.*$/m, `user_id = ${userId}`);
 }
 
 /** Extract a key from .info sidecar text. */

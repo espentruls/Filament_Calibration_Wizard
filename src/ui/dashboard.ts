@@ -8,6 +8,8 @@ import { confidenceScore } from '../logic/confidence';
 import { nozzleBadgeLabel } from '../logic/ranges';
 import { exportProject } from '../export/backup';
 import { importFilePicker } from './importExport';
+import { hasCalibratedValues } from './projectView';
+import { maybeFirstRunBackupCard } from './presetBackupPrompt';
 import type { CalibrationProject, PrinterProfile } from '../types';
 import { getMaterial } from '../data/materials';
 
@@ -30,6 +32,9 @@ export async function renderDashboard(root: HTMLElement): Promise<void> {
       'Everything is stored on this device only — no account, no cloud, no telemetry. ',
       h('a', { href: '#/settings' }, 'Back up your data'), ' regularly.')
   );
+
+  const firstRunCard = await maybeFirstRunBackupCard();
+  if (firstRunCard) root.append(firstRunCard);
 
   if (active.length === 0) {
     root.append(
@@ -74,6 +79,7 @@ function projectCard(p: CalibrationProject, printers: Map<string, PrinterProfile
   if (f.pressureAdvance !== undefined) vals.push(h('span', { class: 'badge badge-info' }, `🏎 PA ${f.pressureAdvance}`));
   if (f.retractionDistance !== undefined) vals.push(h('span', { class: 'badge badge-info' }, `🧵 ${f.retractionDistance}mm`));
   if (f.maxVolumetricSpeed !== undefined) vals.push(h('span', { class: 'badge badge-info' }, `⚡ ${f.maxVolumetricSpeed}mm³/s`));
+  if (f.shrinkagePercent !== undefined) vals.push(h('span', { class: 'badge badge-info' }, `📐 ${f.shrinkagePercent}%`));
 
   const nozzleLabel = nozzleBadgeLabel(p, printer);
 
@@ -94,6 +100,7 @@ function projectCard(p: CalibrationProject, printers: Map<string, PrinterProfile
       stage
         ? h('a', { class: 'btn btn-primary btn-sm', href: `#/wizard/${p.id}/${stage}` }, '▶ Continue')
         : h('a', { class: 'btn btn-primary btn-sm', href: `#/project/${p.id}` }, '✔ View results'),
+      hasCalibratedValues(p) ? h('a', { class: 'btn btn-sm', href: `#/profile/${p.id}`, title: 'Create Slicer Profile' }, '🧵 Create Slicer Profile') : null,
       h('a', { class: 'btn btn-sm', href: `#/project/${p.id}` }, 'Open'),
       h('button', {
         class: 'btn btn-sm', title: 'Duplicate project', onClick: async () => {

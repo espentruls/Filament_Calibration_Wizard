@@ -1,6 +1,5 @@
 import type { BackupFile, CalibrationProject, PrinterProfile, StoredPhoto } from '../types';
-import { SCHEMA_VERSION, listPrinters, listProjects, loadSettings, saveProject, savePrinter, uid } from '../storage/store';
-import { DEFAULT_ORDER } from '../data/calibrations';
+import { SCHEMA_VERSION, ensureProjectSteps, listPrinters, listProjects, loadSettings, saveProject, savePrinter, uid } from '../storage/store';
 import { idb } from '../storage/db';
 
 /** Serialize one project (with its printer profile embedded) for sharing. */
@@ -111,7 +110,7 @@ export async function importBackup(json: string): Promise<ImportResult> {
   };
 }
 
-/** Migrate older schema versions forward. v3 is current. */
+/** Migrate older schema versions forward. v5 is current. */
 export function migrate(file: BackupFile): BackupFile {
   const v = file.schemaVersion ?? 1;
   let out = file;
@@ -119,11 +118,28 @@ export function migrate(file: BackupFile): BackupFile {
     // v1 → v2: generatedProfiles added; absent means none.
     out = { ...out, schemaVersion: 2 };
   }
-  if (v < 3) {
-    // v2 → v3: optional PrinterProfile.nozzles + CalibrationProject.nozzleIndex.
-    // Both default to "absent" (legacy single-nozzle), and the optional
-    // ooze-control step is NEVER injected into a legacy project's stepOrder.
+  if ((out.schemaVersion ?? 1) < 3) {
+    // v2 → v3: flow-verify + shrinkage steps added; ensureProjectSteps below
+    // inserts them as not-started.
     out = { ...out, schemaVersion: 3 };
+  }
+  if ((out.schemaVersion ?? 1) < 4) {
+    // v3 → v4: PrinterProfile gained optional extended specs + database link.
+    // Additive — printers without the new keys are already valid. Mark
+    // pre-v4 printers as manual so the UI doesn't imply a database match.
+    for (const printer of out.printers ?? []) {
+      if (printer.databasePrinterId === undefined && printer.isManual === undefined) {
+        printer.isManual = true;
+      }
+    }
+    out = { ...out, schemaVersion: 4 };
+  }
+  if ((out.schemaVersion ?? 1) < 5) {
+    // v4 → v5: optional PrinterProfile.nozzles + CalibrationProject.nozzleIndex.
+    // Both default to "absent" (legacy single-nozzle), and the optional
+    // ooze-control step is NEVER injected into a legacy project's stepOrder
+    // (it is not part of DEFAULT_ORDER, so ensureProjectSteps leaves it alone).
+    out = { ...out, schemaVersion: 5 };
   }
   // Defensive normalization regardless of version:
   for (const p of out.projects ?? []) {
@@ -131,8 +147,6 @@ export function migrate(file: BackupFile): BackupFile {
     p.finals = p.finals ?? {};
     p.archived = !!p.archived;
     p.generatedProfiles = Array.isArray(p.generatedProfiles) ? p.generatedProfiles : [];
-    p.stepOrder = Array.isArray(p.stepOrder) && p.stepOrder.length ? p.stepOrder : [...DEFAULT_ORDER];
-    p.steps = p.steps ?? ({} as CalibrationProject['steps']);
     for (const key of Object.keys(p.steps ?? {})) {
       const st = (p.steps as Record<string, { history?: unknown[] }>)[key];
       if (st && !Array.isArray(st.history)) st.history = [];
@@ -142,9 +156,24 @@ export function migrate(file: BackupFile): BackupFile {
         (typeof p.nozzleIndex !== 'number' || !Number.isInteger(p.nozzleIndex) || p.nozzleIndex < 0)) {
       delete p.nozzleIndex;
     }
+    // Repairs a missing/empty stepOrder and back-fills steps added since export.
+    // Only ever inserts, so an aux project's 'ooze-control' survives untouched.
+    ensureProjectSteps(p);
   }
   for (const pr of out.printers ?? []) {
-    if (pr && pr.nozzles !== undefined && !Array.isArray(pr.nozzles)) delete pr.nozzles;
+    if (!pr || pr.nozzles === undefined) continue;
+    if (!Array.isArray(pr.nozzles)) {
+      // Not an array at all — drop it; the Printers and New Project pages
+      // iterate this and would otherwise throw after a "successful" import.
+      delete pr.nozzles;
+      continue;
+    }
+    // Drop individual malformed entries; an all-bad array falls back to the
+    // legacy single-nozzle shape (absent) rather than rendering blank rows.
+    const clean = pr.nozzles.filter(n =>
+      !!n && typeof n === 'object' && typeof n.label === 'string' && typeof n.feed === 'string');
+    if (clean.length) pr.nozzles = clean;
+    else delete pr.nozzles;
   }
   return out;
 }

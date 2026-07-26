@@ -16,8 +16,10 @@ const WEIGHTS: Record<CalibrationId, number> = {
   'flow-pass1': 16,
   'flow-pass2': 8,
   'pressure-advance': 16,
+  'flow-verify': 5,
   retraction: 12,
   'max-volumetric-speed': 12,
+  shrinkage: 6,
   'ooze-control': 8,
   'final-verification': 14
 };
@@ -33,10 +35,13 @@ export function confidenceScore(p: CalibrationProject): ConfidenceBreakdown {
   const parts: ConfidenceBreakdown['parts'] = [];
   let earnedTotal = 0;
   let possibleTotal = 0;
-  // Score against the PROJECT's own step plan: optional steps (like the
+  // Score against the PROJECT's own step plan, so projects created before a
+  // step was introduced don't lose points for it, and optional steps (like the
   // dual-nozzle ooze-control step) only count for projects that carry them.
-  for (const id of p.stepOrder) {
-    const possible = WEIGHTS[id] ?? 0;
+  const ids = (p.stepOrder?.length ? p.stepOrder : Object.keys(WEIGHTS) as CalibrationId[])
+    .filter(id => WEIGHTS[id] !== undefined);
+  for (const id of ids) {
+    const possible = WEIGHTS[id];
     possibleTotal += possible;
     const st = p.steps[id];
     if (!st || st.status !== 'completed') {

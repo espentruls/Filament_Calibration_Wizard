@@ -127,7 +127,7 @@ describe('data migration', () => {
       printers: []
     } as unknown as BackupFile;
     const out = migrate(file);
-    expect(out.schemaVersion).toBe(3);
+    expect(out.schemaVersion).toBe(5);
     const p = out.projects[0];
     expect(Array.isArray(p.timeline)).toBe(true);
     expect(p.finals).toBeDefined();
@@ -158,7 +158,17 @@ describe('data migration', () => {
     const projects = await listProjects();
     expect(projects).toHaveLength(1);
     expect(projects[0].stepOrder).toEqual(DEFAULT_ORDER);
-    expect(projects[0].steps).toEqual({});
+    // A project imported without `steps` must come back with every canonical
+    // step seeded as not-started (ensureProjectSteps), never `undefined` —
+    // the dashboard and confidence score index into this map directly.
+    for (const id of DEFAULT_ORDER) {
+      expect(projects[0].steps[id], id).toBeDefined();
+      expect(projects[0].steps[id].status, id).toBe('not-started');
+    }
+    // ...and nothing beyond the default order: the optional dual-nozzle step
+    // is only ever added by New Project for aux/bowden-nozzle printers.
+    expect(Object.keys(projects[0].steps).sort()).toEqual([...DEFAULT_ORDER].sort());
+    expect(projects[0].steps['ooze-control']).toBeUndefined();
   });
 
   it('round-trips dual-nozzle fields: printer.nozzles, project.nozzleIndex, ooze-control step', async () => {
@@ -209,6 +219,35 @@ describe('data migration', () => {
     const out = migrate(file);
     expect(out.projects[0].nozzleIndex).toBeUndefined();
     expect(out.printers[0].nozzles).toBeUndefined();
+  });
+
+  it('adds v3 steps (flow-verify, shrinkage) to older projects at canonical positions', () => {
+    const file = {
+      app: 'perfectfit-filament-calibration-wizard',
+      schemaVersion: 2,
+      exportedAt: '',
+      projects: [{
+        id: 'x', filament: {}, finals: {}, timeline: [],
+        steps: {
+          temperature: { status: 'completed', current: null, history: [] },
+          'pressure-advance': { status: 'completed', current: null, history: [] }
+        },
+        stepOrder: ['temperature', 'flow-pass1', 'flow-pass2', 'pressure-advance', 'retraction', 'max-volumetric-speed', 'final-verification']
+      }],
+      printers: []
+    } as unknown as BackupFile;
+    const out = migrate(file);
+    const p = out.projects[0];
+    expect(p.stepOrder).toEqual([
+      'temperature', 'flow-pass1', 'flow-pass2', 'pressure-advance',
+      'flow-verify', 'retraction', 'max-volumetric-speed', 'shrinkage', 'final-verification'
+    ]);
+    expect(p.steps['flow-verify'].status).toBe('not-started');
+    expect(p.steps.shrinkage.status).toBe('not-started');
+    // Existing progress untouched.
+    expect(p.steps.temperature.status).toBe('completed');
+    // The optional dual-nozzle step is never injected by migration.
+    expect(p.stepOrder).not.toContain('ooze-control');
   });
 });
 

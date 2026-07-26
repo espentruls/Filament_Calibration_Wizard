@@ -7,6 +7,7 @@ import { exportProject } from '../export/backup';
 import { copyFinalsToClipboard } from './report';
 import { STEP_DEPENDENCY_WARNINGS, nozzleBadgeLabel } from '../logic/ranges';
 import { getMaterial } from '../data/materials';
+import { presetBackupCallout } from './presetBackupPrompt';
 import type { CalibrationProject, CalibrationId } from '../types';
 
 export async function renderProject(root: HTMLElement, id: string): Promise<void> {
@@ -59,13 +60,19 @@ export async function renderProject(root: HTMLElement, id: string): Promise<void
     ),
     h('div', { class: 'btn-row' },
       stage ? h('a', { class: 'btn btn-primary', href: `#/wizard/${p.id}/${stage}` }, `▶ Continue: ${getCalibration(stage).shortName}`) : null,
-      hasCalibratedValues(p) ? h('a', { class: `btn ${stage ? '' : 'btn-primary'}`, href: `#/profile/${p.id}` }, '🧵 Create slicer profile') : null,
+      hasCalibratedValues(p) ? h('a', { class: `btn ${stage ? '' : 'btn-primary'}`, href: `#/profile/${p.id}` }, '🧵 Create Slicer Profile') : null,
       h('a', { class: 'btn', href: `#/report/${p.id}` }, '📄 Report'),
       h('a', { class: 'btn', href: `#/card/${p.id}` }, '🪪 Calibration card'),
       h('button', { class: 'btn', onClick: () => copyFinalsToClipboard(p) }, '📋 Copy final settings'),
       h('button', { class: 'btn', onClick: async () => download(`perfectfit-${p.id.slice(0, 8)}.json`, await exportProject(p, printer)) }, '⭳ Export JSON')
     )
   );
+
+  // --- pre-calibration slicer preset backup prompt ---
+  if (stage) {
+    const backupPrompt = presetBackupCallout(p, rerender);
+    if (backupPrompt) root.append(backupPrompt);
+  }
 
   // --- calibration complete: profile call-to-action ---
   if (!stage && hasCalibratedValues(p)) {
@@ -91,7 +98,7 @@ export async function renderProject(root: HTMLElement, id: string): Promise<void
             `Based on “${rec.baseProfileName}” · ${rec.changedFields.length} value(s) applied · generated ${new Date(rec.generatedAt).toLocaleString()}`),
           last ? h('p', { class: 'field-help' },
             `Last action: ${last.mode}${last.success ? ' ✓' : ' ✖'} ${new Date(last.at).toLocaleString()}${last.backupId ? ` · backup ${last.backupId}` : ''}${last.verificationPassed ? ' · verified' : ''}`) : null),
-        h('a', { class: 'btn btn-sm', href: `#/profile/${p.id}` }, 'Open profile wizard')
+        h('a', { class: 'btn btn-sm', href: `#/profile/${p.id}` }, 'Re-run Create Slicer Profile')
       ));
     }
     root.append(gpCard);
@@ -191,7 +198,7 @@ export async function renderProject(root: HTMLElement, id: string): Promise<void
 }
 
 /** At least one calibrated final exists — the profile generator has something to apply. */
-function hasCalibratedValues(p: CalibrationProject): boolean {
+export function hasCalibratedValues(p: CalibrationProject): boolean {
   const f = p.finals;
   return [f.nozzleTemp, f.flowRatio, f.pressureAdvance, f.retractionDistance, f.maxVolumetricSpeed]
     .some(v => v !== undefined);
@@ -235,6 +242,7 @@ function finalsSummary(p: CalibrationProject, sid: CalibrationId): string {
       return f.nozzleTemp !== undefined ? `Chosen: ${f.nozzleTemp} °C${f.firstLayerTemp ? ` (first layer ${f.firstLayerTemp} °C)` : ''}${f.highFlowTemp ? ` (high-flow ${f.highFlowTemp} °C)` : ''}` : '';
     case 'flow-pass1':
     case 'flow-pass2':
+    case 'flow-verify':
       return f.flowRatio !== undefined ? `Flow ratio: ${f.flowRatio}` : '';
     case 'pressure-advance':
       return f.pressureAdvance !== undefined ? `PA: ${f.pressureAdvance}` : '';
@@ -242,6 +250,8 @@ function finalsSummary(p: CalibrationProject, sid: CalibrationId): string {
       return f.retractionDistance !== undefined ? `Retraction: ${f.retractionDistance} mm${f.retractionSpeed ? ` @ ${f.retractionSpeed} mm/s` : ''}` : '';
     case 'max-volumetric-speed':
       return f.maxVolumetricSpeed !== undefined ? `Max volumetric speed: ${f.maxVolumetricSpeed} mm³/s` : '';
+    case 'shrinkage':
+      return f.shrinkagePercent !== undefined ? `Shrinkage: ${f.shrinkagePercent}%` : '';
     default: return '';
   }
 }

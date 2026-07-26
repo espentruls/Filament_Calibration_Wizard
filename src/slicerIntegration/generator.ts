@@ -11,8 +11,11 @@ import type {
   CalibratedFieldPatch, GeneratedFilamentProfile, ParsedFilamentProfile, ProfileGenerationRequest
 } from './types';
 import {
-  buildInfoSidecar, cloneAndPatch, fingerprintProfile, infoValue, serializePreset
+  buildInfoSidecar, cloneAndPatch, fingerprintProfile, formatPresetNumber, infoValue, serializePreset
 } from './orcaFamily';
+
+/** Marker so a re-generated profile replaces (not stacks) our injected line. */
+const PA_GCODE_MARKER = '; PerfectFit pressure advance';
 
 /**
  * Field mapping from PerfectFit calibration results to Orca-family preset
@@ -28,19 +31,23 @@ export function buildPatchesFromProject(project: CalibrationProject): Calibrated
   const finals = project.finals;
   const done = (id: keyof typeof steps): boolean => steps[id]?.status === 'completed';
 
+  // First-layer temperature is emitted before the other-layers value so the
+  // review list matches the slicer's own field order (both Orca and Bambu put
+  // nozzle_temperature_initial_layer above nozzle_temperature on the Filament
+  // tab). Patch order has no effect on the generated preset itself.
   if (done('temperature') && finals.nozzleTemp !== undefined) {
-    out.push({
-      sourceKey: 'nozzleTemp', presetKey: 'nozzle_temperature',
-      label: 'Nozzle temperature', value: finals.nozzleTemp, unit: '°C'
-    });
     if (finals.firstLayerTemp !== undefined) {
       out.push({
         sourceKey: 'firstLayerTemp', presetKey: 'nozzle_temperature_initial_layer',
         label: 'First layer nozzle temperature', value: finals.firstLayerTemp, unit: '°C'
       });
     }
+    out.push({
+      sourceKey: 'nozzleTemp', presetKey: 'nozzle_temperature',
+      label: 'Nozzle temperature', value: finals.nozzleTemp, unit: '°C'
+    });
   }
-  if ((done('flow-pass2') || done('flow-pass1')) && finals.flowRatio !== undefined) {
+  if ((done('flow-verify') || done('flow-pass2') || done('flow-pass1')) && finals.flowRatio !== undefined) {
     out.push({
       sourceKey: 'flowRatio', presetKey: 'filament_flow_ratio',
       label: 'Flow ratio', value: finals.flowRatio, unit: ''
@@ -75,6 +82,13 @@ export function buildPatchesFromProject(project: CalibrationProject): Calibrated
       label: 'Maximum volumetric speed', value: finals.maxVolumetricSpeed, unit: 'mm³/s'
     });
   }
+  // Orca-family presets store shrinkage as a percent string (e.g. "99.4%").
+  if (done('shrinkage') && finals.shrinkagePercent !== undefined) {
+    out.push({
+      sourceKey: 'shrinkagePercent', presetKey: 'filament_shrink',
+      label: 'Shrinkage (XY)', value: finals.shrinkagePercent, unit: '%', valueSuffix: '%'
+    });
+  }
   return out;
 }
 
@@ -107,6 +121,25 @@ export function generateProfile(
     applyToAllExtruders: request.applyToAllExtruders
   });
 
+  // Bambu Studio only: bake pressure advance into the filament start g-code.
+  // Bambu Studio ignores the native pressure_advance field for Bambu machines
+  // (proven: the field never reaches the g-code — the machine's Flow Dynamics
+  // owns PA), so an M900 in start g-code is the only path that applies the
+  // calibrated K. Matches the exact command Orca itself emits for Bambu
+  // printers. Requires Flow Dynamics = Off in the Send-print-job dialog.
+  const paPatch = request.patches.find(p => p.presetKey === 'pressure_advance');
+  if (request.bakePressureAdvanceGcode && request.slicerId === 'bambu' && paPatch) {
+    const before = firstStartGcode(data);
+    const k = formatPresetNumber(paPatch.value);
+    const line = `M900 K${k} L1000 M10 ${PA_GCODE_MARKER}`;
+    injectFilamentStartGcode(data, line);
+    changedFields.push({
+      presetKey: 'filament_start_gcode',
+      label: 'Pressure advance (baked into start g-code for Bambu Studio)',
+      before, after: firstStartGcode(data) ?? ''
+    });
+  }
+
   const serialized = serializePreset(data);
 
   // base_id links the new preset to the STOCK/system ancestor it derives from.
@@ -135,4 +168,30 @@ export function generateProfile(
     preservedFieldCount,
     generatedAt: new Date().toISOString()
   };
+}
+
+/** First element of the filament_start_gcode array, or null. */
+function firstStartGcode(data: Record<string, unknown>): string | null {
+  const v = data['filament_start_gcode'];
+  return Array.isArray(v) && typeof v[0] === 'string' ? v[0] : null;
+}
+
+/**
+ * Append `line` to every element of filament_start_gcode, first removing any
+ * previously injected PerfectFit line (so regenerating replaces rather than
+ * stacks). Creates the key if absent. Preserves the array shape (per-extruder
+ * variant slots) the base profile uses.
+ */
+function injectFilamentStartGcode(data: Record<string, unknown>, line: string): void {
+  const existing = data['filament_start_gcode'];
+  const strip = (s: string) =>
+    s.split('\n').filter(l => !l.includes(PA_GCODE_MARKER)).join('\n').replace(/\n+$/, '');
+  if (Array.isArray(existing) && existing.length > 0 && existing.every(x => typeof x === 'string')) {
+    data['filament_start_gcode'] = (existing as string[]).map(s => {
+      const base = strip(s);
+      return base ? `${base}\n${line}` : line;
+    });
+  } else {
+    data['filament_start_gcode'] = [line];
+  }
 }

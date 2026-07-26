@@ -13,9 +13,15 @@ export interface JsonDiffEntry {
   after: string | null;
 }
 
-/** Identity keys expected to differ between base and clone (filament_id is
- *  deliberately regenerated so Bambu doesn't hide the clone behind its parent). */
-const IDENTITY_KEYS = new Set(['name', 'filament_settings_id', 'from', 'setting_id', 'user_id', 'filament_id']);
+/** Identity keys expected to differ between base and clone. filament_id is
+ * always regenerated; inherits/version are rewritten when cloning a system
+ * preset; type/instantiation/include are stripped and the
+ * filament_extruder_variant legend added for Bambu (validation enforces the
+ * exact expected values). */
+const IDENTITY_KEYS = new Set([
+  'name', 'filament_settings_id', 'from', 'setting_id', 'user_id', 'filament_id',
+  'inherits', 'version', 'type', 'instantiation', 'include', 'filament_extruder_variant'
+]);
 
 export function fullJsonDiff(
   base: Record<string, unknown>,
@@ -73,7 +79,7 @@ export function summarizeDiff(
 /** Human-readable one-line rendering of a field change. */
 export function formatChange(c: ProfileFieldChange): string {
   const unit = c.unit ? ` ${c.unit}` : '';
-  const tool = c.extruderIndex !== undefined ? ` (tool ${c.extruderIndex + 1})` : '';
+  const tool = c.extruderIndex !== undefined ? ` (slot ${c.extruderIndex + 1})` : '';
   const before = c.before === null || c.before === 'nil' ? '(printer default)' : `${c.before}${unit}`;
   return `${c.label}${tool}: ${before} → ${c.after}${unit}`;
 }

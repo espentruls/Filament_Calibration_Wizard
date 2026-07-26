@@ -3,7 +3,11 @@ import { listPrinters, createProject, saveProject, loadSettings } from '../stora
 import { MATERIALS, getMaterial } from '../data/materials';
 import { slicerVersionOptions } from '../data/slicers';
 import { navigate } from '../app';
-import type { MaterialId, SlicerId, ExperienceMode } from '../types';
+import * as bridge from '../slicerIntegration/bridge';
+import { detectInstallations, scanProfiles } from '../slicerIntegration/scanner';
+import { rankBaselineNames } from '../slicerIntegration/recommendations';
+import type { DetectedFilamentProfile, IntegrationSlicerId } from '../slicerIntegration/types';
+import type { CalibrationProject, MaterialId, SlicerId, ExperienceMode } from '../types';
 
 export async function renderNewProject(root: HTMLElement): Promise<void> {
   const printers = await listPrinters();
@@ -34,9 +38,61 @@ export async function renderNewProject(root: HTMLElement): Promise<void> {
     h('option', { value: 'plated/coated' }, 'Plated / coated'),
     h('option', { value: 'ruby/tungsten' }, 'Ruby / tungsten tip'),
     h('option', { value: 'other' }, 'Other / unknown'));
-  const startingProfile = h('input', { type: 'text', placeholder: 'e.g. Generic PLA @ your printer' });
+  const startingProfile = h('input', { type: 'text', placeholder: 'e.g. Generic PLA @ your printer', list: 'starting-profile-options' });
+  const profileOptions = h('datalist', { id: 'starting-profile-options' });
   const slicerSel = h('select', {}, slicerVersionOptions().map(o =>
     h('option', { value: `${o.slicer}|${o.version}` }, o.label)));
+
+  // Desktop: suggest the profiles actually present in the selected slicer,
+  // RANKED for this project — brand (or Generic) presets matching the chosen
+  // material and printer first, everything else after for advanced users.
+  // The scan is cached per slicer; re-ranking on form changes is instant.
+  let scannedFor: IntegrationSlicerId | null = null;
+  let scannedProfiles: DetectedFilamentProfile[] = [];
+  const rankProfileOptions = () => {
+    clear(profileOptions);
+    if (!scannedProfiles.length) return;
+    // Score against what the form currently says, via a throwaway project.
+    const pseudo: CalibrationProject = createProject({
+      filament: {
+        manufacturer: manufacturer.value.trim(),
+        productLine: '',
+        material: materialSel.value as MaterialId,
+        materialOther: materialSel.value === 'OTHER' ? materialOther.value.trim() : undefined,
+        color: '', diameter: 1.75, startingProfile: ''
+      },
+      printerProfileId: printerSel.value, nozzleType: '',
+      slicer: { slicer: slicerSel.value.split('|')[0] as SlicerId, version: '' },
+      notes: '', mode: 'coach'
+    });
+    const printer = printers.find(p => p.id === printerSel.value);
+    rankBaselineNames(scannedProfiles, pseudo, printer)
+      .forEach(n => profileOptions.append(h('option', { value: n })));
+  };
+  const refreshProfileOptions = async () => {
+    if (!bridge.isDesktop()) return;
+    try {
+      const wizSlicer = slicerSel.value.split('|')[0] as IntegrationSlicerId;
+      if (scannedFor !== wizSlicer) {
+        const installs = await detectInstallations();
+        const inst = installs.find(i => i.slicerId === wizSlicer);
+        const loc = inst?.userDataLocations.find(l => l.active) ?? inst?.userDataLocations[0];
+        if (!inst || !loc) { scannedFor = wizSlicer; scannedProfiles = []; return; }
+        const scan = await scanProfiles(inst.slicerId, loc);
+        scannedProfiles = scan.profiles;
+        scannedFor = wizSlicer;
+      }
+      rankProfileOptions();
+    } catch { /* scan is best-effort; free text always works */ }
+  };
+  slicerSel.addEventListener('change', () => void refreshProfileOptions());
+  [materialSel, printerSel].forEach(el => el.addEventListener('change', rankProfileOptions));
+  let rankTimer: ReturnType<typeof setTimeout> | undefined;
+  [manufacturer, materialOther].forEach(el => el.addEventListener('input', () => {
+    clearTimeout(rankTimer);
+    rankTimer = setTimeout(rankProfileOptions, 250);
+  }));
+  void refreshProfileOptions();
   const notes = h('textarea', { placeholder: 'Anything worth remembering about this spool (age, storage, prior drying…)' });
   const dateInput = h('input', { type: 'date', value: new Date().toISOString().slice(0, 10) });
 
@@ -88,6 +144,11 @@ export async function renderNewProject(root: HTMLElement): Promise<void> {
     if (printer && m.bedTemp.min > printer.maxBedTemp) {
       warnings.push(`Typical bed temps (${m.bedTemp.min}–${m.bedTemp.max} °C) exceed this printer's bed limit (${printer.maxBedTemp} °C).`);
     }
+    // Chamber-aware guidance uses the printer database's heatedChamber field
+    // when it's known. Absent/undefined means "not specified" — stay silent.
+    if (printer && m.enclosureRecommended && printer.heatedChamber === false) {
+      warnings.push(`${m.label} warps without a warm, enclosed build space, and "${printer.name}" has no heated chamber. An enclosure (even passive) helps; expect warping otherwise.`);
+    }
     materialInfo.append(
       h('div', { class: 'panel' },
         h('p', { style: 'margin:.2rem 0' }, h('strong', {}, m.label), ` — ${m.description}`),
@@ -133,9 +194,10 @@ export async function renderNewProject(root: HTMLElement): Promise<void> {
       nozzleHost,
       h('div', { class: 'field-row' },
         field('Slicer & version *', slicerSel, 'Instructions are version-aware; pick what you actually run.'),
-        field('Starting filament profile', startingProfile, 'The slicer preset you\'ll clone from — usually a "Generic <material>" profile.'),
+        field('Starting filament profile', startingProfile, 'The preset you\'ll be modifying as you calibrate — usually a "Generic <material>" profile. Each test will remind you to save values into THIS preset. (Desktop app: suggestions come from the profiles detected in your slicer.)'),
         field('Calibration date', dateInput)
-      )
+      ),
+      profileOptions
     ),
     h('div', { class: 'card' },
       h('h2', { style: 'margin-top:0' }, 'Guidance level'),

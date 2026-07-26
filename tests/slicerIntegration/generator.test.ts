@@ -34,14 +34,18 @@ function makeProject(overrides: Partial<CalibrationProject['finals']> = {}): Cal
     },
     printerProfileId: 'printer-1', nozzleType: 'brass',
     slicer: { slicer: 'orca', version: '2.4.x' }, notes: '', mode: 'expert',
-    stepOrder: ['temperature', 'flow-pass1', 'flow-pass2', 'pressure-advance', 'retraction', 'max-volumetric-speed', 'final-verification'],
+    stepOrder: ['temperature', 'flow-pass1', 'flow-pass2', 'pressure-advance', 'flow-verify', 'retraction', 'max-volumetric-speed', 'shrinkage', 'final-verification'],
     steps: {
       'temperature': { ...completed },
       'flow-pass1': { ...completed },
       'flow-pass2': { ...completed },
       'pressure-advance': { ...completed },
+      'flow-verify': { ...completed },
       'retraction': { ...completed },
       'max-volumetric-speed': { ...completed },
+      'shrinkage': { ...completed },
+      // Optional dual-nozzle step: present in the map (every CalibrationId is)
+      // but not calibrated, so it must never contribute a patch.
       'ooze-control': { status: 'not-started' as const, current: null, history: [] },
       'final-verification': { ...completed }
     },
@@ -68,6 +72,35 @@ describe('buildPatchesFromProject', () => {
   it('adds enable_pressure_advance as a companion of pressure_advance', () => {
     const pa = buildPatchesFromProject(makeProject()).find(p => p.presetKey === 'pressure_advance');
     expect(pa?.companions).toEqual([{ presetKey: 'enable_pressure_advance', value: '1' }]);
+  });
+
+  it('patches shrinkage only when calibrated, as a percent string', () => {
+    expect(buildPatchesFromProject(makeProject()).map(p => p.presetKey)).not.toContain('filament_shrink');
+    const withShrink = buildPatchesFromProject(makeProject({ shrinkagePercent: 99.4 }))
+      .find(p => p.presetKey === 'filament_shrink');
+    expect(withShrink?.value).toBe(99.4);
+    expect(withShrink?.valueSuffix).toBe('%');
+  });
+
+  it('flow ratio is offered when only the post-PA re-check completed it', () => {
+    const project = makeProject();
+    project.steps['flow-pass1'].status = 'skipped';
+    project.steps['flow-pass2'].status = 'skipped';
+    const patches = buildPatchesFromProject(project);
+    expect(patches.map(p => p.presetKey)).toContain('filament_flow_ratio');
+  });
+
+  it('serializes filament_shrink with the % suffix into the generated preset', () => {
+    const { file, slicer } = USER_FIXTURES[0];
+    const parsed = parseFixture(file, slicer);
+    const project = makeProject({ shrinkagePercent: 99.4 });
+    const generated = generateProfile({
+      slicerId: slicer, baseProfile: parsed.profile, newName: 'PF Shrink Test',
+      patches: buildPatchesFromProject(project),
+      targetExtruderIndex: 0, applyToAllExtruders: false, project
+    }, parsed);
+    const reparsed = JSON.parse(generated.serialized) as Record<string, unknown>;
+    expect((reparsed.filament_shrink as string[])[0]).toBe('99.4%');
   });
 });
 
@@ -118,11 +151,13 @@ describe('clone-and-patch round trips (all slicer fixtures)', () => {
         expect(reparsed[key], `field ${key} must be preserved`).toEqual(original[key]);
       }
 
-      // 5b. if the base had a filament_id, the clone gets a fresh unique one
-      //     (so Bambu doesn't hide it behind the cloud-synced parent).
+      // 5b. the clone ALWAYS gets a fresh filament_id — Bambu keys filaments
+      //     by it, hiding id collisions and ignoring presets without one
+      //     (system leaves inherit theirs, so the clone would otherwise have
+      //     none at all).
+      expect(String(reparsed.filament_id)).toMatch(/^P[0-9a-f]{7}$/);
       if (typeof original.filament_id === 'string' && original.filament_id) {
         expect(reparsed.filament_id).not.toEqual(original.filament_id);
-        expect(String(reparsed.filament_id)).toMatch(/^P[0-9a-f]{7}$/);
       }
 
       // 6. the base was not mutated
@@ -287,5 +322,170 @@ describe('clone-and-patch round trips (all slicer fixtures)', () => {
       applyToAllExtruders: false, project: makeProject()
     }, parsed);
     expect(generated.infoText).toContain('base_id = GFSL99');
+  });
+});
+
+// Regression: cloning a stock Bambu leaf must produce a preset shaped like one
+// Bambu Studio itself saves — fresh filament_id (leaves inherit theirs, so the
+// clone had NONE and the signed-in slicer never showed it), inherits pointing
+// at the concrete leaf by name (not its abstract "@base" parent), and a schema
+// version filled from the resolved chain.
+describe('system-leaf clones carry Bambu-native identity (H2S visibility bug)', () => {
+  function parseSystemLeaf() {
+    const adapter = getAdapter('bambu');
+    const leaf = {
+      type: 'filament', name: 'Generic ASA @BBL H2S 0.4 nozzle', from: 'system',
+      instantiation: 'true', inherits: 'Generic ASA @base', setting_id: 'GFSA00_H2S',
+      compatible_printers: ['Bambu Lab H2S 0.4 nozzle'],
+      nozzle_temperature: ['260', '260'],
+      filament_max_volumetric_speed: ['12', '12']
+      // deliberately NO filament_id and NO version — both live in @base
+    };
+    const raw = fixtureRaw('orca-system-elegoo-pla.json', {
+      dir_kind: 'system', account_id: null, vendor: 'BBL', writable: false,
+      file_name: 'Generic ASA @BBL H2S 0.4 nozzle.json',
+      json: JSON.stringify(leaf)
+    });
+    const parsed = getAdapter('bambu').parseProfile(
+      { kind: 'detected', fileName: raw.file_name, json: raw.json, infoText: null, filePath: raw.path },
+      raw
+    )!;
+    // scanner inheritance resolution supplies the version from the @base chain
+    parsed.profile.profileVersion = '2.3.0.2';
+    void adapter;
+    return parsed;
+  }
+
+  it('assigns a fresh filament_id even though the leaf declares none', () => {
+    const parsed = parseSystemLeaf();
+    const generated = generateProfile({
+      slicerId: 'bambu', baseProfile: parsed.profile, newName: 'PF H2S ASA',
+      patches: buildPatchesFromProject(makeProject()), targetExtruderIndex: 0,
+      applyToAllExtruders: false, project: makeProject()
+    }, parsed);
+    const reparsed = JSON.parse(generated.serialized) as Record<string, unknown>;
+    expect(String(reparsed.filament_id)).toMatch(/^P[0-9a-f]{7}$/);
+  });
+
+  it('inherits the concrete leaf by name and fills the resolved version', () => {
+    const parsed = parseSystemLeaf();
+    const generated = generateProfile({
+      slicerId: 'bambu', baseProfile: parsed.profile, newName: 'PF H2S ASA',
+      patches: buildPatchesFromProject(makeProject()), targetExtruderIndex: 0,
+      applyToAllExtruders: false, project: makeProject()
+    }, parsed);
+    const reparsed = JSON.parse(generated.serialized) as Record<string, unknown>;
+    expect(reparsed.inherits).toBe('Generic ASA @BBL H2S 0.4 nozzle');
+    expect(reparsed.version).toBe('2.3.0.2');
+  });
+
+  it('strips Bambu system-preset plumbing and adds the slot legend', () => {
+    // Every preset Bambu Studio itself writes into an account folder lacks
+    // type/instantiation/include and declares filament_extruder_variant;
+    // presets that deviate are not shown (verified on a real 2.7.x account).
+    const parsed = parseSystemLeaf();
+    const generated = generateProfile({
+      slicerId: 'bambu', baseProfile: parsed.profile, newName: 'PF H2S ASA',
+      patches: buildPatchesFromProject(makeProject()), targetExtruderIndex: 0,
+      applyToAllExtruders: false, project: makeProject()
+    }, parsed);
+    const reparsed = JSON.parse(generated.serialized) as Record<string, unknown>;
+    expect(reparsed.type).toBeUndefined();
+    expect(reparsed.instantiation).toBeUndefined();
+    expect(reparsed.include).toBeUndefined();
+    expect(reparsed.filament_extruder_variant).toEqual(['Direct Drive Standard', 'Direct Drive High Flow']);
+  });
+
+  it('does not strip type from non-Bambu (Orca-family) clones', () => {
+    const parsed = parseFixture('orca-user-delta-pla.json', 'orca');
+    const original = parsed.profile.rawProfile as Record<string, unknown>;
+    const generated = generateProfile({
+      slicerId: 'orca', baseProfile: parsed.profile, newName: 'PF Orca Clone',
+      patches: buildPatchesFromProject(makeProject()), targetExtruderIndex: 0,
+      applyToAllExtruders: false, project: makeProject()
+    }, parsed);
+    const reparsed = JSON.parse(generated.serialized) as Record<string, unknown>;
+    if ('type' in original) expect(reparsed.type).toEqual(original.type);
+    expect(reparsed.filament_extruder_variant).toEqual(original.filament_extruder_variant);
+  });
+
+  it('keeps inherits untouched when cloning a user preset', () => {
+    const parsed = parseFixture('bambu-user-full-pctg-dualnozzle.json', 'bambu');
+    const original = parsed.profile.rawProfile as Record<string, unknown>;
+    const generated = generateProfile({
+      slicerId: 'bambu', baseProfile: parsed.profile, newName: 'PF User Clone',
+      patches: buildPatchesFromProject(makeProject()), targetExtruderIndex: 0,
+      applyToAllExtruders: false, project: makeProject()
+    }, parsed);
+    const reparsed = JSON.parse(generated.serialized) as Record<string, unknown>;
+    expect(reparsed.inherits).toEqual(original.inherits);
+  });
+});
+
+// Bambu Studio ignores the native pressure_advance field for Bambu machines
+// (proven: it never reaches the sliced g-code; Flow Dynamics owns PA). The
+// opt-in bake writes the calibrated K into the filament start g-code as the
+// exact command Orca emits for Bambu printers. Orca-family targets, which do
+// honor the native field, must never get this injection (it would double-apply).
+describe('Bambu Studio: bake pressure advance into start g-code (M900)', () => {
+  const startGcode = (gen: ReturnType<typeof generateProfile>) =>
+    ((JSON.parse(gen.serialized) as Record<string, unknown>).filament_start_gcode as string[] | undefined) ?? [];
+
+  it('injects "M900 K<v> L1000 M10" for a Bambu target when opted in', () => {
+    const parsed = parseFixture('bambu-user-full-pctg-dualnozzle.json', 'bambu');
+    const generated = generateProfile({
+      slicerId: 'bambu', baseProfile: parsed.profile, newName: 'PF PA Bake',
+      patches: buildPatchesFromProject(makeProject()), targetExtruderIndex: 0,
+      applyToAllExtruders: false, bakePressureAdvanceGcode: true, project: makeProject()
+    }, parsed);
+    expect(startGcode(generated).some(s => s.includes('M900 K0.035 L1000 M10'))).toBe(true);
+  });
+
+  it('does not inject when the toggle is off', () => {
+    const parsed = parseFixture('bambu-user-full-pctg-dualnozzle.json', 'bambu');
+    const generated = generateProfile({
+      slicerId: 'bambu', baseProfile: parsed.profile, newName: 'PF No Bake',
+      patches: buildPatchesFromProject(makeProject()), targetExtruderIndex: 0,
+      applyToAllExtruders: false, bakePressureAdvanceGcode: false, project: makeProject()
+    }, parsed);
+    expect(startGcode(generated).some(s => s.includes('M900'))).toBe(false);
+  });
+
+  it('never injects for Orca-family targets even when requested (avoids double-apply)', () => {
+    const parsed = parseFixture('orca-user-delta-pla.json', 'orca');
+    const generated = generateProfile({
+      slicerId: 'orca', baseProfile: parsed.profile, newName: 'PF Orca NoBake',
+      patches: buildPatchesFromProject(makeProject()), targetExtruderIndex: 0,
+      applyToAllExtruders: false, bakePressureAdvanceGcode: true, project: makeProject()
+    }, parsed);
+    expect(startGcode(generated).some(s => s.includes('M900'))).toBe(false);
+  });
+
+  it('preserves existing start g-code and replaces a prior baked line on regenerate', () => {
+    const parsed = parseFixture('bambu-user-full-pctg-dualnozzle.json', 'bambu');
+    // Simulate regenerating from a profile that already carries a stale bake.
+    (parsed.profile.rawProfile as Record<string, unknown>).filament_start_gcode =
+      ['; my custom start\nM900 K9.9 L1000 M10 ; PerfectFit pressure advance'];
+    const generated = generateProfile({
+      slicerId: 'bambu', baseProfile: parsed.profile, newName: 'PF PA Rebake',
+      patches: buildPatchesFromProject(makeProject()), targetExtruderIndex: 0,
+      applyToAllExtruders: false, bakePressureAdvanceGcode: true, project: makeProject()
+    }, parsed);
+    const joined = startGcode(generated).join('\n');
+    expect(joined).toContain('; my custom start');       // user content kept
+    expect(joined).toContain('M900 K0.035 L1000 M10');   // new value applied
+    expect(joined).not.toContain('K9.9');                // stale line removed, not stacked
+  });
+
+  it('does not inject when pressure advance was not calibrated', () => {
+    const parsed = parseFixture('bambu-user-full-pctg-dualnozzle.json', 'bambu');
+    const project = makeProject();
+    project.steps['pressure-advance'].status = 'skipped';
+    const generated = generateProfile({
+      slicerId: 'bambu', baseProfile: parsed.profile, newName: 'PF PA Skipped',
+      patches: buildPatchesFromProject(project), targetExtruderIndex: 0,
+      applyToAllExtruders: false, bakePressureAdvanceGcode: true, project
+    }, parsed);
+    expect(startGcode(generated).some(s => s.includes('M900'))).toBe(false);
   });
 });

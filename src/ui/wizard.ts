@@ -202,6 +202,7 @@ export async function renderWizard(root: HTMLElement, projectId: string, stepId:
         const relevantModels = MODEL_MANIFEST.filter(mm =>
           (stepId === 'final-verification' && mm.test === 'Final verification') ||
           (stepId === 'retraction' && mm.test.startsWith('Retraction')) ||
+          (stepId === 'shrinkage' && mm.test.startsWith('Shrinkage')) ||
           (stepId === 'max-volumetric-speed' && mm.test.startsWith('Max flow')));
         if (relevantModels.length) {
           card.append(h('details', { class: 'why' },
@@ -236,6 +237,12 @@ export async function renderWizard(root: HTMLElement, projectId: string, stepId:
       // ---------------------------------------------------------------- slicer
       case 'slicer': {
         card.append(h('h2', { style: 'margin-top:0' }, `Slicer instructions — ${slicer.slicerLabel} ${slicer.version}`));
+        if (project.filament.startingProfile) {
+          card.append(h('p', {},
+            h('strong', {}, 'Profile you\'re calibrating: '),
+            h('span', { class: 'value-chip' }, project.filament.startingProfile),
+            h('span', { class: 'field-help', style: 'margin-left:.4rem' }, 'Make sure THIS filament preset is the one selected in the slicer before running the test.')));
+        }
         if (!instructions || !instructions.available) {
           card.append(frag(
             h('div', { class: 'callout callout-warn' },
@@ -246,6 +253,7 @@ export async function renderWizard(root: HTMLElement, projectId: string, stepId:
           card.append(frag(
             h('p', {}, h('strong', {}, 'Where: '), `${instructions.menuPath}`),
             instructions.builtIn ? h('p', {}, h('span', { class: 'badge badge-ok' }, '✓ Generated in-slicer — nothing to download')) : null,
+            multiFilamentCallout(printer, instructions.builtIn),
             instructions.disableFirst?.length ? h('div', { class: 'callout callout-warn' },
               h('p', { class: 'co-title' }, '⚠ Temporarily disable first'),
               h('ul', {}, instructions.disableFirst.map(d => h('li', {}, d)))) : null,
@@ -331,6 +339,10 @@ export async function renderWizard(root: HTMLElement, projectId: string, stepId:
           const dest = instructions?.saveTo;
           card.append(frag(
             h('h3', {}, '💾 Save it in the slicer'),
+            project.filament.startingProfile && dest?.scope === 'filament' ? h('p', {},
+              h('strong', {}, 'Profile to modify: '),
+              h('span', { class: 'value-chip' }, project.filament.startingProfile),
+              h('span', { class: 'field-help', style: 'margin-left:.4rem' }, '— the filament preset this project is calibrating. Enter the value there (saving it as a user preset), not in whichever preset happens to be selected.')) : null,
             dest ? h('p', {}, h('strong', {}, 'Where: '), `${dest.path} → `, h('strong', {}, dest.field)) : null,
             dest ? h('p', {}, h('span', { class: `badge ${dest.scope === 'filament' ? 'badge-accent' : dest.scope === 'printer' ? 'badge-warn' : 'badge-info'}` },
               dest.scope === 'filament' ? '🧵 Filament profile setting' :
@@ -436,6 +448,36 @@ export async function renderWizard(root: HTMLElement, projectId: string, stepId:
   }
 
   renderStage();
+}
+
+/**
+ * Multi-filament warning for the built-in calibration tests.
+ *
+ * Verified in Orca's Plater.cpp: every calib_* function reads
+ * `params.extruder_id`, which is initialised to 0 and never set by any of the
+ * calibration dialogs — none of them expose an extruder picker. So the
+ * generated plate is always assigned to filament slot 1, regardless of which
+ * filament is "current". Reported by Guntram (Snapmaker U1, 4 tools) on the
+ * community Discord after having to reassign every object by hand.
+ *
+ * This applies to ANY multi-filament setup, not just toolchangers: an AMS or
+ * MMU machine has one extruder but several filament slots, and the slicer
+ * still assigns the plate to slot 1. So the gate covers both — an X1 Carbon
+ * with an AMS hits exactly the same problem as a 4-tool U1.
+ */
+function multiFilamentCallout(printer: PrinterProfile | undefined, builtIn: boolean): HTMLElement | null {
+  if (!builtIn || !printer) return null;
+  const tools = printer.extruderCount ?? 1;
+  const mmu = printer.multiMaterialCompatibility?.trim();
+  if (tools < 2 && !mmu) return null;
+
+  const what = tools > 1
+    ? `${tools} extruders`
+    : `${mmu} — multiple filament slots on one extruder`;
+  return h('div', { class: 'callout callout-warn' },
+    h('p', { class: 'co-title' }, `⚠ Multi-filament setup (${what}) — check the filament assignment`),
+    h('p', {}, 'The built-in calibration tests always place the generated plate on filament slot 1, and the calibration dialogs have no extruder or slot picker — so there is no way to mark a different filament as "the one being tested".'),
+    h('p', {}, 'Either load the filament you are calibrating into slot 1 before running the test, or after the plate is generated, select all objects and switch them to the slot holding it. Check the temperature shown on the plate matches the filament you meant to test — if it does not, the test is using the wrong slot.'));
 }
 
 function presetName(p: CalibrationProject, printer?: PrinterProfile): string {

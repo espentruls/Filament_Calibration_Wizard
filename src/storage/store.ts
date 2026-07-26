@@ -8,11 +8,20 @@ import { idb } from './db';
 /**
  * v1: original release.
  * v2: adds CalibrationProject.generatedProfiles (slicer profile installer).
- * v3: adds PrinterProfile.nozzles + CalibrationProject.nozzleIndex (dual-nozzle
+ * v3: adds the flow-verify and shrinkage calibration steps (existing projects
+ *     gain them as not-started via ensureProjectSteps) and finals.shrinkagePercent.
+ * v4: adds optional extended machine specs + printer-database linkage to
+ *     PrinterProfile (model, maxChamberTemp, heatedChamber, supportedNozzle-
+ *     Diameters, buildVolume, maxPrintSpeed/Acceleration, firmware, extruder-
+ *     Count, multiMaterialCompatibility, releaseYear, databasePrinterId,
+ *     isManual). Purely additive — existing printers load unchanged.
+ * v5: adds PrinterProfile.nozzles + CalibrationProject.nozzleIndex (dual-nozzle
  *     printers, e.g. Bambu Lab X2D) and the optional ooze-control step, which
- *     only aux-nozzle projects carry in their stepOrder.
+ *     only aux-nozzle projects carry in their stepOrder. ooze-control is
+ *     deliberately absent from DEFAULT_ORDER, so ensureProjectSteps never
+ *     injects it into single-nozzle projects.
  */
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 5;
 
 // --- ids -------------------------------------------------------------------
 
@@ -105,13 +114,44 @@ export function newProjectSteps(): Record<CalibrationId, CalibrationStepState> {
   return steps;
 }
 
+/**
+ * Make sure a project contains every step of the current DEFAULT_ORDER.
+ * Steps introduced after the project was created are inserted as not-started,
+ * at their canonical position relative to steps the user already has —
+ * respecting any reordering the user did. Mutates and returns the project.
+ *
+ * This only ever INSERTS steps: optional non-DEFAULT_ORDER steps a project
+ * already carries (e.g. 'ooze-control' on aux/bowden-nozzle projects) are
+ * never filtered out.
+ */
+export function ensureProjectSteps(p: CalibrationProject): CalibrationProject {
+  // An empty (or missing/malformed) stepOrder is repaired to DEFAULT_ORDER —
+  // an imported `stepOrder: []` would otherwise stay empty and divide by zero
+  // in completionPercent().
+  p.stepOrder = Array.isArray(p.stepOrder) && p.stepOrder.length ? p.stepOrder : [...DEFAULT_ORDER];
+  p.steps = p.steps ?? ({} as CalibrationProject['steps']);
+  DEFAULT_ORDER.forEach((id, defIdx) => {
+    if (!p.steps[id]) p.steps[id] = emptyStepState();
+    if (p.stepOrder.includes(id)) return;
+    // Insert after the nearest preceding canonical step the project has.
+    let insertAt = 0;
+    for (let i = defIdx - 1; i >= 0; i--) {
+      const prevPos = p.stepOrder.indexOf(DEFAULT_ORDER[i]);
+      if (prevPos !== -1) { insertAt = prevPos + 1; break; }
+    }
+    p.stepOrder.splice(insertAt, 0, id);
+  });
+  return p;
+}
+
 export async function listProjects(): Promise<CalibrationProject[]> {
   const all = await idb.getAll<CalibrationProject>('projects');
-  return all.sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''));
+  return all.map(ensureProjectSteps).sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''));
 }
 
 export async function getProject(id: string): Promise<CalibrationProject | undefined> {
-  return idb.get<CalibrationProject>('projects', id);
+  const p = await idb.get<CalibrationProject>('projects', id);
+  return p ? ensureProjectSteps(p) : undefined;
 }
 
 export async function saveProject(p: CalibrationProject): Promise<void> {

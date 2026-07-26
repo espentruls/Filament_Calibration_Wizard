@@ -46,8 +46,13 @@ export function validateGeneratedProfile(
 
   if (reparsed) {
     // Round-trip: every base key must exist in the output (unknown fields
-    // survive), except identity keys we intentionally remove.
+    // survive), except identity keys we intentionally remove. For Bambu,
+    // system-preset plumbing is stripped too (no preset Bambu itself writes
+    // into a user folder carries these, and `include` breaks user-dir loads).
     const removedOk = new Set(['setting_id', 'user_id']);
+    if (generated.slicerId === 'bambu') {
+      for (const k of ['type', 'instantiation', 'include']) removedOk.add(k);
+    }
     for (const key of Object.keys(baseRaw)) {
       if (!(key in reparsed) && !removedOk.has(key)) {
         errors.push(err('FIELD_LOST', `Field lost in generation: ${key}`));
@@ -70,8 +75,24 @@ export function validateGeneratedProfile(
     if ('version' in baseRaw && reparsed.version !== baseRaw.version) {
       errors.push(err('VERSION_DRIFT', 'Preset schema version must be copied from the base profile.'));
     }
-    if ('inherits' in baseRaw && reparsed.inherits !== baseRaw.inherits) {
-      errors.push(err('INHERITS_DRIFT', 'Inheritance must be preserved from the base profile.'));
+    // Cloning a system preset must inherit that preset by name (how the
+    // slicer saves user presets); cloning a user preset preserves its
+    // inherits (already a concrete system name).
+    const expectedInherits = ctx.baseProfile.sourceType === 'system' && ctx.baseProfile.name
+      ? ctx.baseProfile.name
+      : ('inherits' in baseRaw ? baseRaw.inherits : undefined);
+    if (expectedInherits !== undefined && reparsed.inherits !== expectedInherits) {
+      errors.push(err('INHERITS_DRIFT', `Generated profile must inherit "${String(expectedInherits)}".`));
+    }
+    // Bambu-lineage slicers key filaments by filament_id; a clone without its
+    // own fresh id is ignored or hidden behind the preset it was cloned from.
+    if (typeof reparsed.filament_id !== 'string' || !reparsed.filament_id) {
+      errors.push(err('FILAMENT_ID_MISSING', 'Generated profile must carry its own filament_id.'));
+    } else if (typeof baseRaw.filament_id === 'string' && baseRaw.filament_id === reparsed.filament_id) {
+      errors.push(err('FILAMENT_ID_COLLISION', 'filament_id must differ from the base profile (the slicer hides id collisions).'));
+    }
+    if (generated.slicerId === 'bambu' && !Array.isArray(reparsed.filament_extruder_variant)) {
+      errors.push(err('EXTRUDER_VARIANT_MISSING', 'Bambu presets must declare filament_extruder_variant (the slicer does not show presets without it).'));
     }
 
     // Array shape: no per-extruder array may change length vs the base.
@@ -92,8 +113,12 @@ export function validateGeneratedProfile(
   if (generated.changedFields.length === 0) {
     warnings.push(warn('NO_CHANGES', 'No calibrated values were applied — the new profile is an identical copy of the base.', true));
   }
+  // Text-valued preset fields (g-code blocks) are exempt from numeric sanity.
+  const NON_NUMERIC_KEYS = new Set(['filament_start_gcode', 'filament_end_gcode']);
   for (const c of generated.changedFields) {
-    const n = Number(c.after);
+    if (NON_NUMERIC_KEYS.has(c.presetKey)) continue;
+    // Percent-typed fields (e.g. filament_shrink "99.4%") carry a % suffix.
+    const n = Number(String(c.after).replace(/%$/, ''));
     if (!Number.isFinite(n)) {
       errors.push(err('NON_FINITE', `${c.label}: value "${c.after}" is not a finite number.`));
     }
@@ -103,7 +128,7 @@ export function validateGeneratedProfile(
   const printer = ctx.printer;
   const get = (key: string): number | undefined => {
     const c = generated.changedFields.find(f => f.presetKey === key);
-    return c ? Number(c.after) : undefined;
+    return c ? Number(String(c.after).replace(/%$/, '')) : undefined;
   };
   const nozzleTemp = get('nozzle_temperature');
   if (nozzleTemp !== undefined) {
@@ -136,6 +161,11 @@ export function validateGeneratedProfile(
       warnings.push(warn('MVS_OVER_PRINTER',
         `Calibrated max volumetric speed (${mvs} mm³/s) exceeds the printer profile's stated capability (${printer.maxVolumetricFlow} mm³/s). Install only if you trust the calibration result.`, true));
     }
+  }
+
+  const shrink = get('filament_shrink');
+  if (shrink !== undefined && (shrink < 90 || shrink > 102)) {
+    errors.push(err('SHRINK_IMPLAUSIBLE', `Shrinkage ${shrink}% is outside the plausible range (90–102%).`));
   }
 
   // --- material match ---------------------------------------------------------

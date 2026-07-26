@@ -36,11 +36,33 @@ fn scan_dir(
     writable: bool,
     out: &mut Vec<RawProfileFile>,
 ) {
+    scan_dir_depth(dir, dir_kind, account_id, vendor, writable, out, 0);
+}
+
+/// System vendor libraries nest presets in subdirectories (verified on a real
+/// Bambu Studio 2.7.x install: `system/BBL/filament/{P1P,Polymaker,SUNLU}/`),
+/// so system scans recurse. User dirs stay non-recursive (`base/` is scanned
+/// separately with its own dir_kind).
+const MAX_SCAN_DEPTH: u32 = 3;
+
+fn scan_dir_depth(
+    dir: &Path,
+    dir_kind: &str,
+    account_id: Option<&str>,
+    vendor: Option<&str>,
+    writable: bool,
+    out: &mut Vec<RawProfileFile>,
+    depth: u32,
+) {
     let Ok(rd) = std::fs::read_dir(dir) else {
         return;
     };
     for entry in rd.flatten() {
         let p = entry.path();
+        if p.is_dir() && dir_kind == "system" && depth < MAX_SCAN_DEPTH {
+            scan_dir_depth(&p, dir_kind, account_id, vendor, writable, out, depth + 1);
+            continue;
+        }
         if !p.is_file() {
             continue;
         }
@@ -105,6 +127,25 @@ pub fn scan_slicer_profiles(
             let filament_dir = vendor_dir.join("filament");
             if filament_dir.is_dir() {
                 scan_dir(&filament_dir, "system", None, Some(&vendor), false, &mut out);
+            }
+            // Vendor manifest (system/{Vendor}.json): carries the preset
+            // library version that user presets must be stamped with — the
+            // slicer refuses/hides user presets without a `version`, and the
+            // value comes from here, not from any preset in the library.
+            let manifest = system_root.join(format!("{vendor}.json"));
+            if manifest.is_file() {
+                if let Some(json) = read_preset_file(&manifest) {
+                    out.push(RawProfileFile {
+                        file_name: format!("{vendor}.json"),
+                        path: manifest.to_string_lossy().to_string(),
+                        dir_kind: "vendor_manifest".to_string(),
+                        account_id: None,
+                        vendor: Some(vendor.clone()),
+                        json,
+                        info: None,
+                        writable: false,
+                    });
+                }
             }
         }
     }

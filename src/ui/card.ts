@@ -28,13 +28,14 @@ export async function renderCard(root: HTMLElement, id: string): Promise<void> {
   } catch { /* QR is a nice-to-have; the text carries the data */ }
 
   const vals: [string, string][] = [];
-  if (f.nozzleTemp !== undefined) vals.push(['Nozzle temp', `${f.nozzleTemp} °C`]);
   if (f.firstLayerTemp !== undefined) vals.push(['First layer', `${f.firstLayerTemp} °C`]);
+  if (f.nozzleTemp !== undefined) vals.push(['Nozzle temp', `${f.nozzleTemp} °C`]);
   if (f.highFlowTemp !== undefined) vals.push(['High-flow temp', `${f.highFlowTemp} °C`]);
   if (f.flowRatio !== undefined) vals.push(['Flow ratio', String(f.flowRatio)]);
   if (f.pressureAdvance !== undefined) vals.push(['Pressure advance', String(f.pressureAdvance)]);
   if (f.retractionDistance !== undefined) vals.push(['Retraction', `${f.retractionDistance} mm${f.retractionSpeed ? ` @ ${f.retractionSpeed} mm/s` : ''}`]);
   if (f.maxVolumetricSpeed !== undefined) vals.push(['Max vol. speed', `${f.maxVolumetricSpeed} mm³/s`]);
+  if (f.shrinkagePercent !== undefined) vals.push(['Shrinkage (XY)', `${f.shrinkagePercent}%`]);
 
   root.append(
     h('div', { class: 'no-print btn-row' },

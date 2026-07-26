@@ -103,6 +103,11 @@ export function openProfileDirectory(path: string): Promise<void> {
   return invoke('open_profile_directory', { path });
 }
 
+/** Open an http(s) URL in the OS default browser (desktop only). */
+export function openExternalUrl(url: string): Promise<void> {
+  return invoke('open_external_url', { url });
+}
+
 export function installGeneratedProfile(args: {
   slicerId: IntegrationSlicerId;
   accountId: string;
@@ -127,6 +132,12 @@ export function installGeneratedProfile(args: {
 
 export function verifyGeneratedProfile(path: string, expectedJson: string): Promise<{ verified: boolean; detail: string }> {
   return invoke('verify_generated_profile', { path, expectedJson });
+}
+
+export function backupSlicerUserPresets(
+  slicerId: IntegrationSlicerId, accountId: string, projectId: string
+): Promise<RawBackupSummary> {
+  return invoke('backup_slicer_user_presets', { slicerId, accountId, projectId });
 }
 
 export function listProfileBackups(): Promise<RawBackupSummary[]> {

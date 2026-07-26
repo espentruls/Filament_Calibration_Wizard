@@ -45,6 +45,8 @@ interface WizState {
   newName: string;
   targetExtruder: number;
   applyAll: boolean;
+  /** Bambu Studio only: bake pressure advance into start g-code (M900). */
+  bakePaGcode: boolean;
   enabledPatchKeys: Set<string> | null;
   generated: GeneratedFilamentProfile | null;
   validation: ProfileValidationResult | null;
@@ -62,7 +64,7 @@ function freshState(): WizState {
     stage: 'slicer', installations: null, installation: null, location: null,
     scan: null, advanced: false, filterText: '', filterSource: 'all',
     filterCompatibleOnly: true, selectedBase: null, manualSlicerId: 'orca',
-    newName: '', targetExtruder: 0, applyAll: false, enabledPatchKeys: null,
+    newName: '', targetExtruder: 0, applyAll: false, bakePaGcode: false, enabledPatchKeys: null,
     generated: null, validation: null, acknowledged: new Set(),
     installResult: null, exportedTo: null,
     syncedAt: new Date().toISOString()
@@ -106,7 +108,7 @@ export async function renderProfileWizard(root: HTMLElement, projectId: string):
 
   root.append(
     h('p', {}, h('a', { href: `#/project/${projectId}` }, '← Back to project')),
-    h('h1', { style: 'margin:.2rem 0' }, 'Create and Install Filament Profile'),
+    h('h1', { style: 'margin:.2rem 0' }, 'Create Slicer Profile'),
     h('p', { class: 'field-help' },
       h('span', { class: 'badge badge-warn' }, '🧪 Experimental Profile Installer'), ' ',
       'PerfectFit will back up the affected slicer files before installation. Profile formats can change between slicer versions, so support is verified per version. Export always works.'),
@@ -323,13 +325,25 @@ async function renderProfilesStage(
 
   const rec = recommendProfiles(st.scan.profiles, project, printer);
 
+  // Scan summary — makes "no stock presets arrived from the native scan"
+  // visible instead of silently falling back (see issue with H2S baselines).
+  {
+    const bySource = new Map<string, number>();
+    for (const p of st.scan.profiles) bySource.set(p.sourceType, (bySource.get(p.sourceType) ?? 0) + 1);
+    const parts = ['system', 'user', 'cloud', 'project'].filter(k => bySource.has(k))
+      .map(k => `${bySource.get(k)} ${k === 'system' ? 'stock' : k === 'project' ? 'cached' : k}`);
+    card.append(h('p', { class: 'field-help' },
+      `Scanned ${st.scan.profiles.length} preset(s): ${parts.join(' · ') || 'none'}${st.scan.parseFailures.length ? ` · ${st.scan.parseFailures.length} unparsable` : ''}.`,
+      !bySource.has('system') ? ' ⚠ No stock (system) presets were found in this scan — suggestions below fall back to user presets.' : ''));
+  }
+
   const choose = (p: DetectedFilamentProfile) => {
     st.selectedBase = st.scan!.parsed.get(p.id) ?? null;
     if (!st.selectedBase) { toast('Internal error: profile not parsed.', 'error'); return; }
     st.newName = defaultName(project, printer);
-    // Multi-extruder bases default to the nozzle this project calibrated.
+    // Multi-extruder bases default to the nozzle/slot this project calibrated.
     st.targetExtruder = defaultTargetExtruder(project, st.selectedBase.extruderCount);
-    st.applyAll = false; st.enabledPatchKeys = null;
+    st.applyAll = false; st.bakePaGcode = false; st.enabledPatchKeys = null;
     st.stage = 'configure';
     rerender();
   };
@@ -488,21 +502,57 @@ function renderConfigureStage(
   }
 
   if (base.extruderCount > 1) {
+    // Bambu presets index these arrays by (tool × hotend variant), so on
+    // single-nozzle printers with interchangeable hotends (P1S, H2S, …) the
+    // two slots are Standard vs High Flow — NOT two nozzles. Only the machine
+    // preset (which we don't scan) can say which meaning applies, so label
+    // both honestly and let the user pick the slot matching their hardware.
+    const rawVariants = (base.profile.rawProfile as Record<string, unknown>).filament_extruder_variant;
+    const variantNames = Array.isArray(rawVariants)
+      ? rawVariants.filter((x): x is string => typeof x === 'string') : [];
+    const twoSlots = base.extruderCount === 2;
+    const slotLabel = (i: number) => variantNames[i]
+      ? `Slot ${i + 1} — ${variantNames[i]}`
+      : twoSlots
+        ? (i === 0 ? 'Slot 1 — nozzle 1, or the STANDARD hotend on single-nozzle printers'
+                   : 'Slot 2 — nozzle 2, or the HIGH FLOW hotend on single-nozzle printers')
+        : `Value slot ${i + 1}`;
     const toolSel = h('select', {},
       Array.from({ length: base.extruderCount }, (_, i) =>
-        h('option', { value: String(i), selected: st.targetExtruder === i }, `Tool / nozzle ${i + 1}`))) as HTMLSelectElement;
+        h('option', { value: String(i), selected: st.targetExtruder === i }, slotLabel(i)))) as HTMLSelectElement;
     toolSel.addEventListener('change', () => { st.targetExtruder = Number(toolSel.value); });
     const allCb = h('input', { type: 'checkbox', checked: st.applyAll }) as HTMLInputElement;
     allCb.addEventListener('change', () => { st.applyAll = allCb.checked; toolSel.disabled = allCb.checked; });
-    card.append(h('h3', {}, 'Multi-tool profile'),
+    card.append(h('h3', {}, 'Per-tool / per-hotend values'),
       h('p', { class: 'field-help' },
-        `This profile carries per-tool values for ${base.extruderCount} tools/nozzles. Calibrated values will be written only to the tool you pick; other tools keep their existing values.`),
+        `This profile carries ${base.extruderCount} value slots. On dual-nozzle printers each slot is a tool; on single-nozzle Bambu printers with interchangeable hotends (e.g. P1S, H2S) the slots are hotend variants — slot 1 is Standard, slot 2 is High Flow. Calibrated values are written only to the slot you pick (choose the one matching the hardware you calibrated with); other slots keep their existing values.`),
       ...(project.nozzleIndex !== undefined
-        ? [h('p', { class: 'field-help' }, `Pre-selected tool ${st.targetExtruder + 1} — the nozzle this project calibrated.`)]
+        ? [h('p', { class: 'field-help' }, `Pre-selected slot ${st.targetExtruder + 1} — the nozzle this project calibrated. Confirm it matches your hardware.`)]
         : []),
       h('div', { class: 'field-row' },
         field('Apply calibration to', toolSel),
-        h('label', { class: 'check-item', style: 'align-self:end' }, allCb, h('span', {}, ' Apply to ALL tools (only if you calibrated with each)'))));
+        h('label', { class: 'check-item', style: 'align-self:end' }, allCb, h('span', {}, ' Apply to ALL slots (only if the calibrated values hold for every tool/hotend)'))));
+  }
+
+  // Bambu Studio ignores the native pressure_advance field for Bambu machines,
+  // so offer to bake the calibrated K into the filament start g-code as M900.
+  // Orca-family targets honor the native field and never see this option.
+  if (base.profile.slicerId === 'bambu' && allPatches.some(p => p.presetKey === 'pressure_advance')) {
+    const bakeCb = h('input', { type: 'checkbox', checked: st.bakePaGcode }) as HTMLInputElement;
+    bakeCb.addEventListener('change', () => { st.bakePaGcode = bakeCb.checked; });
+    card.append(
+      h('h3', {}, 'Bambu Studio: pressure advance delivery'),
+      h('div', { class: 'callout callout-warn' },
+        h('label', { class: 'check-item' }, bakeCb,
+          h('div', {},
+            h('strong', {}, 'Bake pressure advance into start G-code (M900)'),
+            h('p', { class: 'coach-note' },
+              'Bambu Studio ignores the profile’s pressure-advance field for Bambu machines — the printer’s on-machine Flow Dynamics owns it. Tick this to write your calibrated value as “M900 K… L1000 M10” into the filament start G-code so it actually reaches the printer.'))),
+        h('p', { class: 'field-help', style: 'margin:.5rem 0 0' },
+          '⚠ For this to take effect you must turn Flow Dynamics off at print time: click ',
+          h('strong', {}, 'Print Plate'), ', then in the ', h('strong', {}, 'Send print job'),
+          ' dialog set ', h('strong', {}, 'Flow Dynamics Calibration'), ' to ',
+          h('strong', {}, 'Off'), ' (options are Auto / On / Off). Left On or Auto, the machine may override the baked value.')));
   }
 
   card.append(h('div', { class: 'btn-row' },
@@ -515,7 +565,8 @@ function renderConfigureStage(
           st.generated = generateProfile({
             slicerId: base.profile.slicerId, baseProfile: base.profile, newName: name,
             patches, targetExtruderIndex: st.targetExtruder,
-            applyToAllExtruders: st.applyAll, project
+            applyToAllExtruders: st.applyAll,
+            bakePressureAdvanceGcode: st.bakePaGcode, project
           }, base);
         } catch (e) {
           toast(String(e), 'error'); return;
