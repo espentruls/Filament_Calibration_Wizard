@@ -32,6 +32,14 @@ BambuStudio GitHub tracker).
 - **Range validation counts float samples like the generator** (epsilon fix — 0→0.3 step 0.1 counts 4 samples, not 3).
 - **Bambu Studio docs link** updated to the current wiki calibration page.
 
+### Internal — guided calibration session
+
+Maintainer notes on the guided session and the automated-calibration scaffolding under it. The slicing half of that pipeline stays behind the `automatedCalibration` experimental flag, which defaults to off.
+
+- **A measurement recorded against a project's own nozzle is no longer dropped.** `recordSessionResult` reported success and really did write the value into that nozzle's working profile, but the value resolver read the working profile only for *other* nozzles — so for the project's own nozzle (any single-nozzle project, and an X2D project whose own target is the aux nozzle) the number was written and then readable by neither branch: the resolver reported it as unset. The resolver now falls back to the working profile for every nozzle. A result recorded by the classic wizard, which lives in `finals`, still wins where it exists.
+- **A prepared test's input fingerprint now includes the nozzle**, so the same step on two nozzles is two different jobs rather than one shared one. Any `generatedJobs` record written before this change was hashed without the nozzle and is therefore marked `stale` the first time it is loaded afterwards. That is safe and one-time: `stale` means "prepare this test again" — no calibration result and no working-profile value is touched, and failed jobs are exempt. `AUTOMATED_SESSION_SCHEMA` is deliberately **not** bumped, because the persisted shape of the session fields is unchanged and there is no migration to run; bumping it would advertise one that does not exist. In practice nothing existing is affected, since job records are only ever written by the flagged-off pipeline.
+- **"Does this project carry session data?" is now one shared predicate** (`carriesSessionData`), used by both the safe session loader and backup import. The two had drifted apart: an imported project carrying only per-nozzle `workingProfiles` — no status and no primary profile — skipped the session-field normalization the loader expected.
+
 ## 1.3.2 - 2026-07-24
 
 Follow-up to 1.3.1, which was tagged but superseded before publication — **1.3.2 contains everything in 1.3.1 plus the items below**, so upgrading from 1.3.0 gets the lot.

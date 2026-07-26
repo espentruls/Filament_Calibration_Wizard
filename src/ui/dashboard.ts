@@ -357,6 +357,7 @@ function projectCluster(
       stage
         ? h('a', { class: 'btn btn-primary btn-sm', href: `#/wizard/${p.id}/${stage}` }, '▶ Continue')
         : h('a', { class: 'btn btn-primary btn-sm', href: `#/project/${p.id}` }, '✔ View results'),
+      h('a', { class: 'btn btn-sm', href: `#/session/${p.id}`, title: 'Guided session — one screen per test, results carried forward' }, 'Guided session'),
       hasCalibratedValues(p) ? h('a', { class: 'btn btn-sm', href: `#/profile/${p.id}`, title: 'Create Slicer Profile' }, 'Slicer profile') : null,
       h('a', { class: 'btn btn-sm', href: `#/project/${p.id}` }, 'Open'),
       h('button', {

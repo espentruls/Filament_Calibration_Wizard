@@ -61,12 +61,27 @@ export interface ProvenanceRecord {
 
 /** A working filament profile a session mutates as results come in. Normalized
  *  PerfectFit keys — slicer-specific key mapping happens through the existing
- *  `src/slicerIntegration/adapters`, never here. */
+ *  `src/slicerIntegration/adapters`, never here.
+ *
+ *  `values` is deliberately FLAT (one slot per setting), so a single profile can
+ *  only ever describe ONE physical nozzle: a bowden auxiliary nozzle needs its
+ *  own retraction distance and pressure advance, which cannot share a slot with
+ *  the direct-drive main nozzle's. A profile therefore names the nozzle it
+ *  belongs to, and a session holds ONE PROFILE PER NOZZLE (see
+ *  `AutomatedSessionExtension.workingProfiles`). Composite `key@index` value keys
+ *  are explicitly NOT used — they would break `applyValue`, `fingerprintValues`
+ *  and every consumer that reads a normalized key. */
 export interface TemporaryCalibrationProfile {
   id: string;
   displayName: string;
   createdForProjectId: string;
   sourceProfileName?: string;
+  /**
+   * Which physical nozzle this profile describes — an index into the printer
+   * profile's `nozzles` array. Absent means 0 (the main/only nozzle), matching
+   * `CalibrationProject.nozzleIndex`.
+   */
+  nozzleIndex?: number;
   values: Record<string, number | string | boolean>;
   provenance: Record<string, ProvenanceRecord>;
   createdAt: string;
@@ -80,6 +95,12 @@ export type GeneratedJobStatus = 'prepared' | 'sliced' | 'failed' | 'stale';
 export interface GeneratedJobRecord {
   id: string;
   stepId: CalibrationId;
+  /**
+   * Which physical nozzle this job was generated for. Absent means 0 (the
+   * main/only nozzle). A job is identified by step AND nozzle: the same step run
+   * on two nozzles is two different jobs with two different workspaces.
+   */
+  nozzleIndex?: number;
   createdAt: string;
   engineId: EngineId;
   engineVersion: string | null;
@@ -112,7 +133,23 @@ export interface AutomatedSessionExtension {
   automatedSchemaVersion?: number;
   slicerMode?: SlicerMode;
   sessionStatus?: CalibrationSessionStatus;
+  /**
+   * The session's PRIMARY working profile — the one for the nozzle the session
+   * started on (`workingProfile.nozzleIndex`, falling back to the project's
+   * `nozzleIndex`). Kept as its own field so every existing single-nozzle
+   * consumer keeps working unchanged.
+   */
   workingProfile?: TemporaryCalibrationProfile;
+  /**
+   * Working profiles for the session's OTHER nozzles, one per nozzle. A dual
+   * nozzle machine (e.g. the Bambu X2D's direct-drive main + bowden auxiliary)
+   * needs two independent sets of values; a flat profile cannot hold both.
+   *
+   * Read and write these through `getWorkingProfile` / `setWorkingProfile`
+   * rather than touching either field directly — the split between the primary
+   * field and this list is an implementation detail of the storage shape.
+   */
+  workingProfiles?: TemporaryCalibrationProfile[];
   generatedJobs?: GeneratedJobRecord[];
   sessionWarnings?: SessionWarning[];
   selectedEngineId?: EngineId;
@@ -128,11 +165,31 @@ export interface CapabilityResult {
   reasons: string[];
 }
 
+/**
+ * The minimum shape needed to count a printer's physical nozzles. Satisfied by
+ * both `PrinterProfile` (our saved profile, with the `nozzles` array we added
+ * for dual-nozzle machines) and `PrinterSpecification` (the shipped printer
+ * database, which only carries `extruderCount`). Neither field is guaranteed —
+ * an unknown count is reported as unknown, never assumed to be 1.
+ */
+export interface NozzleCountSource {
+  nozzles?: unknown[];
+  extruderCount?: number | null;
+}
+
 export interface SlicingEngineCapabilities {
   slice: boolean;
   export3mf: boolean;
   exportGcode: boolean;
   multiPlate: boolean;
+  /**
+   * Whether this engine can slice a project for a SPECIFIC extruder on a
+   * multi-extruder machine. Describes the engine only — whether the machine has
+   * more than one nozzle comes from the printer profile
+   * (`isMultiNozzlePrinter`), and the two are combined by
+   * `multiExtruderSupport` in `capabilities.ts`. Never report true unless the
+   * engine has actually been shown to do it.
+   */
   multiExtruder: boolean;
 }
 
@@ -158,6 +215,14 @@ export interface EngineValidationResult {
 export interface PrinterSelection {
   printerProfileId: string;
   nozzleDiameterMm: number;
+  /**
+   * WHICH physical nozzle on the printer, as an index into the printer
+   * profile's `nozzles` array. Absent means 0 (the main/only nozzle), so every
+   * existing single-nozzle caller keeps working. Without this a selection cannot
+   * express "the auxiliary nozzle" — only its diameter, which two nozzles can
+   * share.
+   */
+  nozzleIndex?: number;
   slicer: IntegrationSlicerId;
 }
 
@@ -179,6 +244,8 @@ export interface PreparedCalibrationProject {
   id: string;
   projectId: string;
   stepId: CalibrationId;
+  /** Which nozzle this workspace was staged for. Absent means 0. */
+  nozzleIndex?: number;
   /** Directory holding the staged inputs (model + configs + manifest). */
   workspaceDir: string;
   /** The assembled Orca project 3mf path once written, else null. */
@@ -237,6 +304,14 @@ export interface SlicingEngine {
   detect(): Promise<EngineDetectionResult>;
   validate(): Promise<EngineValidationResult>;
   getCapabilities(): Promise<SlicingEngineCapabilities>;
+
+  /**
+   * Honest answer to "can you slice for nozzle N of THIS printer?". Combines the
+   * engine's own `multiExtruder` capability with the printer's nozzle count, so
+   * the guided flow can branch on reality instead of assuming. Reasons are
+   * user-readable.
+   */
+  supportsNozzle(printer: NozzleCountSource | undefined, nozzleIndex: number): Promise<CapabilityResult>;
 
   resolvePrinterPreset(selection: PrinterSelection): Promise<ResolvedPrinterPreset>;
 

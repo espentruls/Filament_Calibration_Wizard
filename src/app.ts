@@ -5,6 +5,7 @@ import { renderPrinters } from './ui/printers';
 import { renderNewProject } from './ui/projectNew';
 import { renderProject } from './ui/projectView';
 import { renderWizard } from './ui/wizard';
+import { renderGuidedSession } from './ui/guidedSession';
 import { renderHelp } from './ui/help';
 import { renderSettings } from './ui/settings';
 import { renderCard } from './ui/card';
@@ -20,6 +21,9 @@ export type Route =
   | { view: 'new-project' }
   | { view: 'project'; id: string }
   | { view: 'wizard'; id: string; step: CalibrationId }
+  // The guided session runs ALONGSIDE the wizard above, which is unchanged. The
+  // step segment is optional: without one the session opens on its own focus.
+  | { view: 'session'; id: string; step?: CalibrationId }
   | { view: 'card'; id: string }
   | { view: 'report'; id: string }
   | { view: 'profile'; id: string }
@@ -73,6 +77,7 @@ export function parseHash(): Route {
     case 'new': return { view: 'new-project' };
     case 'project': return parts[1] ? { view: 'project', id: parts[1] } : { view: 'dashboard' };
     case 'wizard': return parts[1] && parts[2] ? { view: 'wizard', id: parts[1], step: parts[2] as CalibrationId } : { view: 'dashboard' };
+    case 'session': return parts[1] ? { view: 'session', id: parts[1], step: parts[2] as CalibrationId | undefined } : { view: 'dashboard' };
     case 'card': return parts[1] ? { view: 'card', id: parts[1] } : { view: 'dashboard' };
     case 'report': return parts[1] ? { view: 'report', id: parts[1] } : { view: 'dashboard' };
     case 'profile': return parts[1] ? { view: 'profile', id: parts[1] } : { view: 'dashboard' };
@@ -93,6 +98,7 @@ async function route(): Promise<void> {
       case 'new-project': await renderNewProject(outlet); break;
       case 'project': await renderProject(outlet, r.id); break;
       case 'wizard': await renderWizard(outlet, r.id, r.step); break;
+      case 'session': await renderGuidedSession(outlet, r.id, r.step); break;
       case 'card': await renderCard(outlet, r.id); break;
       case 'report': await renderReport(outlet, r.id); break;
       case 'profile': await renderProfileWizard(outlet, r.id); break;

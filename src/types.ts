@@ -231,6 +231,10 @@ export interface CalibrationProject {
   slicerMode?: import('./automatedCalibration/types').SlicerMode;
   sessionStatus?: import('./automatedCalibration/types').CalibrationSessionStatus;
   workingProfile?: import('./automatedCalibration/types').TemporaryCalibrationProfile;
+  /** Working profiles for the session's other nozzles (one per nozzle) — a
+   *  dual-nozzle machine needs independent values per feed path. Accessed
+   *  through getWorkingProfile/setWorkingProfile, never directly. */
+  workingProfiles?: import('./automatedCalibration/types').TemporaryCalibrationProfile[];
   generatedJobs?: import('./automatedCalibration/types').GeneratedJobRecord[];
   sessionWarnings?: import('./automatedCalibration/types').SessionWarning[];
   selectedEngineId?: import('./automatedCalibration/types').EngineId;

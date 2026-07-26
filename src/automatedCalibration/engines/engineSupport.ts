@@ -6,12 +6,14 @@ import type {
   EngineDetectionResult,
   EngineId,
   EngineValidationResult,
+  ResolvedPrinterPreset,
   SlicedCalibrationJob,
   SlicedJobInspection,
   SlicingEngineCapabilities
 } from '../types';
 import type { RawEngineDetection } from '../engineBridge';
 import { fromRawCapabilities } from '../engineBridge';
+import { projectPresetForNozzle } from '../printerMapping';
 
 /** Basename of a path, tolerant of both `/` and `\` separators. */
 export function baseName(path: string): string {
@@ -72,6 +74,24 @@ function normalizeSource(source: string): EngineDetectionResult['source'] {
     default:
       return 'none';
   }
+}
+
+/**
+ * Narrow a resolved preset's per-extruder settings to the selected nozzle,
+ * folding any interpretation problems into the preset's own warnings. Nozzle 0
+ * (or an absent index) returns the preset untouched.
+ */
+export function applyNozzleToPreset(
+  preset: ResolvedPrinterPreset,
+  nozzleIndex?: number
+): ResolvedPrinterPreset {
+  if (nozzleIndex === undefined || nozzleIndex === 0) return preset;
+  const projected = projectPresetForNozzle(preset.settings, nozzleIndex);
+  return {
+    ...preset,
+    settings: projected.settings,
+    warnings: [...preset.warnings, ...projected.warnings]
+  };
 }
 
 /** Project generation (assembling the Orca project 3mf) lands in Stage 6; the

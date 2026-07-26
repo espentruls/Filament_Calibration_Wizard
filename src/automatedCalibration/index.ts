@@ -13,13 +13,26 @@ export {
   valuesFromSource,
   fingerprintValues,
   jobIsStale,
-  isSessionResumable
+  isSessionResumable,
+  normalizeNozzleIndex,
+  profileNozzleIndex,
+  primaryNozzleIndex,
+  getWorkingProfile,
+  listWorkingProfiles
 } from './session';
+// `workingProfileNozzles` stays module-local: nothing outside `./session` calls
+// it, and the guided UI deliberately draws one panel per PHYSICAL nozzle from
+// the printer profile rather than one per stored working profile. Import it from
+// './session' directly if a caller ever genuinely needs it.
+export type { WorkingProfileHolder } from './session';
 
 export {
   emptyEngineCapabilities,
   supported,
-  unsupported
+  unsupported,
+  printerNozzleCount,
+  isMultiNozzlePrinter,
+  multiExtruderSupport
 } from './capabilities';
 
 export { isAutomatedCalibrationEnabled } from './featureFlag';
@@ -27,6 +40,8 @@ export { isAutomatedCalibrationEnabled } from './featureFlag';
 export {
   AUTOMATED_SESSION_SCHEMA,
   buildWorkingProfile,
+  setWorkingProfile,
+  ensureWorkingProfile,
   beginSession,
   canTransition,
   setSessionStatus,
@@ -70,6 +85,8 @@ export {
   isPerfectFitWorkspaceName,
   prepareJob
 } from './projectPreparation';
+// `resolveJobNozzleIndex` stays module-local: it is `prepareJob`'s own input
+// precedence rule, and every caller reads the nozzle back off the returned plan.
 export type {
   StagedFileDescriptor,
   JobManifest,
@@ -93,8 +110,14 @@ export type {
   RawMachinePreset
 } from './engineBridge';
 
-export { mapPrinterToOrca, formatNozzle } from './printerMapping';
-export type { OrcaMachineMapping } from './printerMapping';
+export {
+  mapPrinterToOrca,
+  formatNozzle,
+  presetExtruderCount,
+  projectPresetForNozzle,
+  PER_EXTRUDER_MACHINE_KEYS
+} from './printerMapping';
+export type { OrcaMachineMapping, PerExtruderProjection } from './printerMapping';
 
 export { InstalledOrcaEngine } from './engines/installedOrcaEngine';
 export { ManualExportEngine } from './engines/manualExportEngine';
@@ -104,7 +127,8 @@ export {
   resourcesRootFromExe,
   inspectSlicedJob,
   notSlicedJob,
-  splitRawDetection
+  splitRawDetection,
+  applyNozzleToPreset
 } from './engines/engineSupport';
 
 export {
@@ -116,4 +140,4 @@ export {
 export type { ConfigMergeResult } from './orcaProjectConfig';
 
 export { createEngines, discoverEngines } from './engineRegistry';
-export type { EngineStatus, EngineDiagnostics } from './engineRegistry';
+export type { EngineStatus, EngineDiagnostics, EngineDiscoveryContext } from './engineRegistry';

@@ -46,8 +46,21 @@ export async function renderNewProject(root: HTMLElement): Promise<void> {
     h('option', { value: 'other' }, 'Other / unknown'));
   const startingProfile = h('input', { type: 'text', placeholder: 'e.g. Generic PLA @ your printer', list: 'starting-profile-options' });
   const profileOptions = h('datalist', { id: 'starting-profile-options' });
-  const slicerSel = h('select', {}, slicerVersionOptions().map(o =>
-    h('option', { value: `${o.slicer}|${o.version}` }, o.label)));
+  // Bambu Studio is the default slicer, not merely the second entry in the list.
+  // It is the slicer PerfectFit writes filament presets into directly — per
+  // extruder on a dual-nozzle machine — and the bowden-fed auxiliary nozzle that
+  // gets no automatic flow-dynamics calibration from the printer is the case
+  // this product exists for. Everything else stays one selection away; the list
+  // itself is unchanged. The LAST Bambu entry wins, matching how
+  // `getSlicerContent` resolves a slicer without a stated version.
+  const slicerOptions = slicerVersionOptions();
+  const defaultSlicer = slicerOptions.reduce(
+    (best, o, i) => (o.slicer === 'bambu' ? i : best), -1);
+  const slicerSel = h('select', {}, slicerOptions.map((o, i) =>
+    h('option', {
+      value: `${o.slicer}|${o.version}`,
+      selected: i === (defaultSlicer === -1 ? 0 : defaultSlicer)
+    }, o.label)));
 
   // Desktop: suggest the profiles actually present in the selected slicer,
   // RANKED for this project — brand (or Generic) presets matching the chosen

@@ -19,7 +19,15 @@ import type { CalibrationId, CalibrationProject } from '../types';
 import { CALIBRATIONS, DEFAULT_ORDER } from '../data/calibrations';
 import type { IntegrationSlicerId } from '../slicerIntegration/types';
 import type { CalibrationStepDefinition, TemporaryCalibrationProfile } from './types';
-import { applyValue, fingerprintValues, jobIsStale } from './session';
+import {
+  applyValue,
+  fingerprintValues,
+  getWorkingProfile,
+  jobIsStale,
+  normalizeNozzleIndex,
+  primaryNozzleIndex,
+  profileNozzleIndex
+} from './session';
 
 /** Canonical normalized working-profile keys (aligned with `FinalValues`). */
 export type NormalizedProfileKey =
@@ -296,28 +304,60 @@ export function applyStepResult(
 
 // --- staleness / recalibration ---------------------------------------------
 
-/** Fingerprint of just the inputs a step consumes — used to detect when an
- *  upstream result change should invalidate that step's generated job. */
+/** Reserved fingerprint key for the nozzle. Prefixed so it can never collide
+ *  with a NormalizedProfileKey. */
+const NOZZLE_FINGERPRINT_KEY = '@nozzle';
+
+/**
+ * Fingerprint of just the inputs a step consumes — used to detect when an
+ * upstream result change should invalidate that step's generated job.
+ *
+ * The nozzle is part of the identity: the same step, with the same values, run
+ * on a different nozzle is a DIFFERENT job (a bowden auxiliary nozzle wants its
+ * own pressure advance, not the main nozzle's). It is taken from the profile
+ * unless the caller names one explicitly.
+ *
+ * UPGRADE NOTE — the nozzle key changed this hash. Every `generatedJobs` record
+ * written before it was added carries a nozzle-free fingerprint, so the first
+ * `markStaleJobs` after the upgrade marks those jobs `stale`. That is safe and
+ * one-time: `stale` means "prepare this test again", no result or working-profile
+ * value is touched, failed jobs are exempt, and the whole pipeline sits behind
+ * the disabled `automatedCalibration` flag — so on today's builds there are no
+ * such records to invalidate. No migration is needed and
+ * `AUTOMATED_SESSION_SCHEMA` is deliberately not bumped (the persisted SHAPE is
+ * unchanged); the reasoning is recorded at that constant.
+ */
 export function inputFingerprintForStep(
   profile: TemporaryCalibrationProfile | undefined,
-  stepId: CalibrationId
+  stepId: CalibrationId,
+  nozzleIndex?: number
 ): string {
   const req = WORKFLOW_STEPS[stepId].requiredInputs as NormalizedProfileKey[];
   const values = profile?.values ?? {};
   const subset: Record<string, number | string | boolean> = {};
   for (const k of req) if (k in values) subset[k] = values[k];
+  subset[NOZZLE_FINGERPRINT_KEY] =
+    nozzleIndex === undefined ? profileNozzleIndex(profile) : normalizeNozzleIndex(nozzleIndex);
   return fingerprintValues(subset);
 }
 
-/** Mark any generated job whose consumed inputs no longer match the current
- *  working profile as `stale`. Mutates the project's `generatedJobs` and returns
- *  the ids that were newly marked stale. A failed job is never marked stale. */
+/**
+ * Mark any generated job whose consumed inputs no longer match the current
+ * working profile as `stale`. Mutates the project's `generatedJobs` and returns
+ * the ids that were newly marked stale. A failed job is never marked stale.
+ *
+ * Each job is compared against the working profile FOR ITS OWN NOZZLE, so a new
+ * result on one nozzle never invalidates the other nozzle's prepared jobs.
+ */
 export function markStaleJobs(project: CalibrationProject): string[] {
   const jobs = project.generatedJobs ?? [];
   const staleIds: string[] = [];
+  const primary = primaryNozzleIndex(project);
   for (const job of jobs) {
     if (job.status === 'stale' || job.status === 'failed') continue;
-    const current = inputFingerprintForStep(project.workingProfile, job.stepId);
+    const nozzle = job.nozzleIndex === undefined ? primary : normalizeNozzleIndex(job.nozzleIndex);
+    const profile = getWorkingProfile(project, nozzle);
+    const current = inputFingerprintForStep(profile, job.stepId, nozzle);
     if (jobIsStale(job, current)) {
       job.status = 'stale';
       staleIds.push(job.id);

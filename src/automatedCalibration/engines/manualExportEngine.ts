@@ -15,8 +15,10 @@
 import type {
   AutomatedCalibrationSession,
   CalibrationStepDefinition,
+  CapabilityResult,
   EngineDetectionResult,
   EngineValidationResult,
+  NozzleCountSource,
   PreparedCalibrationProject,
   PrinterSelection,
   ResolvedPrinterPreset,
@@ -27,12 +29,18 @@ import type {
   SlicingEngineCapabilities
 } from '../types';
 import type { EngineStatus } from '../engineRegistry';
+import { multiExtruderSupport } from '../capabilities';
 import { notSlicedJob, notUntilStage6 } from './engineSupport';
 
 const ENGINE_ID = 'manual_export' as const;
 
 /** Export-only: prepares a project to open in the user's own slicer; it never
- *  slices, so `slice` is false while `export3mf` is true. */
+ *  slices, so `slice` is false while `export3mf` is true.
+ *
+ *  `multiExtruder` stays false because this engine performs no slicing at all —
+ *  there is no multi-extruder slicing here to claim. (The user's own slicer may
+ *  well handle two nozzles; that is their slicer's capability, not ours, and
+ *  this flag describes what PerfectFit can do.) */
 function manualCapabilities(): SlicingEngineCapabilities {
   return {
     slice: false,
@@ -67,6 +75,15 @@ export class ManualExportEngine implements SlicingEngine {
 
   async getCapabilities(): Promise<SlicingEngineCapabilities> {
     return manualCapabilities();
+  }
+
+  /** Truthful per-nozzle answer: this engine does not slice, so it cannot claim
+   *  to slice for a chosen nozzle on a multi-nozzle machine. */
+  async supportsNozzle(
+    printer: NozzleCountSource | undefined,
+    nozzleIndex: number
+  ): Promise<CapabilityResult> {
+    return multiExtruderSupport(manualCapabilities(), printer, nozzleIndex);
   }
 
   /** Combined status for the engine-status diagnostics view. */

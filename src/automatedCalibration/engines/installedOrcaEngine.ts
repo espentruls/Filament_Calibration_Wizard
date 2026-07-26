@@ -17,8 +17,10 @@
 import type {
   AutomatedCalibrationSession,
   CalibrationStepDefinition,
+  CapabilityResult,
   EngineDetectionResult,
   EngineValidationResult,
+  NozzleCountSource,
   PreparedCalibrationProject,
   PrinterSelection,
   ResolvedPrinterPreset,
@@ -28,16 +30,18 @@ import type {
   SlicingEngine,
   SlicingEngineCapabilities
 } from '../types';
-import { emptyEngineCapabilities } from '../capabilities';
+import { emptyEngineCapabilities, multiExtruderSupport, printerNozzleCount } from '../capabilities';
 import { type EngineNativeBridge, nativeEngineBridge, type RawEngineDetection } from '../engineBridge';
 import type { EngineStatus } from '../engineRegistry';
 import { getAsset, resolveAsset } from '../assets';
 import { inputFingerprintForStep } from '../workflow';
 import { workspaceDirName } from '../projectPreparation';
+import { getWorkingProfile, normalizeNozzleIndex, primaryNozzleIndex } from '../session';
 import { mergeCalibrationIntoProjectConfig } from '../orcaProjectConfig';
 import { mapPrinterToOrca, type OrcaMachineMapping } from '../printerMapping';
 import { getPrinterSpec } from '../../data/printerDatabase';
 import {
+  applyNozzleToPreset,
   baseName,
   inspectSlicedJob,
   notSlicedJob,
@@ -120,6 +124,20 @@ export class InstalledOrcaEngine implements SlicingEngine {
     return raw.valid ? splitRawDetection(raw).capabilities : emptyEngineCapabilities();
   }
 
+  /**
+   * Honest per-nozzle answer. The engine's own multi-extruder flag comes from
+   * native detection, which today reports it false until a trial slice proves
+   * otherwise — so this correctly refuses a multi-nozzle machine rather than
+   * assuming the main nozzle's g-code would do.
+   */
+  async supportsNozzle(
+    printer: NozzleCountSource | undefined,
+    nozzleIndex: number
+  ): Promise<CapabilityResult> {
+    const caps = await this.getCapabilities();
+    return multiExtruderSupport(caps, printer, nozzleIndex);
+  }
+
   /** Combined status for the engine-status diagnostics view (one native call). */
   async status(): Promise<EngineStatus> {
     const raw = this.remember(
@@ -186,6 +204,13 @@ export class InstalledOrcaEngine implements SlicingEngine {
     if (!spec) {
       throw new Error(`PRINTER_NOT_FOUND: no printer-DB entry for '${selection.printerProfileId}'.`);
     }
+    const nozzleIndex = normalizeNozzleIndex(selection.nozzleIndex);
+    const nozzleCount = printerNozzleCount(spec);
+    if (nozzleCount > 0 && nozzleIndex >= nozzleCount) {
+      throw new Error(
+        `NOZZLE_NOT_ON_PRINTER: "${spec.model}" is recorded with ${nozzleCount} nozzle(s); nozzle ${nozzleIndex + 1} is not one of them.`
+      );
+    }
     const machines = await this.bridge.listInstalledMachines(ENGINE_ID);
     const mapping = mapPrinterToOrca(spec.model, selection.nozzleDiameterMm, machines);
     if (!mapping) {
@@ -199,18 +224,26 @@ export class InstalledOrcaEngine implements SlicingEngine {
   /**
    * Resolve a complete printer+process+filament config for a PerfectFit printer
    * selection plus a chosen filament preset name — the full end-to-end path.
+   *
+   * When the selection names a nozzle other than the main one, the resolved
+   * per-extruder arrays are narrowed to THAT extruder (see
+   * `projectPresetForNozzle`) instead of leaving a consumer to read element 0,
+   * which would silently hand the auxiliary nozzle the main nozzle's retraction
+   * and geometry. Anything the projection could not interpret is reported in
+   * `warnings`, never guessed.
    */
   async resolveForPrinter(
     selection: PrinterSelection,
     filamentPresetName: string
   ): Promise<ResolvedPrinterPreset> {
     const mapping = await this.mapSelection(selection);
-    return this.resolvePresetByNames({
+    const resolved = await this.resolvePresetByNames({
       vendor: mapping.vendor,
       machine: mapping.machineName,
       process: mapping.process,
       filament: filamentPresetName
     });
+    return applyNozzleToPreset(resolved, selection.nozzleIndex);
   }
 
   /**
@@ -221,8 +254,10 @@ export class InstalledOrcaEngine implements SlicingEngine {
    */
   async resolvePrinterPreset(selection: PrinterSelection): Promise<ResolvedPrinterPreset> {
     const mapping = await this.mapSelection(selection);
+    const nozzle = normalizeNozzleIndex(selection.nozzleIndex);
     throw new Error(
-      `FILAMENT_SELECTION_REQUIRED: mapped to Orca machine "${mapping.machineName}" + process "${mapping.process}"; ` +
+      `FILAMENT_SELECTION_REQUIRED: mapped to Orca machine "${mapping.machineName}" + process "${mapping.process}" ` +
+        `for nozzle ${nozzle + 1}; ` +
         'call resolveForPrinter(selection, filamentPresetName) with the material being calibrated.'
     );
   }
@@ -240,7 +275,8 @@ export class InstalledOrcaEngine implements SlicingEngine {
    */
   async prepareProject(
     session: AutomatedCalibrationSession,
-    step: CalibrationStepDefinition
+    step: CalibrationStepDefinition,
+    opts?: { nozzleIndex?: number }
   ): Promise<PreparedCalibrationProject> {
     if (!this.bridge.isDesktop()) {
       throw new Error('NOT_DESKTOP: project assembly requires the desktop app.');
@@ -259,8 +295,15 @@ export class InstalledOrcaEngine implements SlicingEngine {
       throw new Error(`ASSET_UNAVAILABLE: ${resolved.remedy ?? step.id}`);
     }
 
-    const fingerprint = inputFingerprintForStep(session.workingProfile, step.id);
-    const jobId = workspaceDirName(session.id, step.id, fingerprint);
+    // One nozzle per prepared workspace: the nozzle is part of the job identity,
+    // so the same step on the main and auxiliary nozzles cannot collide.
+    const nozzleIndex =
+      opts?.nozzleIndex === undefined
+        ? primaryNozzleIndex(session)
+        : normalizeNozzleIndex(opts.nozzleIndex);
+    const profile = getWorkingProfile(session, nozzleIndex);
+    const fingerprint = inputFingerprintForStep(profile, step.id, nozzleIndex);
+    const jobId = workspaceDirName(session.id, step.id, fingerprint, nozzleIndex);
     const templateConfig = await this.bridge.readProjectConfig(resolved.location);
     const merged = mergeCalibrationIntoProjectConfig(templateConfig, session);
     const assembled = await this.bridge.assembleCalibrationProject({
@@ -276,6 +319,7 @@ export class InstalledOrcaEngine implements SlicingEngine {
       id: jobId,
       projectId: session.id,
       stepId: step.id,
+      nozzleIndex,
       workspaceDir: assembled.workspace_dir,
       projectFilePath: assembled.project_path,
       // The job manifest is written alongside in a later staging step; report

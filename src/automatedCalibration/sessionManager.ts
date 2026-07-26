@@ -23,13 +23,52 @@ import type {
   SlicerMode,
   TemporaryCalibrationProfile
 } from './types';
-import { applyValue, createTemporaryProfile, isSessionResumable } from './session';
+import {
+  applyValue,
+  createTemporaryProfile,
+  getWorkingProfile,
+  isSessionResumable,
+  normalizeNozzleIndex,
+  primaryNozzleIndex,
+  profileNozzleIndex
+} from './session';
 import { addTimeline, uid } from '../storage/store';
 
 /** Sub-schema version stamped on a session's automated fields, independent of
  *  the app-wide storage SCHEMA_VERSION so the session shape can evolve on its
- *  own migration track later. */
+ *  own migration track later.
+ *
+ *  Deliberately NOT bumped when `inputFingerprintForStep` started folding the
+ *  nozzle into its hash: this number describes the SHAPE of the persisted
+ *  session fields, and that shape is unchanged — a fingerprint is still an
+ *  opaque string on the same field. Bumping it would imply a migration that
+ *  does not exist (nothing reads this value to transform anything), while the
+ *  actual effect — pre-existing prepared jobs reading as `stale` once, meaning
+ *  "prepare me again" — needs no data rewrite. See the note at
+ *  `inputFingerprintForStep`. */
 export const AUTOMATED_SESSION_SCHEMA = 1;
+
+/**
+ * True when a project carries ANY automated-session scaffolding — a status, a
+ * primary working profile, or per-nozzle profiles.
+ *
+ * Deliberately broader than `hasAutomatedSession`, which asks whether a session
+ * is USABLE. This asks whether there is anything session-shaped to inspect at
+ * all, which is the question both the safe loader and the backup importer have
+ * to answer before they touch the session fields. It lives here so the two can
+ * never drift apart: a project that carries only `workingProfiles` (an extra
+ * nozzle's profile, no primary) counted as a session in one place and as a
+ * plain manual project in the other.
+ */
+export function carriesSessionData(
+  project: Pick<CalibrationProject, 'sessionStatus' | 'workingProfile' | 'workingProfiles'>
+): boolean {
+  return (
+    project.sessionStatus !== undefined ||
+    project.workingProfile !== undefined ||
+    project.workingProfiles !== undefined
+  );
+}
 
 // --- working profile construction ------------------------------------------
 
@@ -40,12 +79,14 @@ export interface WorkingProfileSeed {
   stepId?: CalibrationId;
 }
 
-/** Build a temporary working profile from optional seed values (base-profile
- *  values or safe material/printer defaults). Pure. */
+/** Build a temporary working profile for ONE nozzle from optional seed values
+ *  (base-profile values or safe material/printer defaults). Pure. Omit
+ *  `nozzleIndex` for a single-nozzle machine's only nozzle. */
 export function buildWorkingProfile(input: {
   projectId: string;
   displayName: string;
   sourceProfileName?: string;
+  nozzleIndex?: number;
   seeds?: WorkingProfileSeed[];
   now?: string;
 }): TemporaryCalibrationProfile {
@@ -54,12 +95,68 @@ export function buildWorkingProfile(input: {
     displayName: input.displayName,
     projectId: input.projectId,
     sourceProfileName: input.sourceProfileName,
+    nozzleIndex: input.nozzleIndex,
     now: input.now
   });
   for (const s of input.seeds ?? []) {
     wp = applyValue(wp, s.key, s.value, s.source, { stepId: s.stepId, now: input.now });
   }
   return wp;
+}
+
+// --- per-nozzle working profiles -------------------------------------------
+
+/**
+ * Store a nozzle's working profile on the session. The first profile stored
+ * becomes the session's primary (kept in `workingProfile`, where every existing
+ * single-nozzle consumer already looks); further nozzles are held alongside it.
+ * Replacing a nozzle's profile never disturbs another nozzle's values.
+ *
+ * Mutates and returns the project, matching the store's in-place convention.
+ * Does NOT persist — the caller saves via `saveProject`.
+ */
+export function setWorkingProfile(
+  project: CalibrationProject,
+  profile: TemporaryCalibrationProfile
+): CalibrationProject {
+  const index = profileNozzleIndex(profile, project.nozzleIndex ?? 0);
+  const stamped: TemporaryCalibrationProfile = { ...profile, nozzleIndex: index };
+
+  if (!project.workingProfile || primaryNozzleIndex(project) === index) {
+    project.workingProfile = stamped;
+  } else {
+    const rest = (project.workingProfiles ?? []).filter((p) => profileNozzleIndex(p) !== index);
+    rest.push(stamped);
+    rest.sort((a, b) => profileNozzleIndex(a) - profileNozzleIndex(b));
+    project.workingProfiles = rest;
+  }
+  return project;
+}
+
+/**
+ * The working profile for a nozzle, creating an empty one when that nozzle has
+ * none yet. Use this when a step is about to record a result for a nozzle the
+ * session has not touched before (the auxiliary nozzle on a dual-nozzle
+ * machine). Mutates the project only when a profile has to be created.
+ */
+export function ensureWorkingProfile(
+  project: CalibrationProject,
+  nozzleIndex?: number,
+  opts?: { displayName?: string; sourceProfileName?: string; seeds?: WorkingProfileSeed[]; now?: string }
+): TemporaryCalibrationProfile {
+  const index = normalizeNozzleIndex(nozzleIndex ?? project.nozzleIndex);
+  const existing = getWorkingProfile(project, index);
+  if (existing) return existing;
+  const created = buildWorkingProfile({
+    projectId: project.id,
+    displayName: opts?.displayName ?? project.workingProfile?.displayName ?? 'Working profile',
+    sourceProfileName: opts?.sourceProfileName ?? project.workingProfile?.sourceProfileName,
+    nozzleIndex: index,
+    seeds: opts?.seeds,
+    now: opts?.now
+  });
+  setWorkingProfile(project, created);
+  return getWorkingProfile(project, index) as TemporaryCalibrationProfile;
 }
 
 // --- session creation ------------------------------------------------------
@@ -72,7 +169,10 @@ export function beginSession(
   opts: {
     slicerMode: SlicerMode;
     engineId?: EngineId;
+    /** The session's primary nozzle profile. */
     workingProfile: TemporaryCalibrationProfile;
+    /** Further nozzles' profiles, for a session spanning a dual-nozzle machine. */
+    additionalProfiles?: TemporaryCalibrationProfile[];
   }
 ): CalibrationProject {
   project.automatedSchemaVersion = AUTOMATED_SESSION_SCHEMA;
@@ -80,6 +180,8 @@ export function beginSession(
   project.selectedEngineId = opts.engineId;
   project.sessionStatus = 'created';
   project.workingProfile = opts.workingProfile;
+  project.workingProfiles = [];
+  for (const extra of opts.additionalProfiles ?? []) setWorkingProfile(project, extra);
   project.generatedJobs = project.generatedJobs ?? [];
   project.sessionWarnings = project.sessionWarnings ?? [];
   addTimeline(project, {
@@ -155,6 +257,12 @@ export function validateWorkingProfile(wp: unknown): string[] {
   if (typeof w.createdForProjectId !== 'string' || !w.createdForProjectId) {
     errors.push('working profile is not linked to a project');
   }
+  if (
+    w.nozzleIndex !== undefined &&
+    (typeof w.nozzleIndex !== 'number' || !Number.isInteger(w.nozzleIndex) || w.nozzleIndex < 0)
+  ) {
+    errors.push('working profile nozzle index is not a whole number');
+  }
   const valuesOk = !!w.values && typeof w.values === 'object';
   const provOk = !!w.provenance && typeof w.provenance === 'object';
   if (!valuesOk) errors.push('working profile values are missing');
@@ -182,6 +290,23 @@ export function validateSession(project: CalibrationProject): string[] {
   }
   if (project.slicerMode === undefined) errors.push('session slicer mode is missing');
   errors.push(...validateWorkingProfile(project.workingProfile));
+
+  // Extra nozzles: each must be well-formed, and no two profiles may claim the
+  // same nozzle (two profiles for one nozzle means one silently wins).
+  const extras = project.workingProfiles;
+  if (extras !== undefined) {
+    if (!Array.isArray(extras)) {
+      errors.push('session working profiles are not a list');
+    } else {
+      const seen = new Set<number>([primaryNozzleIndex(project)]);
+      extras.forEach((p, i) => {
+        for (const e of validateWorkingProfile(p)) errors.push(`nozzle profile ${i + 1}: ${e}`);
+        const idx = profileNozzleIndex(p);
+        if (seen.has(idx)) errors.push(`two working profiles claim nozzle ${idx + 1}`);
+        seen.add(idx);
+      });
+    }
+  }
   return errors;
 }
 
@@ -201,8 +326,7 @@ export interface SafeSessionLoad {
  *  stays fully usable in the manual workflow — the user's calibration results
  *  (steps/finals/history) are never touched. Never throws. */
 export function loadSessionSafe(project: CalibrationProject): SafeSessionLoad {
-  const hasSessionData = project.sessionStatus !== undefined || project.workingProfile !== undefined;
-  if (!hasSessionData) {
+  if (!carriesSessionData(project)) {
     return { project, automated: false, degraded: false, warnings: [] };
   }
   const errors = validateSession(project);
@@ -214,6 +338,7 @@ export function loadSessionSafe(project: CalibrationProject): SafeSessionLoad {
   delete project.slicerMode;
   delete project.sessionStatus;
   delete project.workingProfile;
+  delete project.workingProfiles;
   delete project.generatedJobs;
   delete project.sessionWarnings;
   delete project.selectedEngineId;

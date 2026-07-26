@@ -10,10 +10,13 @@
 // ---------------------------------------------------------------------------
 
 import type {
+  CapabilityResult,
   EngineDetectionResult,
   EngineId,
+  NozzleCountSource,
   SlicingEngineCapabilities
 } from './types';
+import { multiExtruderSupport, printerNozzleCount } from './capabilities';
 import { type EngineNativeBridge, nativeEngineBridge } from './engineBridge';
 import { InstalledOrcaEngine } from './engines/installedOrcaEngine';
 import { ManualExportEngine } from './engines/manualExportEngine';
@@ -31,6 +34,21 @@ export interface EngineStatus {
   errors: string[];
   warnings: string[];
   notes: string[];
+  /**
+   * Whether this engine can serve the nozzle the caller asked about (see
+   * `EngineDiscoveryContext`). Present on every status; for a single-nozzle or
+   * unknown printer at nozzle 0 it is simply supported.
+   */
+  nozzleSupport?: CapabilityResult;
+}
+
+/** What the caller is trying to do, so diagnostics can answer honestly rather
+ *  than in the abstract. Omit it entirely for a plain "what have I got?" probe. */
+export interface EngineDiscoveryContext {
+  /** The printer profile being calibrated, for its nozzle count. */
+  printer?: NozzleCountSource;
+  /** Which physical nozzle the session targets. Defaults to 0 (main/only). */
+  nozzleIndex?: number;
 }
 
 export interface EngineDiagnostics {
@@ -53,9 +71,12 @@ export function createEngines(bridge: EngineNativeBridge = nativeEngineBridge): 
   return [new InstalledOrcaEngine(bridge), new ManualExportEngine()];
 }
 
-/** True when an engine can actually turn a prepared project into g-code now. */
+/** True when an engine can actually turn a prepared project into g-code now,
+ *  FOR THE NOZZLE the caller asked about. An engine that cannot serve the
+ *  requested nozzle is not a candidate, however capable it is otherwise. */
 function canSlice(s: EngineStatus): boolean {
-  return s.detected && s.valid && s.capabilities.slice;
+  if (!(s.detected && s.valid && s.capabilities.slice)) return false;
+  return s.nozzleSupport?.supported !== false;
 }
 
 /**
@@ -63,9 +84,14 @@ function canSlice(s: EngineStatus): boolean {
  * (installed Orca, listed first) and otherwise falls back to manual export,
  * which is always available. Never throws — a probe failure is reported as an
  * engine error, so the diagnostics screen always renders.
+ *
+ * Pass a `context` to ask the question that matters to a session: "can anything
+ * here slice for the auxiliary nozzle of THIS printer?" — the answer branches on
+ * the engine's real multi-extruder capability, not on an assumption.
  */
 export async function discoverEngines(
-  bridge: EngineNativeBridge = nativeEngineBridge
+  bridge: EngineNativeBridge = nativeEngineBridge,
+  context: EngineDiscoveryContext = {}
 ): Promise<EngineDiagnostics> {
   const engines = createEngines(bridge);
   const statuses = await Promise.all(
@@ -96,6 +122,15 @@ export async function discoverEngines(
     })
   );
 
+  const nozzleIndex = context.nozzleIndex ?? 0;
+  for (const s of statuses) {
+    s.nozzleSupport = multiExtruderSupport(
+      s.valid ? s.capabilities : null,
+      context.printer,
+      nozzleIndex
+    );
+  }
+
   const slicer = statuses.find(canSlice);
   const manual = statuses.find((s) => s.engineId === 'manual_export' && s.valid);
   const recommendedEngineId = slicer?.engineId ?? manual?.engineId ?? null;
@@ -105,6 +140,18 @@ export async function discoverEngines(
     warnings.push('Running in a browser build — automated slicing needs the desktop app; manual export only.');
   } else if (!slicer) {
     warnings.push('No slice-capable engine detected. Install OrcaSlicer or select its executable, or use manual export.');
+  }
+  // Say plainly when the blocker is the nozzle rather than the engine itself:
+  // a second nozzle is exactly the case this product exists for.
+  if (!slicer && printerNozzleCount(context.printer) > 1) {
+    const blocked = statuses.find(
+      (s) => s.detected && s.valid && s.capabilities.slice && s.nozzleSupport?.supported === false
+    );
+    if (blocked) {
+      warnings.push(
+        `${blocked.displayName} cannot slice for a chosen nozzle on this multi-nozzle printer, so this step stays on the manual path.`
+      );
+    }
   }
 
   return { desktop: bridge.isDesktop(), engines: statuses, recommendedEngineId, warnings };

@@ -1,6 +1,9 @@
 ﻿import type { BackupFile, CalibrationProject, PrinterProfile, StoredPhoto } from '../types';
 import { SCHEMA_VERSION, ensureProjectSteps, listPrinters, listProjects, loadSettings, saveProject, savePrinter, uid } from '../storage/store';
 import { idb } from '../storage/db';
+// Imported from the module rather than the automatedCalibration barrel on
+// purpose: import/export must not drag the engine layer in behind it.
+import { carriesSessionData } from '../automatedCalibration/sessionManager';
 
 /** Serialize one project (with its printer profile embedded) for sharing. */
 export async function exportProject(p: CalibrationProject, printer?: PrinterProfile): Promise<string> {
@@ -164,8 +167,11 @@ export function migrate(file: BackupFile): BackupFile {
       delete p.nozzleIndex;
     }
     // Automated session fields: only normalize when a session is present, so we
-    // never fabricate a session on a plain manual project.
-    if (p.sessionStatus !== undefined || p.workingProfile !== undefined) {
+    // never fabricate a session on a plain manual project. The test is shared
+    // with the session loader (`carriesSessionData`) so an imported project and
+    // a loaded one can never disagree about whether a session is there — an
+    // export carrying only `workingProfiles` used to skip this normalization.
+    if (carriesSessionData(p)) {
       p.generatedJobs = Array.isArray(p.generatedJobs) ? p.generatedJobs : [];
       p.sessionWarnings = Array.isArray(p.sessionWarnings) ? p.sessionWarnings : [];
     }

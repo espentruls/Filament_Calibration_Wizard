@@ -8,6 +8,7 @@
 
 import type { CalibrationId } from '../types';
 import type {
+  AutomatedSessionExtension,
   CalibrationSessionStatus,
   GeneratedJobRecord,
   ProvenanceSource,
@@ -16,13 +17,15 @@ import type {
 
 type ProfileValue = number | string | boolean;
 
-/** Create an empty working profile for a project. Immutable inputs; the caller
- *  owns the returned object. */
+/** Create an empty working profile for one nozzle of a project. Immutable
+ *  inputs; the caller owns the returned object. */
 export function createTemporaryProfile(input: {
   id: string;
   displayName: string;
   projectId: string;
   sourceProfileName?: string;
+  /** Which physical nozzle the profile describes; defaults to 0 (main). */
+  nozzleIndex?: number;
   now?: string;
 }): TemporaryCalibrationProfile {
   const now = input.now ?? new Date().toISOString();
@@ -31,11 +34,84 @@ export function createTemporaryProfile(input: {
     displayName: input.displayName,
     createdForProjectId: input.projectId,
     sourceProfileName: input.sourceProfileName,
+    nozzleIndex: normalizeNozzleIndex(input.nozzleIndex),
     values: {},
     provenance: {},
     createdAt: now,
     updatedAt: now
   };
+}
+
+// --- per-nozzle profile selection (pure) ------------------------------------
+
+/** Coerce any nozzle index to a usable whole number ≥ 0. Absent/invalid = 0. */
+export function normalizeNozzleIndex(index?: number | null): number {
+  if (typeof index !== 'number' || !Number.isFinite(index) || index < 0) return 0;
+  return Math.floor(index);
+}
+
+/** The nozzle a profile describes. Absent = `fallback` (default 0), which keeps
+ *  profiles saved before dual-nozzle support readable. */
+export function profileNozzleIndex(
+  profile: Pick<TemporaryCalibrationProfile, 'nozzleIndex'> | undefined,
+  fallback = 0
+): number {
+  if (profile?.nozzleIndex === undefined) return normalizeNozzleIndex(fallback);
+  return normalizeNozzleIndex(profile.nozzleIndex);
+}
+
+/** Anything that can carry a session's working profiles — a `CalibrationProject`
+ *  or a bare session extension. `nozzleIndex` is the project's own nozzle. */
+export type WorkingProfileHolder = AutomatedSessionExtension & { nozzleIndex?: number };
+
+/**
+ * The nozzle a session's PRIMARY working profile belongs to: the profile's own
+ * index when it has one, else the project's nozzle, else 0.
+ */
+export function primaryNozzleIndex(session: WorkingProfileHolder): number {
+  if (session.workingProfile) {
+    return profileNozzleIndex(session.workingProfile, session.nozzleIndex ?? 0);
+  }
+  return normalizeNozzleIndex(session.nozzleIndex);
+}
+
+/**
+ * The working profile for one nozzle. Omit `nozzleIndex` to get the session's
+ * primary profile (the pre-dual-nozzle behaviour of reading `workingProfile`).
+ * Returns undefined when that nozzle has no profile yet — never a fabricated
+ * empty one, so a caller can tell "not measured" from "measured as zero".
+ */
+export function getWorkingProfile(
+  session: WorkingProfileHolder,
+  nozzleIndex?: number
+): TemporaryCalibrationProfile | undefined {
+  if (nozzleIndex === undefined) return session.workingProfile;
+  const want = normalizeNozzleIndex(nozzleIndex);
+  const primary = session.workingProfile;
+  if (primary && profileNozzleIndex(primary, session.nozzleIndex ?? 0) === want) return primary;
+  return (session.workingProfiles ?? []).find((p) => profileNozzleIndex(p) === want);
+}
+
+/** Every working profile the session holds, primary first, in nozzle order after
+ *  that. Read-only view — the array is freshly built. */
+export function listWorkingProfiles(session: WorkingProfileHolder): TemporaryCalibrationProfile[] {
+  const out: TemporaryCalibrationProfile[] = [];
+  if (session.workingProfile) out.push(session.workingProfile);
+  const primary = session.workingProfile ? primaryNozzleIndex(session) : -1;
+  for (const p of session.workingProfiles ?? []) {
+    if (profileNozzleIndex(p) === primary) continue; // never list the primary twice
+    out.push(p);
+  }
+  return out;
+}
+
+/** Nozzle indices the session currently holds a working profile for, ascending. */
+export function workingProfileNozzles(session: WorkingProfileHolder): number[] {
+  const seen = new Set<number>();
+  for (const p of listWorkingProfiles(session)) {
+    seen.add(profileNozzleIndex(p, session.nozzleIndex ?? 0));
+  }
+  return [...seen].sort((a, b) => a - b);
 }
 
 /** Return a NEW profile with one value set and its provenance recorded. The

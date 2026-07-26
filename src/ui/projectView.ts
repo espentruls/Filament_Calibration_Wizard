@@ -87,6 +87,7 @@ export async function renderProject(root: HTMLElement, id: string): Promise<void
     ),
     h('div', { class: 'btn-row' },
       stage ? h('a', { class: 'btn btn-primary', href: `#/wizard/${p.id}/${stage}` }, `▶ Continue: ${getCalibration(stage).shortName}`) : null,
+      h('a', { class: 'btn', href: `#/session/${p.id}`, title: 'Guided session — one screen per test, results carried forward' }, '🧭 Guided session'),
       hasCalibratedValues(p) ? h('a', { class: `btn ${stage ? '' : 'btn-primary'}`, href: `#/profile/${p.id}` }, '🧵 Create Slicer Profile') : null,
       h('a', { class: 'btn', href: `#/report/${p.id}` }, '📄 Report'),
       h('a', { class: 'btn', href: `#/card/${p.id}` }, '🪪 Calibration card'),

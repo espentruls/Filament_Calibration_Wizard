@@ -15,6 +15,7 @@
 import type { CalibrationId, CalibrationProject } from '../types';
 import type { AssetLicenseMetadata, PrinterSelection, SlicerMode } from './types';
 import { inputFingerprintForStep } from './workflow';
+import { getWorkingProfile, normalizeNozzleIndex, primaryNozzleIndex } from './session';
 import { type AssetResolutionContext, type AssetSourceKind, resolveAsset } from './assets';
 
 export const JOB_MANIFEST_SCHEMA = 1;
@@ -37,6 +38,8 @@ export interface JobManifest {
   projectId: string;
   stepId: CalibrationId;
   createdAt: string;
+  /** Which physical nozzle this job targets (0 = main/only). */
+  nozzleIndex: number;
   slicerMode: SlicerMode;
   asset: {
     assetId: string | null;
@@ -77,11 +80,30 @@ function sanitizeSegment(s: string): string {
   return s.replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
 }
 
-/** Deterministic, filesystem-safe workspace directory name for a job. The same
- *  project+step+inputs always yields the same name, so re-preparing an unchanged
- *  job is idempotent and a changed input produces a distinct workspace. */
-export function workspaceDirName(projectId: string, stepId: CalibrationId, inputFingerprint: string): string {
-  return `${WORKSPACE_PREFIX}_${sanitizeSegment(projectId)}_${sanitizeSegment(stepId)}_${shortHash(inputFingerprint)}`;
+/**
+ * Deterministic, filesystem-safe workspace directory name for a job. The same
+ * project+step+nozzle+inputs always yields the same name, so re-preparing an
+ * unchanged job is idempotent and a changed input produces a distinct workspace.
+ *
+ * The nozzle is part of the name (`n0`, `n1`, …) and not merely folded into the
+ * fingerprint: without it, the same project and step prepared for two different
+ * nozzles would stage into one byte-identical directory and silently overwrite
+ * each other — exactly the dual-nozzle case this product exists for.
+ */
+export function workspaceDirName(
+  projectId: string,
+  stepId: CalibrationId,
+  inputFingerprint: string,
+  nozzleIndex?: number
+): string {
+  const nozzle = `n${normalizeNozzleIndex(nozzleIndex)}`;
+  return [
+    WORKSPACE_PREFIX,
+    sanitizeSegment(projectId),
+    sanitizeSegment(stepId),
+    nozzle,
+    shortHash(inputFingerprint)
+  ].join('_');
 }
 
 /** Guard used by the (future) cleaner: only names we produced may be removed. */
@@ -95,10 +117,29 @@ export interface PrepareJobInput {
   slicerMode: SlicerMode;
   printerSelection: PrinterSelection;
   nozzleDiameterMm: number;
+  /**
+   * Which physical nozzle to prepare for. Defaults to the printer selection's
+   * `nozzleIndex`, then the project's, then 0 — so single-nozzle callers need
+   * not pass anything.
+   */
+  nozzleIndex?: number;
   assetContext?: AssetResolutionContext;
   stepParameters?: Record<string, number | string | boolean>;
   jobId: string;
   now?: string;
+}
+
+/** The nozzle a prepare request targets, in precedence order. */
+export function resolveJobNozzleIndex(input: {
+  nozzleIndex?: number;
+  printerSelection?: Pick<PrinterSelection, 'nozzleIndex'>;
+  project?: Pick<CalibrationProject, 'nozzleIndex'>;
+}): number {
+  if (input.nozzleIndex !== undefined) return normalizeNozzleIndex(input.nozzleIndex);
+  if (input.printerSelection?.nozzleIndex !== undefined) {
+    return normalizeNozzleIndex(input.printerSelection.nozzleIndex);
+  }
+  return normalizeNozzleIndex(input.project?.nozzleIndex);
 }
 
 /**
@@ -110,10 +151,17 @@ export interface PrepareJobInput {
 export function prepareJob(input: PrepareJobInput): PreparedJobPlan {
   const now = input.now ?? new Date().toISOString();
   const asset = resolveAsset(input.stepId, input.assetContext);
-  const appliedValues = { ...(input.project.workingProfile?.values ?? {}) };
-  const inputFingerprint = inputFingerprintForStep(input.project.workingProfile, input.stepId);
+  const nozzleIndex = resolveJobNozzleIndex(input);
+  const profile = getWorkingProfile(input.project, nozzleIndex);
+  const appliedValues = { ...(profile?.values ?? {}) };
+  const inputFingerprint = inputFingerprintForStep(profile, input.stepId, nozzleIndex);
   const warnings = [...asset.warnings];
   if (!asset.available && asset.remedy) warnings.push(asset.remedy);
+  if (!profile && nozzleIndex !== primaryNozzleIndex(input.project)) {
+    warnings.push(
+      `This session has no working profile for nozzle ${nozzleIndex + 1} yet, so no calibrated values were applied.`
+    );
+  }
 
   const manifest: JobManifest = {
     schemaVersion: JOB_MANIFEST_SCHEMA,
@@ -121,6 +169,7 @@ export function prepareJob(input: PrepareJobInput): PreparedJobPlan {
     projectId: input.project.id,
     stepId: input.stepId,
     createdAt: now,
+    nozzleIndex,
     slicerMode: input.slicerMode,
     asset: {
       assetId: asset.assetId,
@@ -129,7 +178,7 @@ export function prepareJob(input: PrepareJobInput): PreparedJobPlan {
       license: asset.license,
       requiresParameterization: asset.requiresParameterization
     },
-    printerSelection: input.printerSelection,
+    printerSelection: { ...input.printerSelection, nozzleIndex },
     nozzleDiameterMm: input.nozzleDiameterMm,
     appliedValues,
     inputFingerprint,
@@ -158,7 +207,7 @@ export function prepareJob(input: PrepareJobInput): PreparedJobPlan {
   return {
     ok: asset.available,
     manifest,
-    workspaceDirName: workspaceDirName(input.project.id, input.stepId, inputFingerprint),
+    workspaceDirName: workspaceDirName(input.project.id, input.stepId, inputFingerprint, nozzleIndex),
     plannedFiles,
     warnings
   };
