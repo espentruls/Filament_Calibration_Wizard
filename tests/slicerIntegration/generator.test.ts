@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { getAdapter } from '../../src/slicerIntegration/adapters';
-import { buildPatchesFromProject, generateProfile } from '../../src/slicerIntegration/generator';
+import { buildPatchesFromProject, defaultTargetExtruder, generateProfile } from '../../src/slicerIntegration/generator';
 import type { ParsedFilamentProfile } from '../../src/slicerIntegration/types';
 import type { CalibrationProject } from '../../src/types';
 import { fixtureRaw, USER_FIXTURES } from './fixtures';
@@ -42,6 +42,7 @@ function makeProject(overrides: Partial<CalibrationProject['finals']> = {}): Cal
       'pressure-advance': { ...completed },
       'retraction': { ...completed },
       'max-volumetric-speed': { ...completed },
+      'ooze-control': { status: 'not-started' as const, current: null, history: [] },
       'final-verification': { ...completed }
     },
     timeline: [], archived: false, finals
@@ -166,6 +167,48 @@ describe('clone-and-patch round trips (all slicer fixtures)', () => {
     const origRetract = original.filament_retraction_length as string[];
     expect(retract[1]).toBe('0.8');
     expect(retract[0]).toBe(origRetract[0]);
+  });
+
+  it('companion values follow per-extruder targeting on the dual-nozzle fixture', () => {
+    const parsed = parseFixture('bambu-user-full-pctg-dualnozzle.json', 'bambu');
+    const project = makeProject();
+    const generated = generateProfile({
+      slicerId: 'bambu', baseProfile: parsed.profile, newName: 'PF Dual Companion',
+      patches: buildPatchesFromProject(project), targetExtruderIndex: 1,
+      applyToAllExtruders: false, project
+    }, parsed);
+    const reparsed = JSON.parse(generated.serialized) as Record<string, unknown>;
+    // The UN-calibrated nozzle 0 must not silently get PA enabled.
+    expect(reparsed.enable_pressure_advance).toEqual(['0', '1']);
+    expect(reparsed.pressure_advance).toEqual(['0.02', '0.035']);
+    const compChange = generated.changedFields.find(c => c.presetKey === 'enable_pressure_advance');
+    expect(compChange?.extruderIndex).toBe(1);
+  });
+
+  it('defaults the target extruder from the project nozzleIndex, clamped to the profile shape', () => {
+    const parsed = parseFixture('bambu-user-full-pctg-dualnozzle.json', 'bambu');
+    expect(parsed.extruderCount).toBe(2);
+    expect(defaultTargetExtruder({ nozzleIndex: 1 }, parsed.extruderCount)).toBe(1);
+    expect(defaultTargetExtruder({}, parsed.extruderCount)).toBe(0);
+    expect(defaultTargetExtruder({ nozzleIndex: 1 }, 1)).toBe(0);   // single-extruder base
+    expect(defaultTargetExtruder({ nozzleIndex: 5 }, parsed.extruderCount)).toBe(1); // clamp
+  });
+
+  it('padding-only normalization records the padded slot honestly (before = null)', () => {
+    // pressure_advance is stored as a 1-element array in the dual-nozzle
+    // fixture; patching the exact stored value at index 0 still widens it.
+    const parsed = parseFixture('bambu-user-full-pctg-dualnozzle.json', 'bambu');
+    const project = makeProject({ pressureAdvance: 0.02 });
+    const generated = generateProfile({
+      slicerId: 'bambu', baseProfile: parsed.profile, newName: 'PF Pad Honesty',
+      patches: buildPatchesFromProject(project), targetExtruderIndex: 0,
+      applyToAllExtruders: false, project
+    }, parsed);
+    const change = generated.changedFields.find(c => c.presetKey === 'pressure_advance');
+    expect(change).toBeDefined();
+    expect(change!.before).toBeNull();       // the padded slot did not exist before
+    expect(change!.after).toBe('0.02');      // it received a copy of the last value
+    expect(change!.extruderIndex).toBe(1);   // and it is the padded position, not the target
   });
 
   it('applies to all extruders when explicitly requested', () => {

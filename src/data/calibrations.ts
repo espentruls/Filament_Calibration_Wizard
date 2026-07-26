@@ -280,6 +280,51 @@ export const CALIBRATIONS: Record<CalibrationId, CalibrationDef> = {
     ]
   },
 
+  'ooze-control': {
+    id: 'ooze-control',
+    name: 'Dual-Nozzle Ooze Control',
+    shortName: 'Ooze control',
+    icon: '🛡️',
+    purpose:
+      'Tames the drips, blobs, and color smears that dual-nozzle printers add on top of normal stringing: ' +
+      'while one nozzle prints, the idle nozzle sits hot, oozes, and can drag its leftovers into your part ' +
+      'at every toolchange. This step is a structured checklist plus one verification print — not a single number to find.',
+    whyThisOrder:
+      'Runs after pressure advance and retraction because both change how much each nozzle oozes. ' +
+      'It is only added to projects that calibrate the bowden-fed auxiliary nozzle of a multi-nozzle printer.',
+    whyExpanded:
+      'On toolchange, Bambu Studio cools the nozzle it is leaving — it emits M104 S0 for the inactive nozzle, ' +
+      'letting it fall toward ~60 °C — then reheats it when it is needed again. That reheat expands the melt ' +
+      'inside the nozzle (a pressure spike), and the excess oozes out just before printing resumes. PETG is the ' +
+      'worst offender. There is no official standby-temperature field to tune, so the practical defenses are: ' +
+      'a prime tower (the primary one — every toolchange wipes and re-primes on the tower instead of on your part), ' +
+      'an explicitly set per-extruder retraction override, manually calibrated pressure advance (K) for the ' +
+      'auxiliary nozzle, and — in Bambu Studio 2.5+ Developer Mode — ramming and precooling parameters. ' +
+      'Before blaming any setting, though: wet filament is the top non-obvious ooze cause. Moisture flashes to ' +
+      'steam in the hotend and pushes plastic out no matter what you configure.',
+    dependencies: ['pressure-advance', 'retraction'],
+    prerequisites: [
+      { id: 'dry-ooze', label: 'Filament is dry (both filaments, if two are loaded)', coachNote: 'Moisture flashing to steam in the hotend is the #1 non-obvious ooze cause — no retraction or ramming setting can fix a wet spool.' },
+      { id: 'aux-retraction-set', label: 'Per-extruder retraction is calibrated AND the bowden override is explicitly set (not blank)', coachNote: 'Bambu Studio bug #10404: an unset ("nil") Bowden Extruder override silently falls back to the 0.8 mm MAIN default on the auxiliary nozzle — far too little for a bowden path.' },
+      { id: 'aux-k-done', label: 'Pressure advance (K) is calibrated for the nozzle this project targets', coachNote: 'Automatic Flow Dynamics covers the MAIN hotend only — the auxiliary nozzle needs the manual test (run the Pressure Advance step with this project\'s nozzle selected in the calibration dialog).' }
+    ],
+    methods: [
+      { id: 'checklist', label: 'Anti-ooze checklist + verification print', description: 'Work through the mitigations (prime tower, per-extruder retraction override, aux K, ramming parameters), then print a small two-filament model with several toolchanges and judge the remaining ooze.', slicers: ['bambu', 'orca'], recommended: true }
+    ],
+    evaluationGuide: [
+      { title: 'Blobs or smears where the idle nozzle traveled', look: 'Random blobs, drag marks, or color contamination on surfaces — typically right after a toolchange.', meaning: 'The idle nozzle oozed and re-deposited on the part. Raise the aux retraction override in ~0.5 mm steps, confirm the prime tower is enabled, and consider the Developer-Mode ramming/precooling parameters.', severity: 'bad' },
+      { title: 'Strings starting at toolchange positions', look: 'Hairs that begin where one nozzle stops and the other takes over.', meaning: 'Ooze at the hand-off. More prime volume (or a larger prime tower) usually absorbs it.', severity: 'adjust' },
+      { title: 'Prime tower condition', look: 'The tower itself: ragged, under-filled layers versus a solid, tidy block.', meaning: 'A ragged tower means the re-prime is fighting heavy ooze — the tower is catching it (good), but drying, retraction, and K upstream deserve another look.', severity: 'adjust' },
+      { title: 'Clean toolchanges', look: 'No blobs, no color bleed, crisp surfaces after each change.', meaning: 'The mitigation stack is working — record your settings and move on.', severity: 'good' }
+    ],
+    resultPrecision: 2,
+    slicerDestination: { scope: 'process', note: 'Prime tower: Process settings (per plate). Aux retraction: Filament settings → Setting Overrides → "Bowden Extruder" → Retraction → tick Length. Ramming/precooling: Bambu Studio Developer Mode parameters.' },
+    versionNotes: [
+      'Bambu Studio supports the X2D since version 2.5.3; the ramming length / precooling temperature / post-ramming travel time parameters need Developer Mode (Bambu Studio 2.5+, H2D/H2C/X2D).',
+      'In X2D "Quality mode" slicing, the right (auxiliary) nozzle automatically prints only support material while the left prints the main filament — supports are its intended job.'
+    ]
+  },
+
   'final-verification': {
     id: 'final-verification',
     name: 'Final Verification Print',

@@ -12,6 +12,7 @@ vi.stubGlobal('localStorage', {
 
 import { exportProject, importBackup, migrate, dataUrlToBlob } from '../src/export/backup';
 import { createProject, savePrinter, listProjects, listPrinters, saveProject, uid, SCHEMA_VERSION } from '../src/storage/store';
+import { DEFAULT_ORDER } from '../src/data/calibrations';
 import type { BackupFile, PrinterProfile } from '../src/types';
 import { idb } from '../src/storage/db';
 
@@ -126,12 +127,88 @@ describe('data migration', () => {
       printers: []
     } as unknown as BackupFile;
     const out = migrate(file);
-    expect(out.schemaVersion).toBe(2);
+    expect(out.schemaVersion).toBe(3);
     const p = out.projects[0];
     expect(Array.isArray(p.timeline)).toBe(true);
     expect(p.finals).toBeDefined();
     expect(p.generatedProfiles).toEqual([]);
     expect(Array.isArray((p.steps as Record<string, { history: unknown[] }>).temperature.history)).toBe(true);
+  });
+
+  it('defaults stepOrder and steps when a project is imported without them', async () => {
+    const file = {
+      app: 'perfectfit-filament-calibration-wizard',
+      schemaVersion: SCHEMA_VERSION,
+      exportedAt: '',
+      projects: [{
+        id: 'bare-project',
+        filament: {
+          manufacturer: 'TestBrand', productLine: '', material: 'PLA',
+          color: 'Red', diameter: 1.75, startingProfile: 'Generic PLA'
+        },
+        printerProfileId: 'none'
+        // no stepOrder, no steps
+      }],
+      printers: []
+    } as unknown as BackupFile;
+    const res = await importBackup(JSON.stringify(file));
+    expect(res.ok).toBe(true);
+    expect(res.projectsImported).toBe(1);
+
+    const projects = await listProjects();
+    expect(projects).toHaveLength(1);
+    expect(projects[0].stepOrder).toEqual(DEFAULT_ORDER);
+    expect(projects[0].steps).toEqual({});
+  });
+
+  it('round-trips dual-nozzle fields: printer.nozzles, project.nozzleIndex, ooze-control step', async () => {
+    const printer = makePrinter();
+    printer.nozzles = [
+      { label: 'Main (direct drive)', feed: 'direct' },
+      { label: 'Auxiliary (bowden)', feed: 'bowden', maxSpeed: 200, maxAccel: 1000, notes: 'supports-oriented' }
+    ];
+    const project = makeProject(printer.id);
+    project.nozzleIndex = 1;
+    project.stepOrder.splice(project.stepOrder.indexOf('final-verification'), 0, 'ooze-control');
+
+    const res = await importBackup(await exportProject(project, printer));
+    expect(res.ok).toBe(true);
+
+    const [imported] = await listProjects();
+    expect(imported.nozzleIndex).toBe(1);
+    expect(imported.stepOrder).toContain('ooze-control');
+    expect(imported.stepOrder.indexOf('ooze-control')).toBeLessThan(imported.stepOrder.indexOf('final-verification'));
+    const [importedPrinter] = await listPrinters();
+    expect(importedPrinter.nozzles).toEqual(printer.nozzles);
+  });
+
+  it('legacy (v2) backups import without nozzle fields and without ooze-control injection', async () => {
+    const printer = makePrinter();
+    const project = makeProject(printer.id);
+    const file = JSON.parse(await exportProject(project, printer)) as BackupFile;
+    file.schemaVersion = 2;
+    const res = await importBackup(JSON.stringify(file));
+    expect(res.ok).toBe(true);
+
+    const [imported] = await listProjects();
+    expect(imported.nozzleIndex).toBeUndefined();
+    expect(imported.stepOrder).toEqual(DEFAULT_ORDER);
+    expect(imported.stepOrder).not.toContain('ooze-control');
+    const [importedPrinter] = await listPrinters();
+    expect(importedPrinter.nozzles).toBeUndefined();
+  });
+
+  it('migrate drops a malformed nozzleIndex instead of guessing', () => {
+    const file = {
+      app: 'perfectfit-filament-calibration-wizard',
+      schemaVersion: 3,
+      exportedAt: '',
+      projects: [{ id: 'a', filament: {}, nozzleIndex: 'two', stepOrder: [...DEFAULT_ORDER], steps: {} }],
+      printers: [{ id: 'p', name: 'P', nozzles: 'not-an-array' }]
+    } as unknown as BackupFile;
+    const out = migrate(file);
+    expect(out.projects[0].nozzleIndex).toBeUndefined();
+    expect(out.printers[0].nozzles).toBeUndefined();
   });
 });
 

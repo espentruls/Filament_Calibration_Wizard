@@ -13,8 +13,9 @@ export interface JsonDiffEntry {
   after: string | null;
 }
 
-/** Identity keys expected to differ between base and clone. */
-const IDENTITY_KEYS = new Set(['name', 'filament_settings_id', 'from', 'setting_id', 'user_id']);
+/** Identity keys expected to differ between base and clone (filament_id is
+ *  deliberately regenerated so Bambu doesn't hide the clone behind its parent). */
+const IDENTITY_KEYS = new Set(['name', 'filament_settings_id', 'from', 'setting_id', 'user_id', 'filament_id']);
 
 export function fullJsonDiff(
   base: Record<string, unknown>,

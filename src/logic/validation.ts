@@ -35,7 +35,7 @@ export function validateTestRange(start: number, end: number, step: number, opts
   if (step === 0) { issues.push({ level: 'error', message: `${label}: step cannot be zero (division by zero).` }); return issues; }
   if (step < 0) issues.push({ level: 'error', message: `${label}: enter the step as a positive number; direction comes from start/end.` });
   if (start === end) issues.push({ level: 'error', message: `${label}: start and end are equal — there is nothing to test.` });
-  const samples = Math.floor(Math.abs(end - start) / Math.abs(step)) + 1;
+  const samples = Math.floor(Math.abs(end - start) / Math.abs(step) + 1e-9) + 1; // same epsilon as generateRange
   const maxSamples = opts?.maxSamples ?? 100;
   if (samples > maxSamples) issues.push({ level: 'error', message: `${label}: ${samples} samples is too many for one print. Increase the step or narrow the range.` });
   else if (samples < 3) issues.push({ level: 'warning', message: `${label}: only ${samples} samples — consider a wider range or smaller step for a meaningful comparison.` });

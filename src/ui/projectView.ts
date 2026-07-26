@@ -5,7 +5,7 @@ import { confidenceScore, confidenceLabel } from '../logic/confidence';
 import { recommendationsForProject } from '../logic/recommendations';
 import { exportProject } from '../export/backup';
 import { copyFinalsToClipboard } from './report';
-import { STEP_DEPENDENCY_WARNINGS } from '../logic/ranges';
+import { STEP_DEPENDENCY_WARNINGS, nozzleBadgeLabel } from '../logic/ranges';
 import { getMaterial } from '../data/materials';
 import type { CalibrationProject, CalibrationId } from '../types';
 
@@ -31,7 +31,13 @@ export async function renderProject(root: HTMLElement, id: string): Promise<void
     h('p', {}, h('a', { href: '#/' }, '← All projects')),
     h('div', { style: 'display:flex;gap:1rem;align-items:flex-start;flex-wrap:wrap' },
       h('div', { style: 'flex:1;min-width:260px' },
-        h('h1', { style: 'margin:.2rem 0' }, `${p.filament.manufacturer} ${mat.label} ${p.filament.color}`.trim()),
+        h('h1', { style: 'margin:.2rem 0' }, `${p.filament.manufacturer} ${mat.label} ${p.filament.color}`.trim(),
+          (() => {
+            const nozzleLabel = nozzleBadgeLabel(p, printer);
+            return nozzleLabel
+              ? h('span', { class: 'badge badge-info', style: 'margin-left:.5rem;vertical-align:middle;font-size:.85rem;font-weight:400', title: 'This project calibrates one specific nozzle' }, `🔩 ${nozzleLabel}`)
+              : null;
+          })()),
         h('p', { class: 'proj-sub' },
           [p.filament.productLine,
            `${p.filament.diameter} mm`,
@@ -138,7 +144,7 @@ export async function renderProject(root: HTMLElement, id: string): Promise<void
           status !== 'completed' && sid !== 'final-verification' ? h('button', {
             class: 'btn btn-ghost btn-sm', title: 'Skip this test', onClick: async () => {
               const warn = STEP_DEPENDENCY_WARNINGS[sid];
-              const dependents = dependentsOf(sid);
+              const dependents = dependentsOf(sid, p);
               const ok = await confirmDialog({
                 title: `Skip ${def.shortName}?`,
                 body: (status === 'skipped') ? 'Un-skip this step?' :
@@ -191,8 +197,11 @@ function hasCalibratedValues(p: CalibrationProject): boolean {
     .some(v => v !== undefined);
 }
 
-function dependentsOf(sid: CalibrationId): string[] {
-  return Object.values(CALIBRATIONS).filter(def => def.dependencies.includes(sid)).map(def => def.shortName);
+/** Steps in THIS project's plan that depend on `sid` (optional steps like ooze-control only count when the project carries them). */
+function dependentsOf(sid: CalibrationId, p: CalibrationProject): string[] {
+  return p.stepOrder
+    .filter(id => CALIBRATIONS[id]?.dependencies.includes(sid))
+    .map(id => getCalibration(id).shortName);
 }
 
 async function moveStep(p: CalibrationProject, idx: number, dir: -1 | 1, rerender: () => Promise<void>): Promise<void> {

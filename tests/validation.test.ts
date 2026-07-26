@@ -37,6 +37,11 @@ describe('validateTestRange', () => {
   it('accepts sensible ranges', () => {
     expect(validateTestRange(0, 2, 0.1).filter(i => i.level === 'error')).toHaveLength(0);
   });
+  it('counts float samples like generateRange', () => {
+    // 0→0.3 step 0.1 generates 4 values; without an epsilon the count comes out as 3
+    const issues = validateTestRange(0, 0.3, 0.1, { maxSamples: 3 });
+    expect(issues.some(i => i.level === 'error' && i.message.includes('4 samples'))).toBe(true);
+  });
 });
 
 describe('validateAgainstPrinter', () => {

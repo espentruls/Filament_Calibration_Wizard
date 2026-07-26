@@ -1,5 +1,6 @@
 import type { BackupFile, CalibrationProject, PrinterProfile, StoredPhoto } from '../types';
 import { SCHEMA_VERSION, listPrinters, listProjects, loadSettings, saveProject, savePrinter, uid } from '../storage/store';
+import { DEFAULT_ORDER } from '../data/calibrations';
 import { idb } from '../storage/db';
 
 /** Serialize one project (with its printer profile embedded) for sharing. */
@@ -110,7 +111,7 @@ export async function importBackup(json: string): Promise<ImportResult> {
   };
 }
 
-/** Migrate older schema versions forward. v2 is current. */
+/** Migrate older schema versions forward. v3 is current. */
 export function migrate(file: BackupFile): BackupFile {
   const v = file.schemaVersion ?? 1;
   let out = file;
@@ -118,17 +119,32 @@ export function migrate(file: BackupFile): BackupFile {
     // v1 → v2: generatedProfiles added; absent means none.
     out = { ...out, schemaVersion: 2 };
   }
+  if (v < 3) {
+    // v2 → v3: optional PrinterProfile.nozzles + CalibrationProject.nozzleIndex.
+    // Both default to "absent" (legacy single-nozzle), and the optional
+    // ooze-control step is NEVER injected into a legacy project's stepOrder.
+    out = { ...out, schemaVersion: 3 };
+  }
   // Defensive normalization regardless of version:
   for (const p of out.projects ?? []) {
     p.timeline = Array.isArray(p.timeline) ? p.timeline : [];
     p.finals = p.finals ?? {};
     p.archived = !!p.archived;
     p.generatedProfiles = Array.isArray(p.generatedProfiles) ? p.generatedProfiles : [];
-    p.stepOrder = Array.isArray(p.stepOrder) && p.stepOrder.length ? p.stepOrder : p.stepOrder;
+    p.stepOrder = Array.isArray(p.stepOrder) && p.stepOrder.length ? p.stepOrder : [...DEFAULT_ORDER];
+    p.steps = p.steps ?? ({} as CalibrationProject['steps']);
     for (const key of Object.keys(p.steps ?? {})) {
       const st = (p.steps as Record<string, { history?: unknown[] }>)[key];
       if (st && !Array.isArray(st.history)) st.history = [];
     }
+    // A malformed nozzleIndex is dropped (absent = main nozzle) rather than guessed.
+    if (p.nozzleIndex !== undefined &&
+        (typeof p.nozzleIndex !== 'number' || !Number.isInteger(p.nozzleIndex) || p.nozzleIndex < 0)) {
+      delete p.nozzleIndex;
+    }
+  }
+  for (const pr of out.printers ?? []) {
+    if (pr && pr.nozzles !== undefined && !Array.isArray(pr.nozzles)) delete pr.nozzles;
   }
   return out;
 }

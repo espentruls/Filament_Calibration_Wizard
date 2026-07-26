@@ -238,6 +238,12 @@ export function formatPresetNumber(n: number): string {
   return String(Number(n.toFixed(4)));
 }
 
+/** Human-friendly label for a preset key, e.g. "Enable pressure advance". */
+function presetKeyLabel(key: string): string {
+  const words = key.replace(/_/g, ' ');
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
 /**
  * Clone the base preset and patch only the calibrated values.
  *
@@ -324,6 +330,7 @@ export function cloneAndPatch(args: {
     }
 
     const targets = applyToAllExtruders ? arr.map((_, i) => i) : [idx];
+    let recorded = false;
     for (const t of targets) {
       const before = Array.isArray(existing) && typeof (existing as unknown[])[t] === 'string'
         ? (existing as string[])[t]
@@ -333,21 +340,62 @@ export function cloneAndPatch(args: {
           presetKey: key, label: patch.label, before, after, unit: patch.unit,
           extruderIndex: extruders > 1 ? t : undefined
         });
+        recorded = true;
       }
       arr[t] = after;
     }
+    // Padding alone still mutates the key even when the target value matched:
+    // record it, or the diff would flag the widened array as unexpected drift.
+    // Record it honestly: the first padded slot did not exist before (null)
+    // and received a copy of the array's previous last value.
+    if (!recorded && JSON.stringify(arr) !== JSON.stringify(existing)) {
+      const firstPadded = Array.isArray(existing) ? existing.length : 0;
+      changed.push({
+        presetKey: key, label: `${patch.label} (array normalized to ${extruders} extruders)`,
+        before: null, after: arr[firstPadded] ?? after, unit: patch.unit,
+        extruderIndex: extruders > 1 ? firstPadded : undefined
+      });
+    }
     data[key] = arr;
 
+    // Companions follow the same per-extruder targeting as the main patch:
+    // only the calibrated extruder position(s) are written.
     for (const comp of patch.companions ?? []) {
       const compExisting = data[comp.presetKey];
-      const compBefore = firstString(compExisting);
-      if (compBefore !== comp.value) {
-        const compArr = Array.isArray(compExisting) && compExisting.length > 0
-          ? (compExisting as string[]).map(() => comp.value)
-          : new Array(extruders).fill(comp.value) as string[];
-        data[comp.presetKey] = compArr;
-        changed.push({ presetKey: comp.presetKey, label: comp.presetKey, before: compBefore, after: comp.value });
+      let compArr: string[];
+      if (Array.isArray(compExisting) && compExisting.every(x => typeof x === 'string') && compExisting.length > 0) {
+        compArr = [...(compExisting as string[])];
+        // Preserve array shape; pad only if the profile itself is wider.
+        while (compArr.length < extruders) compArr.push(compArr[compArr.length - 1]);
+      } else {
+        compArr = new Array(extruders).fill(comp.value) as string[];
       }
+      let compRecorded = false;
+      for (const t of targets) {
+        const compBefore = Array.isArray(compExisting) && typeof (compExisting as unknown[])[t] === 'string'
+          ? (compExisting as string[])[t]
+          : null;
+        if (compBefore !== comp.value) {
+          changed.push({
+            presetKey: comp.presetKey, label: presetKeyLabel(comp.presetKey), before: compBefore, after: comp.value,
+            extruderIndex: extruders > 1 ? t : undefined
+          });
+          compRecorded = true;
+        }
+        compArr[t] = comp.value;
+      }
+      // Same padding rule as the main patch path (see above): before = null
+      // for the padded slot, after = the value that actually filled it.
+      if (!compRecorded && JSON.stringify(compArr) !== JSON.stringify(compExisting)) {
+        const firstPadded = Array.isArray(compExisting) ? compExisting.length : 0;
+        changed.push({
+          presetKey: comp.presetKey,
+          label: `${presetKeyLabel(comp.presetKey)} (array normalized to ${extruders} extruders)`,
+          before: null, after: compArr[firstPadded] ?? comp.value,
+          extruderIndex: extruders > 1 ? firstPadded : undefined
+        });
+      }
+      data[comp.presetKey] = compArr;
     }
   }
 

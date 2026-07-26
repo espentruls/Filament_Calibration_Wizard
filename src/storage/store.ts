@@ -2,14 +2,17 @@ import type {
   AppSettings, CalibrationProject, CalibrationId, CalibrationStepState,
   PrinterProfile, StoredPhoto, TimelineEntry, ExperienceMode
 } from '../types';
-import { DEFAULT_ORDER } from '../data/calibrations';
+import { CALIBRATIONS, DEFAULT_ORDER } from '../data/calibrations';
 import { idb } from './db';
 
 /**
  * v1: original release.
  * v2: adds CalibrationProject.generatedProfiles (slicer profile installer).
+ * v3: adds PrinterProfile.nozzles + CalibrationProject.nozzleIndex (dual-nozzle
+ *     printers, e.g. Bambu Lab X2D) and the optional ooze-control step, which
+ *     only aux-nozzle projects carry in their stepOrder.
  */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 // --- ids -------------------------------------------------------------------
 
@@ -96,7 +99,9 @@ export function emptyStepState(): CalibrationStepState {
 
 export function newProjectSteps(): Record<CalibrationId, CalibrationStepState> {
   const steps = {} as Record<CalibrationId, CalibrationStepState>;
-  for (const id of DEFAULT_ORDER) steps[id] = emptyStepState();
+  // Seed every defined calibration (not just DEFAULT_ORDER) so optional steps
+  // like ooze-control have state ready if they are added to the step plan.
+  for (const id of Object.keys(CALIBRATIONS) as CalibrationId[]) steps[id] = emptyStepState();
   return steps;
 }
 

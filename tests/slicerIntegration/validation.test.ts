@@ -7,9 +7,13 @@ import type { GeneratedFilamentProfile, ParsedFilamentProfile } from '../../src/
 import type { CalibrationProject, PrinterProfile } from '../../src/types';
 import { fixtureRaw } from './fixtures';
 
-function parseFixture(file: string): ParsedFilamentProfile {
-  const raw = fixtureRaw(file);
-  return getAdapter('orca').parseProfile(
+function parseFixture(
+  file: string,
+  slicer: Parameters<typeof getAdapter>[0] = 'orca',
+  overrides: Parameters<typeof fixtureRaw>[1] = {}
+): ParsedFilamentProfile {
+  const raw = fixtureRaw(file, overrides);
+  return getAdapter(slicer).parseProfile(
     { kind: 'detected', fileName: file, json: raw.json, infoText: raw.info, filePath: raw.path },
     raw
   )!;
@@ -26,7 +30,9 @@ function makeProject(finalsOverrides: Partial<CalibrationProject['finals']> = {}
     steps: {
       'temperature': { ...completed }, 'flow-pass1': { ...completed }, 'flow-pass2': { ...completed },
       'pressure-advance': { ...completed }, 'retraction': { ...completed },
-      'max-volumetric-speed': { ...completed }, 'final-verification': { ...completed }
+      'max-volumetric-speed': { ...completed },
+      'ooze-control': { status: 'not-started', current: null, history: [] },
+      'final-verification': { ...completed }
     },
     timeline: [], archived: false,
     finals: { nozzleTemp: 215, flowRatio: 1.02, pressureAdvance: 0.04, retractionDistance: 0.9, maxVolumetricSpeed: 18, ...finalsOverrides }
@@ -57,6 +63,49 @@ describe('validation', () => {
     expect(result.errors).toEqual([]);
     expect(result.valid).toBe(true);
     expect(result.preservedFieldCount).toBeGreaterThan(5);
+  });
+
+  it('passes a Bambu user base carrying filament_id (regenerated id is expected)', () => {
+    const project = makeProject();
+    const parsed = parseFixture('bambu-user-full-pctg-dualnozzle.json', 'bambu');
+    const generated = generateProfile({
+      slicerId: 'bambu', baseProfile: parsed.profile, newName: 'PF Bambu Id Test',
+      patches: buildPatchesFromProject(project), targetExtruderIndex: 0,
+      applyToAllExtruders: false, project
+    }, parsed);
+    const result = validateGeneratedProfile(generated, { project, printer, baseProfile: parsed.profile });
+    expect(result.errors.filter(e => e.code === 'UNEXPECTED_CHANGE')).toEqual([]);
+    expect(result.valid).toBe(true);
+  });
+
+  it('passes an Orca system base carrying filament_id', () => {
+    const project = makeProject();
+    const parsed = parseFixture('orca-system-elegoo-pla.json', 'orca', {
+      dir_kind: 'system', account_id: null, vendor: 'Elegoo', writable: false
+    });
+    const generated = generateProfile({
+      slicerId: 'orca', baseProfile: parsed.profile, newName: 'PF System Id Test',
+      patches: buildPatchesFromProject(project), targetExtruderIndex: 0,
+      applyToAllExtruders: false, project
+    }, parsed);
+    const result = validateGeneratedProfile(generated, { project, printer, baseProfile: parsed.profile });
+    expect(result.errors.filter(e => e.code === 'UNEXPECTED_CHANGE')).toEqual([]);
+    expect(result.valid).toBe(true);
+  });
+
+  it('passes when padding a short per-extruder array without changing the target value', () => {
+    // The dual-nozzle fixture stores pressure_advance as a 1-element array;
+    // patching the exact stored value still widens it to the extruder count.
+    const project = makeProject({ pressureAdvance: 0.02 });
+    const parsed = parseFixture('bambu-user-full-pctg-dualnozzle.json', 'bambu');
+    const generated = generateProfile({
+      slicerId: 'bambu', baseProfile: parsed.profile, newName: 'PF Pad Test',
+      patches: buildPatchesFromProject(project), targetExtruderIndex: 0,
+      applyToAllExtruders: false, project
+    }, parsed);
+    const result = validateGeneratedProfile(generated, { project, printer, baseProfile: parsed.profile });
+    expect(result.errors).toEqual([]);
+    expect(result.valid).toBe(true);
   });
 
   it('blocks nozzle temperature above the printer maximum without clamping', () => {

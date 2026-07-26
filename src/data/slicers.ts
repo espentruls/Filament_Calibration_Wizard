@@ -6,6 +6,20 @@ const BAMBU_DEVELOPER_MODE_BEST_PATH =
 const BAMBU_NON_BAMBU_FALLBACK =
   'Fallback only: if you cannot or do not want to use Developer mode, temporarily select any non–Bambu-Lab printer profile to reveal the same Calibration tests, create/run the test, then switch back to your Bambu printer before saving values or doing normal prints.';
 
+// --- Dual-nozzle (X2D) shared content ---------------------------------------
+
+const BAMBU_GEAR_OFF_CAVEAT =
+  'Manual K only applies when the pre-print calibration gear in the send-to-print dialog is set to "Off" — "Automatic"/"On" recalibrates or reuses the printer-side K instead.';
+
+const BAMBU_K_SCALE_WARNING =
+  'Never compare automatic and manual K numbers: automatic K on eddy-current machines (the X2D/H2D family) is intentionally HIGHER than manual pattern K — the two scales are not interchangeable.';
+
+const BAMBU_BUG_10404 =
+  'KNOWN BUG (BambuStudio #10404): a filament preset whose "Bowden Extruder" retraction override is left unset ("nil") silently falls back to the MAIN 0.8 mm default on the auxiliary nozzle — under-retracting it. Always tick Length and set an explicit value for the bowden path.';
+
+const BAMBU_X2D_AUX_CONSTRAINTS =
+  'X2D auxiliary-nozzle limits: 200 mm/s and 1000 mm/s² caps, no flexible filaments (TPU), the aux nozzle size must match the main, and about 4 mm of Z height is lost while the auxiliary nozzle prints. It is intended mainly for support material — X2D "Quality mode" slicing automatically assigns the right (aux) nozzle only support material.';
+
 /**
  * Version-aware slicer instruction content.
  *
@@ -153,6 +167,25 @@ export const SLICER_CONTENT: SlicerVersionContent[] = [
         },
         gotchas: ['This test measures a best-case scenario. The official guidance is to reduce the measured value by 10–20% for real prints — this app applies your configured margin automatically.']
       },
+      'ooze-control': {
+        available: true, builtIn: false,
+        menuPath: 'Checklist — prime tower + per-filament retraction overrides',
+        steps: [
+          'Dry the filament(s) first — moisture is the top non-obvious ooze cause and defeats every setting below.',
+          'Enable the prime tower for multi-filament/multi-tool prints, and give leaky filaments more prime volume.',
+          'Set a per-filament retraction override for the ooze-prone extruder under the filament profile\'s setting overrides. Orca-family slicers expose the same prime-tower and per-extruder override concepts as Bambu Studio; exact menu wording varies by version.',
+          'Print a small test with several toolchanges using your normal process profile, then judge the remaining ooze in the next step.'
+        ],
+        saveTo: {
+          path: 'Process settings (prime tower) + Filament settings → Setting overrides (retraction)',
+          field: 'Prime tower + retraction length override',
+          scope: 'process',
+          note: 'This step is mostly a checklist — there is no single calibration value. Record what you settled on in the result step so future spools start from it.'
+        },
+        gotchas: [
+          'This checklist is written primarily for dual-nozzle Bambu machines (X2D); on other multi-tool printers the same order of defenses applies — dry filament and prime tower first, then per-extruder retraction.'
+        ]
+      },
       'final-verification': {
         available: true, builtIn: false,
         menuPath: '(normal printing — no calibration menu)',
@@ -176,7 +209,7 @@ export const SLICER_CONTENT: SlicerVersionContent[] = [
     slicerLabel: 'Bambu Studio',
     version: '1.7+',
     verifiedOn: '2026-07-19',
-    docsUrl: 'https://wiki.bambulab.com/en/software/bambu-studio/manual-calibration',
+    docsUrl: 'https://wiki.bambulab.com/en/bambu-studio/Calibration',
     // NOTE: In current Bambu Studio (verified 2.7.x), Developer mode exposes
     // Bambu's manual calibration tests while a Bambu Lab printer is selected.
     // Temporarily selecting a non–Bambu-Lab printer profile remains documented
@@ -255,20 +288,24 @@ export const SLICER_CONTENT: SlicerVersionContent[] = [
           'Bambu Studio calls Pressure Advance "Flow Dynamics Calibration"; the value is the K factor.',
           BAMBU_DEVELOPER_MODE_BEST_PATH,
           'Open the Calibration tab → Flow Dynamics. Choose Manual mode (lidar-equipped X1/P1 can run Automatic, but manual keeps you in control and works for every material).',
+          'Dual-nozzle machines (X2D): the calibration dialog shows a nozzle selector — pick the nozzle this project calibrates and run Flow Dynamics once per nozzle. Automatic calibration covers the MAIN hotend only; the auxiliary (bowden-fed) nozzle must be calibrated manually here, using range 0–1 in 0.02 steps (typical aux results land between 0.5 and 1.0, e.g. ~0.72 for PETG, versus 0–0.1 on direct drive).',
           'The manual test prints a series of labeled lines at increasing K values.',
           'Pick the line with the most uniform width — no bulges at speed changes, no thin breaks.',
           'Enter the K value in the result step; it is usually labeled directly on the plate.'
         ],
         saveTo: {
-          path: 'Filament preset → Flow Dynamics (K value saved per filament + printer combination)',
+          path: 'Flow Dynamics calibration dialog (the K value lives on the printer, not in the preset)',
           field: 'K factor',
           scope: 'filament',
-          note: 'Bambu Studio stores K per filament/nozzle pairing; saving the calibration in the dialog attaches it to the filament preset.'
+          note: 'K values are stored ON THE PRINTER, keyed to filament + nozzle (assignable per AMS slot on the device screen); only the flow RATIO lives in the slicer filament preset. ' + BAMBU_GEAR_OFF_CAVEAT
         },
         gotchas: [
           'Bambu Studio Developer mode is the preferred fix when Flow Dynamics is hidden, because it exposes the manual K-factor test without leaving the selected Bambu printer profile.',
           BAMBU_NON_BAMBU_FALLBACK,
-          'Lidar-equipped X1/P1 can also run automatic Flow Dynamics on the machine.'
+          'Lidar-equipped X1/P1 can also run automatic Flow Dynamics on the machine.',
+          BAMBU_GEAR_OFF_CAVEAT,
+          BAMBU_K_SCALE_WARNING,
+          BAMBU_X2D_AUX_CONSTRAINTS
         ]
       },
       retraction: {
@@ -278,16 +315,17 @@ export const SLICER_CONTENT: SlicerVersionContent[] = [
           'Select the Bambu printer, filament preset, and normal process profile.',
           BAMBU_DEVELOPER_MODE_BEST_PATH,
           'Open the Calibration tab and choose the Retraction test.',
+          'Dual-nozzle machines (X2D): retraction is per-extruder — machine defaults are 0.8 mm for the main (direct drive) nozzle and 2 mm for the auxiliary (bowden) nozzle. Calibrate the nozzle this project targets; for the aux, start at 2 mm and raise in ~0.5 mm steps (most filaments land between 2 and 4 mm, up to 6). The 30 mm/s default retraction speed is fine.',
           'Run the generated stringing/retraction test, changing one variable at a time: distance first, then speed if needed.',
           'If Developer mode is not available, fall back to Orca Slicer or an external stringing test model and copy the resulting distance/speed into Bambu Studio.'
         ],
         saveTo: {
-          path: 'Printer settings → Extruder → Retraction',
+          path: 'Printer settings → Extruder → Retraction  (per-filament: Filament settings → Setting Overrides → "Direct Drive Extruder" / "Bowden Extruder")',
           field: 'Length (mm), Retraction speed',
           scope: 'printer',
-          note: 'Printer-scoped; per-filament overrides exist under the filament\'s setting overrides.'
+          note: 'Printer-scoped by default. Dual-nozzle filament presets store values as per-extruder ARRAYS; to override per filament, open Filament settings → Setting Overrides, switch the selector to "Direct Drive Extruder" or "Bowden Extruder", then tick Length under Retraction and enter the value. ' + BAMBU_BUG_10404
         },
-        gotchas: [BAMBU_NON_BAMBU_FALLBACK]
+        gotchas: [BAMBU_NON_BAMBU_FALLBACK, BAMBU_BUG_10404]
       },
       'max-volumetric-speed': {
         available: true, builtIn: true,
@@ -307,6 +345,31 @@ export const SLICER_CONTENT: SlicerVersionContent[] = [
           note: 'Enter the production (margin-applied) value.'
         },
         gotchas: [BAMBU_NON_BAMBU_FALLBACK]
+      },
+      'ooze-control': {
+        available: true, builtIn: false,
+        menuPath: 'Checklist — Process settings (prime tower) + Filament Setting Overrides + Developer Mode parameters',
+        steps: [
+          'Dry both filaments first — moisture flashing to steam in the hotend is the top non-obvious ooze cause, and no setting compensates for a wet spool.',
+          'Enable the prime tower (the primary mitigation): every toolchange wipes and re-primes on the tower instead of on your part. Set per-filament prime volumes and give leaky pairings (PETG especially) more volume.',
+          'Verify the bowden retraction override is SET: Filament settings → Setting Overrides → switch the selector to "Bowden Extruder" → Retraction → tick Length and enter your calibrated aux value. ' + BAMBU_BUG_10404,
+          'Confirm manual K for the auxiliary nozzle: Preferences → Developer Mode, then Calibration → Flow Dynamics manual/pattern test — on dual-nozzle machines the dialog shows a nozzle selector; pick the auxiliary nozzle. Test range 0–1 in 0.02 steps; typical aux K lands between 0.5 and 1.0.',
+          'Still oozing on stubborn pairings? Bambu Studio 2.5+ Developer Mode exposes ramming length, precooling temperature, and post-ramming travel time — raise them gradually for leaky combinations like PETG on the aux nozzle.',
+          'Print a small two-filament model with several toolchanges using your normal process profile, then judge the remaining ooze in the next step.'
+        ],
+        saveTo: {
+          path: 'Prime tower: Process settings. Aux retraction: Filament settings → Setting Overrides → "Bowden Extruder"',
+          field: 'Prime tower (+ prime volumes) and the per-extruder retraction Length override; optionally the Developer Mode ramming/precooling parameters',
+          scope: 'process',
+          note: 'Dual-nozzle Bambu filament presets store values as per-extruder ARRAYS (X2D filament profiles carry four per-path variants: normal / HF / bowden normal / bowden HF); the Setting Overrides selector writes the right array slot for you.'
+        },
+        gotchas: [
+          'Why the idle nozzle oozes: on toolchange Bambu Studio emits M104 S0 for the inactive nozzle (letting it cool toward ~60 °C) and reheats it when needed again — the reheat causes a melt-zone pressure spike that oozes on resume, PETG worst. There is no official standby-temperature field.',
+          'Advanced users only: editing the change-filament G-code to hold the idle nozzle at ~160–180 °C avoids the full cool/reheat cycle — at the cost of some standing ooze. Only go there after the checklist above.',
+          BAMBU_GEAR_OFF_CAVEAT,
+          BAMBU_K_SCALE_WARNING,
+          BAMBU_X2D_AUX_CONSTRAINTS
+        ]
       },
       'final-verification': {
         available: true, builtIn: false,

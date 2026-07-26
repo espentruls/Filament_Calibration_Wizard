@@ -5,6 +5,7 @@ import {
 } from '../storage/store';
 import { getCalibration } from '../data/calibrations';
 import { confidenceScore } from '../logic/confidence';
+import { nozzleBadgeLabel } from '../logic/ranges';
 import { exportProject } from '../export/backup';
 import { importFilePicker } from './importExport';
 import type { CalibrationProject, PrinterProfile } from '../types';
@@ -74,9 +75,12 @@ function projectCard(p: CalibrationProject, printers: Map<string, PrinterProfile
   if (f.retractionDistance !== undefined) vals.push(h('span', { class: 'badge badge-info' }, `🧵 ${f.retractionDistance}mm`));
   if (f.maxVolumetricSpeed !== undefined) vals.push(h('span', { class: 'badge badge-info' }, `⚡ ${f.maxVolumetricSpeed}mm³/s`));
 
+  const nozzleLabel = nozzleBadgeLabel(p, printer);
+
   return h('div', { class: 'card proj-card' },
     h('div', { style: 'display:flex;justify-content:space-between;gap:.5rem;align-items:baseline' },
-      h('h3', { class: 'proj-title' }, `${p.filament.manufacturer || 'Unknown'} ${mat.label}`),
+      h('h3', { class: 'proj-title' }, `${p.filament.manufacturer || 'Unknown'} ${mat.label}`,
+        nozzleLabel ? h('span', { class: 'badge badge-info', style: 'margin-left:.35rem;font-weight:400', title: 'This project calibrates one specific nozzle' }, `🔩 ${nozzleLabel}`) : null),
       h('span', { class: `badge ${score >= 85 ? 'badge-ok' : score >= 45 ? 'badge-accent' : 'badge-info'}`, title: 'Calibration confidence score' }, `◎ ${score}`)
     ),
     h('p', { class: 'proj-sub' },

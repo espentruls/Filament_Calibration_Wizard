@@ -79,6 +79,19 @@ export function buildPatchesFromProject(project: CalibrationProject): Calibrated
 }
 
 /**
+ * Which tool/extruder index the wizard should pre-select for a multi-extruder
+ * base profile: the project's calibrated nozzle, clamped to the profile shape
+ * (single-extruder bases always get 0).
+ */
+export function defaultTargetExtruder(
+  project: Pick<CalibrationProject, 'nozzleIndex'>,
+  extruderCount: number
+): number {
+  const idx = project.nozzleIndex ?? 0;
+  return Math.max(0, Math.min(idx, Math.max(1, extruderCount) - 1));
+}
+
+/**
  * Generate the new profile from a parsed base + patches. Pure function of its
  * inputs; never touches the source profile.
  */

@@ -8,7 +8,8 @@ import {
   type CalcResult
 } from '../logic/formulas';
 import {
-  suggestTempRange, suggestPaRange, suggestRetractionRange, suggestMvsRange, suggestFlowMethodDefaults
+  suggestTempRange, suggestPaRange, suggestRetractionRange, suggestMvsRange, suggestFlowMethodDefaults,
+  resolveNozzle
 } from '../logic/ranges';
 import { validateNumber, validateTestRange, validateAgainstPrinter, validateFlowRatio, type ValidationIssue } from '../logic/validation';
 import { VERIFICATION_CATEGORIES } from '../data/calibrations';
@@ -284,8 +285,9 @@ function flowController(pass: 1 | 2): TestController {
 
 const paController: TestController = {
   settingsForm(ctx, prior) {
-    const extruder = ctx.printer?.extruderType ?? 'direct';
-    const sug = suggestPaRange(extruder, ctx.material);
+    const sel = resolveNozzle(ctx.project, ctx.printer);
+    const extruder = sel.feed;
+    const sug = suggestPaRange(extruder, ctx.material, false, sel.nozzle);
     const start = numberInput({ value: prior?.start ?? sug.start, step: 0.001 });
     const end = numberInput({ value: prior?.end ?? sug.end, step: 0.001 });
     const step = numberInput({ value: prior?.step ?? sug.step, step: 0.001 });
@@ -301,7 +303,7 @@ const paController: TestController = {
 
     const el = h('div', {},
       h('p', { class: 'field-help' },
-        `Suggested range for ${extruder === 'direct' ? 'direct drive' : 'Bowden'}${ctx.material.flexible ? ' + flexible filament' : ''}: ` +
+        `Suggested range for ${sel.nozzle ? `${sel.nozzle.label} — ` : ''}${extruder === 'direct' ? 'direct drive' : 'Bowden'}${ctx.material.flexible ? ' + flexible filament' : ''}: ` +
         `${sug.start}–${sug.end} step ${sug.step}. Editable — high-flow hotends often need less.`),
       sug.warnings.length ? issueList(sug.warnings.map(w => ({ level: 'warning' as const, message: w }))) : null,
       h('div', { class: 'field-row' },
@@ -424,11 +426,12 @@ const paController: TestController = {
 
 const retractionController: TestController = {
   settingsForm(ctx, prior) {
-    const extruder = ctx.printer?.extruderType ?? 'direct';
-    const sug = suggestRetractionRange(extruder, ctx.material, ctx.printer);
+    const sel = resolveNozzle(ctx.project, ctx.printer);
+    const extruder = sel.feed;
+    const sug = suggestRetractionRange(extruder, ctx.material, ctx.printer, sel.nozzle);
     const start = numberInput({ value: prior?.start ?? sug.start, step: 0.1 });
     const end = numberInput({ value: prior?.end ?? sug.end, step: 0.1 });
-    const step = numberInput({ value: prior?.step ?? (extruder === 'bowden' ? 0.2 : 0.1), step: 0.05 });
+    const step = numberInput({ value: prior?.step ?? sug.step, step: 0.05 });
     const speed = numberInput({ value: prior?.speed ?? '', placeholder: 'leave empty to keep profile default', step: 5 });
     const preview = h('div', {});
     const refresh = () => {
@@ -441,7 +444,7 @@ const retractionController: TestController = {
     refresh();
 
     const el = h('div', {},
-      h('p', { class: 'field-help' }, `Suggested for ${extruder === 'direct' ? 'direct drive' : 'Bowden'}: ${sug.start}–${sug.end} mm, step ${extruder === 'bowden' ? 0.2 : 0.1}.`),
+      h('p', { class: 'field-help' }, `Suggested for ${sel.nozzle ? `${sel.nozzle.label} — ` : ''}${extruder === 'direct' ? 'direct drive' : 'Bowden'}: ${sug.start}–${sug.end} mm, step ${sug.step}.`),
       sug.warnings.length ? issueList(sug.warnings.map(w => ({ level: 'warning' as const, message: w }))) : null,
       h('div', { class: 'field-row' },
         field('Start length (mm)', start), field('End length (mm)', end), field('Step (mm)', step)
@@ -728,6 +731,135 @@ const mvsController: TestController = {
 };
 
 // ---------------------------------------------------------------------------
+// Dual-nozzle ooze control
+// ---------------------------------------------------------------------------
+
+const oozeControlController: TestController = {
+  settingsForm(ctx, prior) {
+    const primeTower = h('input', { type: 'checkbox', checked: prior?.primeTower ?? true });
+    const primeVolume = numberInput({ value: prior?.primeVolume ?? '', placeholder: 'slicer default', step: 5, min: 0 });
+    const auxRetraction = numberInput({
+      value: prior?.auxRetraction ?? ctx.project.finals.retractionDistance ?? 2, step: 0.5, min: 0
+    });
+    const overrideSet = h('input', { type: 'checkbox', checked: prior?.overrideSet ?? false });
+    const rammingTuned = h('input', { type: 'checkbox', checked: prior?.rammingTuned ?? false });
+
+    const el = h('div', {},
+      h('p', {}, 'Confirm each mitigation below, then print a small two-filament model with several toolchanges to verify.'),
+      h('div', { class: 'check-item' }, primeTower,
+        h('div', {}, h('strong', {}, 'Prime tower is enabled'),
+          ctx.coach ? h('p', { class: 'coach-note' }, 'The primary mitigation: every toolchange wipes and re-primes on the tower instead of on your part.') : null)),
+      h('div', { class: 'field-row' },
+        field('Prime volume (mm³, optional)', primeVolume, 'Per-filament prime volume. Leave empty to keep the slicer default; raise it for leaky pairings (PETG especially).'),
+        field('Aux (Bowden Extruder) retraction override (mm)', auxRetraction, 'The value ticked under Filament settings → Setting Overrides → "Bowden Extruder" → Retraction → Length. Machine default is 2 mm; most filaments land between 2 and 4 mm.')
+      ),
+      h('div', { class: 'check-item' }, overrideSet,
+        h('div', {}, h('strong', {}, 'The bowden Length override is ticked and set — not left blank ("nil")'),
+          ctx.coach ? h('p', { class: 'coach-note' }, 'Bambu Studio bug #10404: an unset bowden override silently falls back to the 0.8 mm MAIN default on the auxiliary nozzle.') : null)),
+      h('div', { class: 'check-item' }, rammingTuned,
+        h('div', {}, h('strong', {}, 'Developer-Mode ramming/precooling parameters adjusted (optional)'),
+          ctx.coach ? h('p', { class: 'coach-note' }, 'Bambu Studio 2.5+ Developer Mode exposes ramming length, precooling temperature, and post-ramming travel time — worth raising for leaky pairings like PETG on the aux nozzle.') : null)),
+      h('div', { class: 'callout' },
+        h('p', { class: 'co-title' }, '💡 Why the idle nozzle oozes'),
+        h('p', {}, 'On toolchange Bambu Studio emits M104 S0 for the inactive nozzle (letting it cool toward ~60 °C) and reheats it when needed again. The reheat causes a melt-zone pressure spike that oozes on resume — PETG worst. There is no official standby-temperature field.'),
+        h('p', { class: 'field-help' }, 'Advanced users only: the change-filament G-code can be edited to hold the idle nozzle at ~160–180 °C instead — less thermal cycling, at the cost of some standing ooze.'))
+    );
+    return {
+      el,
+      collect() {
+        const issues: ValidationIssue[] = [
+          ...validateNumber(auxRetraction.value, { label: 'Aux retraction override', min: 0, max: 15 })
+        ];
+        if (primeVolume.value !== '') issues.push(...validateNumber(primeVolume.value, { label: 'Prime volume', min: 0, max: 999 }));
+        if (!primeTower.checked) issues.push({ level: 'warning', message: 'Prime tower disabled — it is the primary ooze defense on dual-nozzle machines.' });
+        if (!overrideSet.checked) issues.push({ level: 'warning', message: 'Bowden retraction override not confirmed as set — with bug #10404 the aux nozzle silently under-retracts at the 0.8 mm main default.' });
+        return {
+          data: {
+            primeTower: primeTower.checked,
+            primeVolume: primeVolume.value === '' ? '' : num(primeVolume.value),
+            auxRetraction: num(auxRetraction.value),
+            overrideSet: overrideSet.checked,
+            rammingTuned: rammingTuned.checked
+          }, issues
+        };
+      }
+    };
+  },
+
+  resultForm(ctx, settings, prior) {
+    let assessment: string | null = (prior?.assessment as string) ?? null;
+    const options: { v: string; label: string }[] = [
+      { v: 'good', label: '✓ Good — clean toolchanges, no blobs or bleed' },
+      { v: 'acceptable', label: '~ Acceptable — minor hairs or marks, nothing on the part' },
+      { v: 'bad', label: '✖ Bad — blobs, smears, or contamination on the part' }
+    ];
+    const chips = h('div', { class: 'sample-grid', role: 'radiogroup', 'aria-label': 'Remaining ooze assessment' },
+      options.map(o => {
+        const b = h('button', {
+          type: 'button', class: 'sample-chip', 'aria-pressed': String(assessment === o.v),
+          onClick: () => {
+            assessment = o.v;
+            chips.querySelectorAll('.sample-chip').forEach(c => c.setAttribute('aria-pressed', 'false'));
+            b.setAttribute('aria-pressed', 'true');
+          }
+        }, o.label);
+        return b;
+      }));
+    const suspectMoisture = h('input', { type: 'checkbox', checked: prior?.suspectMoisture ?? false });
+
+    const el = h('div', {},
+      h('p', {}, 'Inspect the verification print around each toolchange, then rate the remaining ooze.'),
+      chips,
+      h('div', { class: 'check-item' }, suspectMoisture,
+        h('div', {}, h('strong', {}, 'I saw popping, steam, or bubbly extrusion'),
+          h('p', { class: 'coach-note' }, 'Classic moisture signs — dry the filament before trusting any of these settings.')))
+    );
+    return {
+      el,
+      collect() {
+        const issues: ValidationIssue[] = [];
+        if (!assessment) issues.push({ level: 'error', message: 'Rate the remaining ooze (good / acceptable / bad).' });
+        return { data: { assessment: assessment as string, suspectMoisture: suspectMoisture.checked }, issues };
+      }
+    };
+  },
+
+  compute(ctx, settings, result) {
+    const assessment = String(result.assessment ?? '');
+    const auxRetraction = num(settings.auxRetraction);
+    const computed: Record<string, number | string> = {
+      oozeAssessment: assessment,
+      primeTower: settings.primeTower ? 'on' : 'off',
+      auxRetraction,
+      verdict: assessment === 'good'
+        ? 'Ooze under control — clean toolchanges. Record these settings.'
+        : assessment === 'acceptable'
+          ? 'Minor remaining ooze — acceptable for most prints; the warnings below list the next knobs if you want it cleaner.'
+          : 'Ooze is still winning — work through the suggestions below and re-run the verification print.'
+    };
+    if (settings.primeVolume !== '' && settings.primeVolume !== undefined) computed.primeVolume = num(settings.primeVolume);
+
+    const enterInSlicer = [
+      { label: 'Prime tower', value: settings.primeTower ? 'enabled' : 'disabled' },
+      { label: 'Bowden Extruder retraction override (Length)', value: `${auxRetraction} mm` }
+    ];
+    if (computed.primeVolume !== undefined) enterInSlicer.push({ label: 'Prime volume', value: `${computed.primeVolume} mm³` });
+
+    const warnings: string[] = [];
+    if (assessment === 'bad') {
+      warnings.push('Raise the aux retraction override in ~0.5 mm steps (most filaments land 2–4 mm, up to 6), increase prime volume, and try the Developer-Mode ramming/precooling parameters before anything exotic.');
+    }
+    if (result.suspectMoisture) {
+      warnings.push('Popping or steam points at moisture — dry the filament and re-run; wet filament defeats every ooze setting.');
+    }
+    if (!settings.overrideSet) {
+      warnings.push('The bowden retraction override was not confirmed as set. With Bambu Studio bug #10404 an unset ("nil") override falls back to the 0.8 mm MAIN default — tick Length under Setting Overrides → "Bowden Extruder".');
+    }
+    return { calcs: [], computed, finalsPatch: {}, enterInSlicer, warnings };
+  }
+};
+
+// ---------------------------------------------------------------------------
 // Final verification
 // ---------------------------------------------------------------------------
 
@@ -824,5 +956,6 @@ export const CONTROLLERS: Record<CalibrationId, TestController> = {
   'pressure-advance': paController,
   retraction: retractionController,
   'max-volumetric-speed': mvsController,
+  'ooze-control': oozeControlController,
   'final-verification': verificationController
 };

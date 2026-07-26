@@ -19,6 +19,7 @@ export type CalibrationId =
   | 'pressure-advance'
   | 'retraction'
   | 'max-volumetric-speed'
+  | 'ooze-control'
   | 'final-verification';
 
 export type StepStatus = 'not-started' | 'in-progress' | 'completed' | 'skipped';
@@ -26,6 +27,19 @@ export type StepStatus = 'not-started' | 'in-progress' | 'completed' | 'skipped'
 export type ConfidenceLevel = 'low' | 'medium' | 'high';
 
 // --- Printer profile -------------------------------------------------------
+
+/** One physical nozzle/feed path on a multi-nozzle printer (e.g. Bambu Lab X2D). */
+export interface NozzleProfile {
+  /** Display label, e.g. "Main (direct drive)" / "Auxiliary (bowden)". */
+  label: string;
+  /** How filament reaches this nozzle — drives PA and retraction suggestions. */
+  feed: ExtruderType;
+  /** Speed cap for this path (mm/s), if the maker publishes one. */
+  maxSpeed?: number;
+  /** Acceleration cap for this path (mm/s²), if published. */
+  maxAccel?: number;
+  notes?: string;
+}
 
 export interface PrinterProfile {
   id: string;
@@ -37,6 +51,11 @@ export interface PrinterProfile {
   maxVolumetricFlow?: number;    // mm³/s, if known
   extruderType: ExtruderType;
   retractionRange: { start: number; end: number }; // suggested mm
+  /**
+   * Physical nozzles on multi-nozzle machines (e.g. Bambu Lab X2D: direct-drive
+   * main + bowden-fed auxiliary). Absent = legacy single-nozzle profile.
+   */
+  nozzles?: NozzleProfile[];
   notes: string;
   createdAt: string;
   updatedAt: string;
@@ -93,6 +112,11 @@ export interface CalibrationProject {
   filament: FilamentInfo;
   printerProfileId: string;
   nozzleType: string;        // brass / hardened steel / etc.
+  /**
+   * Which physical nozzle this project calibrates — an index into the printer
+   * profile's `nozzles` array. Absent means 0 (the main/only nozzle).
+   */
+  nozzleIndex?: number;
   slicer: ProjectSlicerInfo;
   notes: string;
   mode: ExperienceMode;

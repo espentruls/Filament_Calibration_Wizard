@@ -13,6 +13,9 @@ without tutorials, wikis, or guesswork.
 - **No black boxes**: every calculation shows inputs, formula, substitution, and rounding.
 - **Signature features**: calibration timeline, confidence score, smart retest recommendations,
   printable one-page calibration card with QR, printable full report, JSON backup/restore.
+- **Dual-nozzle aware** (Bambu Lab X2D): printer profiles can describe multiple nozzles, each
+  project calibrates one specific nozzle, the bowden-fed auxiliary gets its own PA/retraction
+  ranges, and aux projects get a dedicated ooze-control step.
 - **Privacy**: no account, no backend, no analytics/telemetry. Everything (photos included)
   stays in your browser's local storage. External model links open third-party sites.
 
@@ -132,7 +135,7 @@ src/
   app.ts / main.ts       # shell, hash router, theme, leave-guard
   styles.css             # design system (light/dark, large text, print)
   data/
-    calibrations.ts      # the 7 test definitions (structured data, not pages)
+    calibrations.ts      # the 8 test definitions (7 core + optional dual-nozzle ooze control)
     slicers.ts           # version-aware slicer instructions (Orca 2.4.x, Bambu 1.7+)
     materials.ts         # 14 material presets (suggestions only, always editable)
     glossary.ts          # searchable help content
@@ -146,7 +149,7 @@ src/
   storage/               # IndexedDB wrapper + repository, drafts, settings
   export/backup.ts       # JSON export/import with schema versioning & migration
   ui/                    # dashboard, printers, project views, wizard, forms, report, card…
-tests/                   # vitest suites (111 tests)
+tests/                   # vitest suites (138 tests)
 docs/                    # research notes + manual test checklist
 ```
 
@@ -171,5 +174,6 @@ Adding a calibration test = new entry in `data/calibrations.ts` + a form control
 ## Future ideas
 
 AI-assisted photo evaluation (storage schema already reserves an `analysis` field), photo
-comparison, multiple nozzles/printers per filament, printer API integration, experimental
-slicer preset export, community preset sharing, filament inventory with drying/spool tracking.
+comparison, multiple printers per filament (multiple nozzles per printer shipped in 1.2.0
+for the Bambu Lab X2D), printer API integration, experimental slicer preset export,
+community preset sharing, filament inventory with drying/spool tracking.

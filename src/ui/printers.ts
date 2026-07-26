@@ -1,7 +1,7 @@
 import { h, clear, field, numberInput, issueList, confirmDialog, toast } from './dom';
 import { listPrinters, savePrinter, deletePrinter, listProjects, uid } from '../storage/store';
 import { validateNumber } from '../logic/validation';
-import type { PrinterProfile, ExtruderType } from '../types';
+import type { PrinterProfile, ExtruderType, NozzleProfile } from '../types';
 
 export async function renderPrinters(root: HTMLElement): Promise<void> {
   const printers = await listPrinters();
@@ -31,6 +31,10 @@ export async function renderPrinters(root: HTMLElement): Promise<void> {
       h('p', { class: 'proj-sub' },
         `Max nozzle ${p.maxNozzleTemp} °C · max bed ${p.maxBedTemp} °C` +
         (p.maxVolumetricFlow ? ` · max flow ${p.maxVolumetricFlow} mm³/s` : ' · max flow unknown')),
+      p.nozzles?.length
+        ? h('p', { class: 'proj-sub' }, '🔩 ' + p.nozzles.map(n =>
+            `${n.label}${n.maxSpeed ? ` (≤${n.maxSpeed} mm/s)` : ''}`).join(' · '))
+        : null,
       p.notes ? h('p', { class: 'field-help' }, p.notes) : null,
       h('div', { class: 'btn-row' },
         h('button', { class: 'btn btn-sm', onClick: () => openEditor(root, p) }, '✎ Edit'),
@@ -77,9 +81,70 @@ function openEditor(root: HTMLElement, existing: PrinterProfile | null): void {
   const notes = h('textarea', { placeholder: 'Hotend mods, firmware, anything future-you should know' }, p.notes);
   const issuesHost = h('div', {});
 
+  // --- nozzle list (multi-nozzle printers, e.g. Bambu Lab X2D) ---------------
+  const nozzleState: NozzleProfile[] = (p.nozzles ?? []).map(n => ({ ...n }));
+  const nozzleHost = h('div', {});
+  const renderNozzleRows = (): void => {
+    clear(nozzleHost);
+    nozzleState.forEach((n, i) => {
+      const label = h('input', {
+        type: 'text', value: n.label, placeholder: i === 0 ? 'e.g. Main (direct drive)' : 'e.g. Auxiliary (bowden)',
+        onInput: () => { n.label = label.value; }
+      });
+      const feed = h('select', { onChange: () => { n.feed = feed.value as ExtruderType; } },
+        h('option', { value: 'direct', selected: n.feed === 'direct' }, 'Direct drive'),
+        h('option', { value: 'bowden', selected: n.feed === 'bowden' }, 'Bowden / remote'));
+      const maxSpeed = numberInput({
+        value: n.maxSpeed ?? '', step: 10, min: 1, placeholder: 'no cap',
+        onInput: () => { n.maxSpeed = maxSpeed.value === '' ? undefined : Number(maxSpeed.value); }
+      });
+      const maxAccel = numberInput({
+        value: n.maxAccel ?? '', step: 100, min: 1, placeholder: 'no cap',
+        onInput: () => { n.maxAccel = maxAccel.value === '' ? undefined : Number(maxAccel.value); }
+      });
+      nozzleHost.append(h('div', { class: 'field-row', style: 'align-items:end' },
+        field(`Nozzle ${i + 1} label`, label),
+        field('Feed', feed, i === 0 ? 'Feed path drives PA and retraction suggestions.' : undefined),
+        field('Max speed (mm/s)', maxSpeed),
+        field('Max accel (mm/s²)', maxAccel),
+        h('button', {
+          class: 'btn btn-sm btn-danger', type: 'button', style: 'margin-bottom:.9rem',
+          'aria-label': `Remove nozzle ${i + 1}`,
+          onClick: () => { nozzleState.splice(i, 1); renderNozzleRows(); }
+        }, '🗑')
+      ));
+    });
+    if (!nozzleState.length) {
+      nozzleHost.append(h('p', { class: 'field-help' },
+        'No nozzle list = a normal single-nozzle printer (the extruder type above applies). Add nozzles only for machines with two physical nozzles, like the Bambu Lab X2D.'));
+    }
+  };
+  renderNozzleRows();
+
+  const applyX2dTemplate = (): void => {
+    if (!name.value.trim()) name.value = 'Bambu Lab X2D';
+    manufacturer.value = 'Bambu Lab';
+    maxNozzleTemp.value = '300'; // official X2D spec sheet: 300 °C max nozzle temp (bambulab.com/en-us/x2d/specs)
+    extruder.value = 'direct'; // the main (left) nozzle is direct drive on the toolhead
+    retrStart.value = '0';
+    retrEnd.value = '2'; // main/direct path; the bowden aux gets its own 2–6 mm suggestion
+    nozzleState.length = 0;
+    nozzleState.push(
+      { label: 'Main (direct drive)', feed: 'direct' },
+      {
+        label: 'Auxiliary (bowden)', feed: 'bowden', maxSpeed: 200, maxAccel: 1000,
+        notes: 'Remote stepper at the rear panel feeding via PTFE tube. Supports-oriented; no flexible filaments; nozzle size must match the main; ~4 mm Z loss while it prints.'
+      });
+    renderNozzleRows();
+    toast('Bambu Lab X2D template applied — review and save.', 'info');
+  };
+
   const overlay = h('div', { class: 'modal-overlay' },
-    h('div', { class: 'modal', role: 'dialog', 'aria-modal': 'true', style: 'max-width:640px;max-height:90vh;overflow:auto' },
+    h('div', { class: 'modal', role: 'dialog', 'aria-modal': 'true', style: 'max-width:720px;max-height:90vh;overflow:auto' },
       h('h3', {}, existing ? `Edit ${existing.name}` : 'New printer profile'),
+      h('div', { class: 'btn-row', style: 'margin:.2rem 0 .6rem' },
+        h('button', { class: 'btn btn-sm', type: 'button', onClick: applyX2dTemplate }, '⚡ Quick-fill: Bambu Lab X2D'),
+        h('span', { class: 'field-help' }, 'Fills name, 300 °C limit, and both nozzles (direct-drive main + 200 mm/s / 1000 mm/s² bowden aux).')),
       field('Profile name *', name),
       h('div', { class: 'field-row' },
         field('Manufacturer', manufacturer),
@@ -94,6 +159,19 @@ function openEditor(root: HTMLElement, existing: PrinterProfile | null): void {
         field('Extruder type', extruder, 'Direct drive = motor on the print head. Bowden = motor on the frame with a PTFE tube.'),
         field('Retraction range start (mm)', retrStart),
         field('Retraction range end (mm)', retrEnd)
+      ),
+      h('div', { style: 'border-top:1px solid var(--surface-2);margin-top:.6rem;padding-top:.6rem' },
+        h('h4', { style: 'margin:0 0 .2rem' }, 'Nozzles (dual-nozzle printers)'),
+        h('p', { class: 'field-help' },
+          'For machines with two physical nozzles (e.g. Bambu Lab X2D). Each calibration project then picks which nozzle it calibrates, and suggestions adapt to that nozzle\'s feed path.'),
+        nozzleHost,
+        h('div', { class: 'btn-row' },
+          h('button', {
+            class: 'btn btn-sm', type: 'button', onClick: () => {
+              nozzleState.push({ label: '', feed: nozzleState.length ? 'bowden' : 'direct' });
+              renderNozzleRows();
+            }
+          }, '＋ Add nozzle'))
       ),
       field('Notes', notes),
       issuesHost,
@@ -113,6 +191,9 @@ function openEditor(root: HTMLElement, existing: PrinterProfile | null): void {
             if (Number(retrEnd.value) <= Number(retrStart.value)) {
               issues.push({ level: 'error', message: 'Retraction range end must be greater than start.' });
             }
+            if (nozzleState.some(n => !n.label.trim())) {
+              issues.push({ level: 'error', message: 'Every nozzle row needs a label (or remove the empty row).' });
+            }
             clear(issuesHost);
             if (issues.some(i => i.level === 'error')) {
               const list = issueList(issues); if (list) issuesHost.append(list);
@@ -128,6 +209,9 @@ function openEditor(root: HTMLElement, existing: PrinterProfile | null): void {
               maxVolumetricFlow: maxFlow.value === '' ? undefined : Number(maxFlow.value),
               extruderType: extruder.value as ExtruderType,
               retractionRange: { start: Number(retrStart.value), end: Number(retrEnd.value) },
+              nozzles: nozzleState.length
+                ? nozzleState.map(n => ({ ...n, label: n.label.trim() }))
+                : undefined,
               notes: notes.value
             };
             await savePrinter(saved);

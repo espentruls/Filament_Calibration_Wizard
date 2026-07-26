@@ -43,6 +43,38 @@ export async function renderNewProject(root: HTMLElement): Promise<void> {
   const modeCoach = h('input', { type: 'radio', name: 'mode', value: 'coach', checked: settings.defaultMode === 'coach' });
   const modeExpert = h('input', { type: 'radio', name: 'mode', value: 'expert', checked: settings.defaultMode === 'expert' });
 
+  // --- nozzle selector (multi-nozzle printers, e.g. Bambu Lab X2D) ----------
+  let nozzleChoice = 0;
+  const nozzleHost = h('div', {});
+  const refreshNozzles = () => {
+    clear(nozzleHost);
+    nozzleChoice = 0;
+    const printer = printers.find(pp => pp.id === printerSel.value);
+    const nozzles = printer?.nozzles ?? [];
+    if (nozzles.length < 2) return;
+    const group = h('div', { class: 'grid grid-2' }, nozzles.map((n, i) => {
+      const radio = h('input', {
+        type: 'radio', name: 'nozzle-choice', value: String(i), checked: i === 0,
+        onChange: () => { nozzleChoice = i; }
+      });
+      const caps = [
+        n.maxSpeed ? `≤ ${n.maxSpeed} mm/s` : null,
+        n.maxAccel ? `≤ ${n.maxAccel} mm/s²` : null
+      ].filter(Boolean).join(' · ');
+      return h('label', { class: 'radio-card' }, radio,
+        h('span', { class: 'rc-title' }, n.label,
+          i === 0 ? h('span', { class: 'rc-badge' }, 'default') : null),
+        h('p', { class: 'rc-desc' },
+          n.feed === 'bowden'
+            ? `Bowden/remote feed${caps ? ` (${caps})` : ''} — wider K (0–1) and retraction (2–6 mm) ranges, no flexible filaments, and a dual-nozzle ooze-control step is added to the plan.`
+            : `Direct drive${caps ? ` (${caps})` : ''} — standard test ranges.`));
+    }));
+    nozzleHost.append(field('Which nozzle does this project calibrate? *', group,
+      'Each physical nozzle needs its own calibration — the feed path changes pressure advance and retraction completely.'));
+  };
+  printerSel.addEventListener('change', refreshNozzles);
+  refreshNozzles();
+
   const materialInfo = h('div', {});
   const refreshMaterialInfo = () => {
     clear(materialInfo);
@@ -98,6 +130,7 @@ export async function renderNewProject(root: HTMLElement): Promise<void> {
         field('Printer profile *', printerSel),
         field('Nozzle type / material', nozzleType, 'Abrasive filaments (CF/GF) need hardened nozzles.')
       ),
+      nozzleHost,
       h('div', { class: 'field-row' },
         field('Slicer & version *', slicerSel, 'Instructions are version-aware; pick what you actually run.'),
         field('Starting filament profile', startingProfile, 'The slicer preset you\'ll clone from — usually a "Generic <material>" profile.'),
@@ -144,6 +177,19 @@ export async function renderNewProject(root: HTMLElement): Promise<void> {
               mode: (modeExpert.checked ? 'expert' : 'coach') as ExperienceMode
             });
             project.calibrationDate = dateInput.value || project.calibrationDate;
+
+            // Multi-nozzle printers: record which nozzle this project calibrates.
+            // Only aux/bowden-nozzle projects get the ooze-control step —
+            // single-nozzle and main-nozzle plans stay exactly as before.
+            const printer = printers.find(pp => pp.id === printerSel.value);
+            if ((printer?.nozzles?.length ?? 0) >= 2) {
+              project.nozzleIndex = nozzleChoice;
+              if (printer!.nozzles![nozzleChoice]?.feed === 'bowden') {
+                const fv = project.stepOrder.indexOf('final-verification');
+                project.stepOrder.splice(fv === -1 ? project.stepOrder.length : fv, 0, 'ooze-control');
+              }
+            }
+
             await saveProject(project);
             toast('Project created — let\'s calibrate.', 'success');
             navigate(`#/project/${project.id}`);

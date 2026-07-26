@@ -18,6 +18,7 @@ const WEIGHTS: Record<CalibrationId, number> = {
   'pressure-advance': 16,
   retraction: 12,
   'max-volumetric-speed': 12,
+  'ooze-control': 8,
   'final-verification': 14
 };
 
@@ -32,8 +33,10 @@ export function confidenceScore(p: CalibrationProject): ConfidenceBreakdown {
   const parts: ConfidenceBreakdown['parts'] = [];
   let earnedTotal = 0;
   let possibleTotal = 0;
-  for (const id of Object.keys(WEIGHTS) as CalibrationId[]) {
-    const possible = WEIGHTS[id];
+  // Score against the PROJECT's own step plan: optional steps (like the
+  // dual-nozzle ooze-control step) only count for projects that carry them.
+  for (const id of p.stepOrder) {
+    const possible = WEIGHTS[id] ?? 0;
     possibleTotal += possible;
     const st = p.steps[id];
     if (!st || st.status !== 'completed') {
@@ -47,7 +50,7 @@ export function confidenceScore(p: CalibrationProject): ConfidenceBreakdown {
     parts.push({ step: id, earned, possible, note });
     earnedTotal += earned;
   }
-  return { score: Math.round((earnedTotal / possibleTotal) * 100), parts };
+  return { score: possibleTotal === 0 ? 0 : Math.round((earnedTotal / possibleTotal) * 100), parts };
 }
 
 export function confidenceLabel(score: number): string {

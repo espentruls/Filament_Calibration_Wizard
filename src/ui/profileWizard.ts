@@ -18,7 +18,7 @@ import * as bridge from '../slicerIntegration/bridge';
 import { detectInstallations, scanProfiles, currentPlatform } from '../slicerIntegration/scanner';
 import { getAdapter } from '../slicerIntegration/adapters';
 import { recommendProfiles } from '../slicerIntegration/recommendations';
-import { buildPatchesFromProject, generateProfile } from '../slicerIntegration/generator';
+import { buildPatchesFromProject, defaultTargetExtruder, generateProfile } from '../slicerIntegration/generator';
 import { formatChange, summarizeDiff, fullJsonDiff } from '../slicerIntegration/diff';
 import { validateGeneratedProfile, unacknowledgedWarnings } from '../slicerIntegration/validation';
 import { exportProfile, installProfile } from '../slicerIntegration/installer';
@@ -51,22 +51,34 @@ interface WizState {
   acknowledged: Set<string>;
   installResult: ProfileInstallResult | null;
   exportedTo: string | null;
+  /** ISO time this state was created or last saved the project — detects recalibration after a successful install. */
+  syncedAt: string;
 }
 
 const states = new Map<string, WizState>();
 
-function stateFor(projectId: string): WizState {
-  let s = states.get(projectId);
+function freshState(): WizState {
+  return {
+    stage: 'slicer', installations: null, installation: null, location: null,
+    scan: null, advanced: false, filterText: '', filterSource: 'all',
+    filterCompatibleOnly: true, selectedBase: null, manualSlicerId: 'orca',
+    newName: '', targetExtruder: 0, applyAll: false, enabledPatchKeys: null,
+    generated: null, validation: null, acknowledged: new Set(),
+    installResult: null, exportedTo: null,
+    syncedAt: new Date().toISOString()
+  };
+}
+
+function stateFor(project: CalibrationProject): WizState {
+  let s = states.get(project.id);
+  // A finished wizard (successful install) is stale once the project changed
+  // after the wizard last touched it — e.g. after recalibrating — start fresh.
+  if (s && s.stage === 'result' && s.installResult?.success && (project.updatedAt ?? '') > s.syncedAt) {
+    s = undefined;
+  }
   if (!s) {
-    s = {
-      stage: 'slicer', installations: null, installation: null, location: null,
-      scan: null, advanced: false, filterText: '', filterSource: 'all',
-      filterCompatibleOnly: true, selectedBase: null, manualSlicerId: 'orca',
-      newName: '', targetExtruder: 0, applyAll: false, enabledPatchKeys: null,
-      generated: null, validation: null, acknowledged: new Set(),
-      installResult: null, exportedTo: null
-    };
-    states.set(projectId, s);
+    s = freshState();
+    states.set(project.id, s);
   }
   return s;
 }
@@ -79,7 +91,7 @@ export async function renderProfileWizard(root: HTMLElement, projectId: string):
     return;
   }
   const printer = await getPrinter(project.printerProfileId);
-  const st = stateFor(projectId);
+  const st = stateFor(project);
   const flags = loadExperimentalFeatures();
 
   if (!flags.slicerProfileGeneration) {
@@ -262,6 +274,7 @@ function manualSelectionBlock(st: WizState, project: CalibrationProject, rerende
       }
       st.installation = null; st.location = null; st.scan = null;
       st.selectedBase = parsed;
+      st.targetExtruder = defaultTargetExtruder(project, parsed.extruderCount);
       st.newName = ''; // configure stage fills in the default (with printer suffix)
       st.stage = 'configure';
       rerender();
@@ -314,7 +327,9 @@ async function renderProfilesStage(
     st.selectedBase = st.scan!.parsed.get(p.id) ?? null;
     if (!st.selectedBase) { toast('Internal error: profile not parsed.', 'error'); return; }
     st.newName = defaultName(project, printer);
-    st.targetExtruder = 0; st.applyAll = false; st.enabledPatchKeys = null;
+    // Multi-extruder bases default to the nozzle this project calibrated.
+    st.targetExtruder = defaultTargetExtruder(project, st.selectedBase.extruderCount);
+    st.applyAll = false; st.enabledPatchKeys = null;
     st.stage = 'configure';
     rerender();
   };
@@ -482,6 +497,9 @@ function renderConfigureStage(
     card.append(h('h3', {}, 'Multi-tool profile'),
       h('p', { class: 'field-help' },
         `This profile carries per-tool values for ${base.extruderCount} tools/nozzles. Calibrated values will be written only to the tool you pick; other tools keep their existing values.`),
+      ...(project.nozzleIndex !== undefined
+        ? [h('p', { class: 'field-help' }, `Pre-selected tool ${st.targetExtruder + 1} — the nozzle this project calibrated.`)]
+        : []),
       h('div', { class: 'field-row' },
         field('Apply calibration to', toolSel),
         h('label', { class: 'check-item', style: 'align-self:end' }, allCb, h('span', {}, ' Apply to ALL tools (only if you calibrated with each)'))));
@@ -541,6 +559,35 @@ function renderPreviewStage(
   }
   card.append(h('p', { class: 'field-help' },
     `${diff.preservedFieldCount} field(s) preserved from the base profile. Identity fields updated: ${diff.identity.map(i => i.key).join(', ') || 'none'}.`));
+
+  // Aux/bowden nozzle on a Bambu preset: surface the two dual-nozzle gotchas.
+  // The #10404 reassurance may only be shown when the generated preset REALLY
+  // carries an explicit (non-nil) retraction at the bowden index — the patch is
+  // only emitted when the retraction step completed, and the user can deselect
+  // it in the configure stage. Otherwise this must be a warning, not a promise.
+  const targetNozzle = printer?.nozzles?.[st.targetExtruder];
+  if (gen.slicerId === 'bambu' && base.extruderCount > 1 && targetNozzle?.feed === 'bowden') {
+    const retrRaw = (gen.data as Record<string, unknown>).filament_retraction_length;
+    const retrAt = Array.isArray(retrRaw) ? retrRaw[st.targetExtruder] : undefined;
+    const retrExplicit = typeof retrAt === 'string' && retrAt.trim() !== '' && retrAt.trim().toLowerCase() !== 'nil';
+    const retrChangedHere = gen.changedFields.some(c =>
+      c.presetKey === 'filament_retraction_length' && (c.extruderIndex === undefined || c.extruderIndex === st.targetExtruder));
+    const kPatched = gen.changedFields.some(c =>
+      c.presetKey === 'pressure_advance' && (c.extruderIndex === undefined || c.extruderIndex === st.targetExtruder));
+    const bugIntro = 'Bambu Studio bug #10404: a preset whose bowden retraction override is left unset ("nil") silently falls back to the 0.8 mm MAIN default on the auxiliary nozzle. ';
+    card.append(h('div', { class: 'callout' },
+      h('p', { class: 'co-title' }, 'ℹ Auxiliary (bowden) nozzle notes'),
+      retrExplicit
+        ? h('p', {}, bugIntro +
+            `This generated preset carries an explicit ${retrAt} mm retraction at the bowden index, so that fallback cannot happen — verify the "Bowden Extruder" override stays ticked if you edit the preset later.` +
+            (retrChangedHere ? '' : ' Note: that value is inherited from the base preset, not changed by this project.'))
+        : h('p', {}, '⚠ ' + bugIntro +
+            'This preset does NOT set the bowden retraction override (the retraction step was not completed, or its patch was deselected in the previous stage), so that fallback CAN still happen — complete the retraction calibration, or set the "Bowden Extruder" retraction override explicitly in Bambu Studio.'),
+      h('p', {}, 'Pressure advance (K) on Bambu printers lives ON the printer, keyed to filament + nozzle. ' +
+        (kPatched
+          ? 'The preset\'s K field is patched for completeness, but manual K only applies when the pre-print calibration gear is set to "Off".'
+          : 'This preset leaves the K field unchanged (the pressure-advance step was not completed, or its patch was deselected) — calibrate K for this nozzle in Bambu Studio; manual K only applies when the pre-print calibration gear is set to "Off".'))));
+  }
 
   // full JSON diff (advanced)
   const details = h('details', {},
@@ -627,6 +674,7 @@ async function persistRecord(
         : `Slicer profile “${gen.name}” saved in project`
   });
   await saveProject(project);
+  st.syncedAt = project.updatedAt; // our own save must not mark this state stale
 }
 
 function renderResultStage(
@@ -653,7 +701,8 @@ function renderResultStage(
         h('button', { class: 'btn btn-primary', onClick: () => bridge.openSlicer(gen.slicerId).catch(e => toast(String(e), 'error')) }, `▶ Launch ${st.installation!.displayName}`),
         h('button', { class: 'btn', onClick: () => bridge.openProfileDirectory(st.location!.path + '\\filament').catch(() => bridge.openProfileDirectory(st.location!.path)).catch(e => toast(String(e), 'error')) }, '📂 Open profile folder'),
         res.backupId ? h('button', { class: 'btn', onClick: () => bridge.openBackupDirectory(res.backupId!).catch(e => toast(String(e), 'error')) }, '🗄 View backup') : null,
-        h('a', { class: 'btn', href: `#/report/${project.id}` }, '📄 View calibration report'))
+        h('a', { class: 'btn', href: `#/report/${project.id}` }, '📄 View calibration report'),
+        h('button', { class: 'btn btn-ghost', onClick: () => { states.delete(project.id); rerender(); } }, '↺ Create another profile'))
     ));
     return;
   }
