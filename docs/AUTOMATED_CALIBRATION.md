@@ -142,10 +142,22 @@ calibrated values by assembling a complete project 3mf:
 
 Support is narrow in this increment: steps whose asset is already a complete
 project (`project-template`, e.g. the pressure-advance pattern). Bare-model
-steps (temperature/flow towers) need parameterized project generation, and
-resolving an **arbitrary** user printer's presets from Orca's `inherits` chains
-(`resolvePrinterPreset`) is the following increment — until then an assembled
-project carries the template's own printer plus the calibrated filament values.
+steps (temperature/flow towers) need parameterized project generation.
+
+**Printer preset resolution
+([`preset_resolver.rs`](../src-tauri/src/slicer_integration/preset_resolver.rs)).**
+An arbitrary printer's settings are resolved from Orca's own vendor profiles by
+walking the `inherits` chains under `resources/profiles/<Vendor>/{machine,
+process,filament}/`. Parents are vendor-local (every vendor ships its own base
+presets), so resolution is a bounded single-vendor index-and-walk; each chain is
+merged child-overrides-parent, and the three resolved objects combine into one
+flat `project_settings.config`. Verified on the live install: resolving a Bambu
+X1 Carbon selection yields that printer's config (364 keys, correct
+`printer_model`/`nozzle_diameter`), and Orca slices a project built from it
+(117 KB `plate_1.gcode`, exit 0 — distinct from the N1 template's output). The
+resolver takes exact Orca preset names today; mapping a PerfectFit printer-DB
+selection to those names is the remaining piece before `resolvePrinterPreset` is
+wired end-to-end.
 
 ### Relationship to existing code
 

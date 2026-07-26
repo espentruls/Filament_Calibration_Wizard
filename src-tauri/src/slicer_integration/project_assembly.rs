@@ -55,7 +55,7 @@ pub fn read_project_config(template_path: String) -> Result<String, String> {
 /// Copy `template` into `out`, replacing the project-config entry with
 /// `merged_config`. Every other entry is preserved verbatim. Returns whether the
 /// config entry was found+replaced (vs. added) and the total entry count.
-fn repackage_with_config(template: &Path, merged_config: &str, out: &Path) -> Result<(bool, usize), String> {
+pub(crate) fn repackage_with_config(template: &Path, merged_config: &str, out: &Path) -> Result<(bool, usize), String> {
     let src = std::fs::File::open(template).map_err(|e| format!("Cannot open template: {e}"))?;
     let mut zip = ZipArchive::new(std::io::BufReader::new(src))
         .map_err(|e| format!("Template is not a valid 3mf/zip: {e}"))?;

@@ -87,7 +87,9 @@ export type {
   RawSliceRun,
   RunSliceArgs,
   RawAssembledProject,
-  AssembleProjectArgs
+  AssembleProjectArgs,
+  RawResolvedPreset,
+  ResolvePresetArgs
 } from './engineBridge';
 
 export { InstalledOrcaEngine } from './engines/installedOrcaEngine';

@@ -81,6 +81,28 @@ export interface AssembleProjectArgs {
   outputFileName: string;
 }
 
+export interface RawResolvedPreset {
+  /** Flat combined settings, JSON-serialized (shaped like project_settings.config). */
+  settings_json: string;
+  printer_model: string | null;
+  printer_settings_id: string;
+  print_settings_id: string;
+  filament_settings_id: string;
+  machine_key_count: number;
+  process_key_count: number;
+  filament_key_count: number;
+  warnings: string[];
+}
+
+export interface ResolvePresetArgs {
+  engineId: EngineId;
+  vendor: string;
+  /** Exact Orca preset leaf names. */
+  machine: string;
+  process: string;
+  filament: string;
+}
+
 /** The native surface the engines depend on. Injectable for tests. */
 export interface EngineNativeBridge {
   isDesktop(): boolean;
@@ -92,6 +114,9 @@ export interface EngineNativeBridge {
   readProjectConfig(templatePath: string): Promise<string>;
   /** Stage a complete project 3mf (template + merged config) into the job. */
   assembleCalibrationProject(args: AssembleProjectArgs): Promise<RawAssembledProject>;
+  /** Resolve an Orca printer/process/filament selection (by exact preset names)
+   *  into a flat project_settings.config via the vendor `inherits` chains. */
+  resolvePresetByNames(args: ResolvePresetArgs): Promise<RawResolvedPreset>;
 }
 
 // --- production implementation (Tauri via window.__TAURI__) ------------------
@@ -149,6 +174,15 @@ export const nativeEngineBridge: EngineNativeBridge = {
       templatePath: args.templatePath,
       mergedConfigJson: args.mergedConfigJson,
       outputFileName: args.outputFileName
+    });
+  },
+  resolvePresetByNames(args) {
+    return invoke<RawResolvedPreset>('resolve_printer_preset', {
+      engineId: args.engineId,
+      vendor: args.vendor,
+      machineName: args.machine,
+      processName: args.process,
+      filamentName: args.filament
     });
   }
 };

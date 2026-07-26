@@ -94,9 +94,26 @@ function fakeBridge(overrides: Partial<EngineNativeBridge> = {}): EngineNativeBr
     cancelCalibrationSlice: async () => true,
     readProjectConfig: async () => TEMPLATE_CONFIG,
     assembleCalibrationProject: async () => ASSEMBLED,
+    resolvePresetByNames: async () => RESOLVED_PRESET,
     ...overrides
   };
 }
+
+const RESOLVED_PRESET = {
+  settings_json: JSON.stringify({
+    printer_settings_id: 'Bambu Lab X1 Carbon 0.4 nozzle',
+    nozzle_diameter: ['0.4'],
+    filament_flow_ratio: ['1']
+  }),
+  printer_model: 'Bambu Lab X1 Carbon',
+  printer_settings_id: 'Bambu Lab X1 Carbon 0.4 nozzle',
+  print_settings_id: '0.20mm Standard @BBL X1C',
+  filament_settings_id: 'Bambu PLA Basic @BBL X1C',
+  machine_key_count: 200,
+  process_key_count: 100,
+  filament_key_count: 64,
+  warnings: []
+};
 
 // --- capability mapping -----------------------------------------------------
 
@@ -195,11 +212,34 @@ describe('InstalledOrcaEngine (desktop)', () => {
     expect(job.sliced).toBe(false);
   });
 
-  it('arbitrary-printer preset resolution rejects clearly (next increment)', async () => {
-    const engine = new InstalledOrcaEngine(fakeBridge());
-    await expect(engine.resolvePrinterPreset({ printerProfileId: 'p', nozzleDiameterMm: 0.4, slicer: 'orca' })).rejects.toThrow(
-      /STAGE6_NOT_IMPLEMENTED/
+  it('resolves a preset by exact Orca names into a flat config', async () => {
+    let captured: { vendor: string; machine: string; process: string; filament: string } | null = null;
+    const engine = new InstalledOrcaEngine(
+      fakeBridge({
+        resolvePresetByNames: async (a) => {
+          captured = a;
+          return RESOLVED_PRESET;
+        }
+      })
     );
+    const preset = await engine.resolvePresetByNames({
+      vendor: 'BBL',
+      machine: 'Bambu Lab X1 Carbon 0.4 nozzle',
+      process: '0.20mm Standard @BBL X1C',
+      filament: 'Bambu PLA Basic @BBL X1C'
+    });
+    expect(captured!.vendor).toBe('BBL');
+    expect(preset.printerModel).toBe('Bambu Lab X1 Carbon');
+    expect(preset.source).toBe('vendor_profile');
+    expect((preset.settings as Record<string, unknown>).nozzle_diameter).toEqual(['0.4']);
+    expect(preset.printerSettingsId).toBe('Bambu Lab X1 Carbon 0.4 nozzle');
+  });
+
+  it('resolvePrinterPreset (from a printer-DB selection) rejects until the mapping lands', async () => {
+    const engine = new InstalledOrcaEngine(fakeBridge());
+    await expect(
+      engine.resolvePrinterPreset({ printerProfileId: 'p', nozzleDiameterMm: 0.4, slicer: 'orca' })
+    ).rejects.toThrow(/PRINTER_DB_MAPPING_NOT_IMPLEMENTED/);
   });
 });
 

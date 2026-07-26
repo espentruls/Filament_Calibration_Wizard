@@ -39,7 +39,6 @@ import {
   baseName,
   inspectSlicedJob,
   notSlicedJob,
-  notUntilStage6,
   resourcesRootFromExe,
   splitRawDetection
 } from './engineSupport';
@@ -144,8 +143,44 @@ export class InstalledOrcaEngine implements SlicingEngine {
 
   // --- Stage 6 territory (project assembly) ---------------------------------
 
+  /**
+   * Resolve a printer/process/filament selection given as exact Orca preset
+   * names — walks the vendor `inherits` chains natively into a flat
+   * project_settings.config. This is the resolver core; mapping a PerfectFit
+   * printer-DB selection to these names (`resolvePrinterPreset`) is the
+   * remaining piece.
+   */
+  async resolvePresetByNames(names: {
+    vendor: string;
+    machine: string;
+    process: string;
+    filament: string;
+  }): Promise<ResolvedPrinterPreset> {
+    if (!this.bridge.isDesktop()) {
+      throw new Error('NOT_DESKTOP: preset resolution requires the desktop app.');
+    }
+    const raw = await this.bridge.resolvePresetByNames({ engineId: ENGINE_ID, ...names });
+    return {
+      settings: JSON.parse(raw.settings_json) as Record<string, unknown>,
+      printerModel: raw.printer_model,
+      printerSettingsId: raw.printer_settings_id,
+      source: 'vendor_profile',
+      warnings: raw.warnings
+    };
+  }
+
+  /**
+   * Resolve from a PerfectFit `PrinterSelection`. The vendor `inherits` resolver
+   * is implemented (see `resolvePresetByNames`); what remains is mapping a
+   * printer-DB selection to the exact Orca vendor/preset names, which is the
+   * next increment — so this rejects clearly until that mapping lands.
+   */
   resolvePrinterPreset(_selection: PrinterSelection): Promise<ResolvedPrinterPreset> {
-    return notUntilStage6<ResolvedPrinterPreset>('resolvePrinterPreset');
+    return Promise.reject(
+      new Error(
+        'PRINTER_DB_MAPPING_NOT_IMPLEMENTED: mapping a printer-DB selection to Orca preset names is the next increment; use resolvePresetByNames with exact names.'
+      )
+    );
   }
 
   /**
