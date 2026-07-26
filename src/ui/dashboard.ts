@@ -311,7 +311,7 @@ function projectCluster(
         title: 'Calibration confidence score'
       },
         h('span', { class: 'readout-label' }, 'Confidence'),
-        h('b', { class: 'readout-value', style: 'font-size:1rem;font-weight:600' }, String(score)))
+        h('b', { class: 'readout-value', style: 'font-size:var(--fs-body);font-weight:600' }, String(score)))
     ),
     h('p', { class: 'proj-sub' },
       [p.filament.productLine, p.filament.color, printer ? `${printer.name} (${printer.nozzleDiameter} mm)` : 'no printer', p.nozzleType].filter(Boolean).join(' · ')),
@@ -447,7 +447,7 @@ function nozzlePanels(
             // Kept in the flow (hidden, not removed) so both plates stay aligned.
             h('span', {
               'aria-hidden': 'true',
-              style: 'display:block;font-size:.6rem;line-height:1;margin-bottom:.2rem;color:var(--luminous)'
+              style: 'display:block;font-size:var(--fs-legend-sm);line-height:1;margin-bottom:.2rem;color:var(--luminous)'
                 + (mine ? '' : ';visibility:hidden')
             }, '▲'),
             h('span', {

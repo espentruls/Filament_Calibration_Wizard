@@ -65,6 +65,32 @@
   --track-caps: .07em;
   --track-legend: .16em;
 
+  /* --- type ramp ---------------------------------------------------------
+     The scale is ROLE-ANCHORED, not geometric: the six documented roles
+     (label / mono / title / body / headline / readout) fix their own steps and
+     the ramp is built around them. Ratios run ~1.15 at the engraved and readout
+     ends and tighten to ~1.05 through .90–1.06rem, which is the READING
+     CLUSTER — mono, title, body and headline all live there because the product
+     sets long-form explanation next to measured numbers.
+
+     Every font-size in this file resolves to one of these. A raw rem literal on
+     a font-size is drift; if a genuinely new step is needed, add it HERE and to
+     DESIGN.md typography.scale in the same change, never at the call site.
+
+     NOT ramp steps: the 16px / 19px roots below. Those scale the whole system;
+     see the note on :root[data-large-text]. */
+  --fs-legend-sm:  .62rem;    /*  9.92px  smallest engraved legend            */
+  --fs-legend:     .68rem;    /* 10.88px  ROLE: label / placard               */
+  --fs-control:    .78rem;    /* 12.48px  button and field-label text         */
+  --fs-helper:     .9rem;     /* 14.40px  ROLE: mono; helper and coach copy   */
+  --fs-title:      .95rem;    /* 15.20px  ROLE: title (h3)                    */
+  --fs-body:       1rem;      /* 16.00px  ROLE: body                          */
+  --fs-headline:   1.06rem;   /* 16.96px  ROLE: headline (h2)                 */
+  --fs-readout-sm: 1.15rem;   /* 18.40px  dial readout — fits the face        */
+  --fs-readout:    1.32rem;   /* 21.12px  calc result, score ring, eval icon  */
+  --fs-readout-lg: 1.5rem;    /* 24.00px  ROLE: readout                       */
+  --fs-display: clamp(1.42rem, 1.1rem + 1.15vw, 1.88rem);  /* ROLE: display   */
+
   /* --- committed palette ------------------------------------------------- */
   --panel: #0B0D0F;
   --instrument-face: #111417;
@@ -126,6 +152,11 @@
   --hair-2: 2px;
   --radius: 4px;                  /* instruments are square-cornered */
   --radius-sm: 2px;
+  /* An edge break on a part only ~3px wide. Not a smaller --radius-sm: at 3px
+     wide, a 2px radius CLAMPS to half the width and both ends come out
+     semicircular — the capsule the system forbids, on the one mark that has to
+     read as a crisp measurement. 1px is a machined edge, not a rounding. */
+  --radius-hair: 1px;
   --radius-round: 999px;
   --maxw: 1120px;
   /* Dial diameter lives at the root so the six-pack PLATE can size its columns
@@ -153,6 +184,16 @@
   --elev-header: 0 1px 0 var(--panel-deep), 0 6px 18px rgba(0, 0, 0, .38);
   --scrim: rgba(7, 9, 10, .72);
   --shadow: var(--elev-2);        /* legacy alias */
+
+  /* HARDWARE contact shadows — a small machined part (needle, hub, band mark)
+     casting onto the dial face it sits on. Deliberately NOT the --elev-* family:
+     those are mounting depth for whole instruments and are tuned to read against
+     the PANEL, so borrowing them here flattens the needle into the night face.
+     Same geometry in both themes (the part has not changed shape, only the
+     light); the tight variant stays denser than the broad one because the hub
+     sits directly on the face with no gap. */
+  --shadow-hardware: 0 1px 3px rgba(0, 0, 0, .6);
+  --shadow-hardware-tight: 0 1px 2px rgba(0, 0, 0, .7);
 
   /* --- legacy aliases (inline styles in TS depend on these names) -------- */
   --bg: var(--panel);
@@ -245,6 +286,13 @@
   --elev-header: 0 1px 0 var(--panel-deep), 0 4px 14px rgba(52, 47, 36, .16);
   --scrim: rgba(52, 47, 36, .55);
 
+  /* Daylight contact shadow: the same part, now on a bone dial under diffuse
+     sky light. Warm brown-gray like the rest of the day elevation family, and
+     kept dense enough that a 3px needle still reads as sitting ABOVE the face —
+     dropping to the day --elev-1 alphas made it look printed on. */
+  --shadow-hardware: 0 1px 3px rgba(52, 47, 36, .34);
+  --shadow-hardware-tight: 0 1px 2px rgba(52, 47, 36, .42);
+
   --texture:
     repeating-linear-gradient(0deg,  rgba(20, 23, 26, .020) 0 1px, transparent 1px 3px),
     repeating-linear-gradient(90deg, rgba(20, 23, 26, .014) 0 1px, transparent 1px 3px);
@@ -318,7 +366,7 @@ h1, h2 {
 }
 
 h1 {
-  font-size: clamp(1.42rem, 1.1rem + 1.15vw, 1.88rem);
+  font-size: var(--fs-display);
   margin: var(--s-2) 0 var(--s-3);
   /* real titles run long ("New calibration project", filament names) and sit in
      flex rows next to buttons — they wrap, they never push the row wide */
@@ -328,7 +376,7 @@ h1 {
 
 /* h2 / h3 read as engraved panel placards — short by nature in this app */
 h2 {
-  font-size: 1.06rem;
+  font-size: var(--fs-headline);
   text-transform: uppercase;
   color: var(--luminous);
   margin: var(--s-6) 0 var(--s-3);
@@ -336,7 +384,7 @@ h2 {
 }
 
 h3 {
-  font-size: .95rem;
+  font-size: var(--fs-title);
   text-transform: uppercase;
   letter-spacing: var(--track-caps);
   color: var(--luminous);
@@ -344,7 +392,7 @@ h3 {
 }
 
 h4 {
-  font-size: 1rem;
+  font-size: var(--fs-body);
   letter-spacing: .01em;
   margin: var(--s-4) 0 var(--s-1);
 }
@@ -399,7 +447,7 @@ summary:focus-visible,
 .placard {
   display: inline-block;
   font-family: var(--font-placard);
-  font-size: .68rem;
+  font-size: var(--fs-legend);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: var(--track-legend);
@@ -425,7 +473,7 @@ summary:focus-visible,
 .placard-sub {
   display: block;
   font-family: var(--font-placard);
-  font-size: .64rem;
+  font-size: var(--fs-legend-sm);
   text-transform: uppercase;
   letter-spacing: var(--track-legend);
   color: var(--luminous-dim);
@@ -488,14 +536,14 @@ summary:focus-visible,
   font-family: var(--font-numeric);
   font-variant-numeric: tabular-nums lining-nums;
   font-weight: 700;
-  font-size: 1.5rem;
+  font-size: var(--fs-readout-lg);
   letter-spacing: .01em;
   color: var(--radio-green);
   line-height: 1;
 }
 .readout-unit {
   font-family: var(--font-placard);
-  font-size: .7rem;
+  font-size: var(--fs-legend);
   text-transform: uppercase;
   letter-spacing: var(--track-caps);
   color: var(--luminous-dim);
@@ -503,7 +551,7 @@ summary:focus-visible,
 }
 .readout-label {
   font-family: var(--font-placard);
-  font-size: .68rem;
+  font-size: var(--fs-legend);
   text-transform: uppercase;
   letter-spacing: var(--track-legend);
   color: var(--luminous-dim);
@@ -711,7 +759,7 @@ summary:focus-visible,
   transform: translate(-50%, -100%) rotate(var(--angle));
   background: linear-gradient(180deg, var(--radio-green) 0%, var(--radio-green) 68%, var(--luminous-faint) 100%);
   border-radius: 2px 2px 0 0;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, .6);
+  box-shadow: var(--shadow-hardware);
 }
 
 .gauge-hub {
@@ -723,7 +771,7 @@ summary:focus-visible,
   z-index: 3;
   background: var(--bezel-hi);
   border: var(--hair) solid var(--panel);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, .7);
+  box-shadow: var(--shadow-hardware-tight);
 }
 
 .gauge-readout {
@@ -741,7 +789,7 @@ summary:focus-visible,
   font-family: var(--font-numeric);
   font-variant-numeric: tabular-nums lining-nums;
   font-weight: 700;
-  font-size: 1.15rem;
+  font-size: var(--fs-readout-sm);
   line-height: 1;
   letter-spacing: .01em;
   color: var(--radio-green);
@@ -749,7 +797,7 @@ summary:focus-visible,
 .gauge-unit {
   font-family: var(--font-placard);
   font-style: normal;
-  font-size: .62rem;
+  font-size: var(--fs-legend-sm);
   text-transform: uppercase;
   letter-spacing: var(--track-caps);
   color: var(--luminous-dim);
@@ -763,7 +811,7 @@ summary:focus-visible,
   overflow-wrap: break-word;
   text-align: center;
   font-family: var(--font-placard);
-  font-size: .66rem;
+  font-size: var(--fs-legend);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: var(--track-legend);
@@ -803,7 +851,7 @@ summary:focus-visible,
 .gauge.is-unlit .gauge-hub { background: var(--face-raised); box-shadow: none; }
 /* the engraved legend stays readable with the lamp off — only the needle and
    the lit paint go dark (see --luminous-faint note) */
-.gauge.is-unlit .gauge-value { color: var(--dead-ink); font-size: 1rem; }
+.gauge.is-unlit .gauge-value { color: var(--dead-ink); font-size: var(--fs-body); }
 .gauge.is-unlit .gauge-unit { color: var(--dead-ink); }
 .gauge.is-unlit .gauge-placard {
   color: var(--luminous-dim);
@@ -821,9 +869,9 @@ summary:focus-visible,
 .gauge.is-alert .gauge-placard { border-color: var(--red-line); }
 
 .gauge-sm { --gauge-size: 6.25rem; }
-.gauge-sm .gauge-value { font-size: .95rem; }
+.gauge-sm .gauge-value { font-size: var(--fs-title); }
 .gauge-lg { --gauge-size: 11.5rem; }
-.gauge-lg .gauge-value { font-size: 1.5rem; }
+.gauge-lg .gauge-value { font-size: var(--fs-readout-lg); }
 
 /* --- THE ONE AUTHORED MOMENT: an instrument coming alive ----------------- */
 /* Exponential ease-out, from an already-visible default. Needle settles onto
@@ -910,8 +958,8 @@ summary:focus-visible,
   width: 3px;
   margin-left: -1.5px;
   background: var(--radio-green);
-  border-radius: 1px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, .6);
+  border-radius: var(--radius-hair);
+  box-shadow: var(--shadow-hardware);
 }
 
 .band-scale {
@@ -921,14 +969,14 @@ summary:focus-visible,
   margin-top: .3rem;
   font-family: var(--font-placard);
   font-variant-numeric: tabular-nums lining-nums;
-  font-size: .68rem;
+  font-size: var(--fs-legend);
   letter-spacing: var(--track-caps);
   text-transform: uppercase;
   color: var(--luminous-dim);
 }
 .band-legend {
   margin: .3rem 0 0;
-  font-size: .88rem;
+  font-size: var(--fs-helper);
   color: var(--luminous-dim);
   max-width: 72ch;
 }
@@ -981,7 +1029,7 @@ summary:focus-visible,
   color: var(--luminous);
   font-family: var(--font-placard);
   font-weight: 700;
-  font-size: 1.02rem;
+  font-size: var(--fs-body);
   text-transform: uppercase;
   letter-spacing: var(--track-placard);
   padding: .3rem .1rem;
@@ -1018,7 +1066,7 @@ summary:focus-visible,
   text-decoration: none;
   color: var(--luminous-dim);
   font-family: var(--font-placard);
-  font-size: .62rem;
+  font-size: var(--fs-legend-sm);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: var(--track-legend);
@@ -1089,7 +1137,7 @@ summary:focus-visible,
 }
 .dim-switch-legend {
   font-family: var(--font-placard);
-  font-size: .6rem;
+  font-size: var(--fs-legend-sm);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: var(--track-legend);
@@ -1121,7 +1169,7 @@ summary:focus-visible,
   min-height: 34px;
   padding: .3rem .6rem .28rem;
   font-family: var(--font-placard);
-  font-size: .62rem;
+  font-size: var(--fs-legend-sm);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: var(--track-legend);
@@ -1232,7 +1280,7 @@ summary:focus-visible,
 
 .btn {
   font-family: var(--font-placard);
-  font-size: .78rem;
+  font-size: var(--fs-control);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: var(--track-caps);
@@ -1300,7 +1348,7 @@ summary:focus-visible,
 .btn-sm {
   min-height: 34px;
   padding: .3rem .65rem;
-  font-size: .68rem;
+  font-size: var(--fs-legend);
   letter-spacing: var(--track-caps);
 }
 
@@ -1333,7 +1381,7 @@ label.field-label {
   display: block;
   font-family: var(--font-placard);
   font-weight: 700;
-  font-size: .84rem;
+  font-size: var(--fs-control);
   letter-spacing: .045em;
   color: var(--luminous);
   margin-bottom: var(--s-1);
@@ -1343,7 +1391,7 @@ label.field-label {
 .field-help {
   color: var(--luminous-dim);
   font-family: var(--font-body);
-  font-size: .87rem;
+  font-size: var(--fs-helper);
   line-height: 1.5;
   margin-top: var(--s-1);
   max-width: 72ch;
@@ -1358,7 +1406,7 @@ input[type="url"],
 select,
 textarea {
   font-family: var(--font-body);
-  font-size: 1rem;
+  font-size: var(--fs-body);
   font-variant-numeric: tabular-nums lining-nums;
   width: 100%;
   padding: .55rem .7rem;
@@ -1401,7 +1449,7 @@ fieldset {
 legend {
   font-family: var(--font-placard);
   font-weight: 700;
-  font-size: .68rem;
+  font-size: var(--fs-legend);
   text-transform: uppercase;
   letter-spacing: var(--track-legend);
   color: var(--luminous);
@@ -1430,7 +1478,7 @@ legend {
 .coach-note,
 .check-item .coach-note {
   color: var(--luminous-dim);
-  font-size: .87rem;
+  font-size: var(--fs-helper);
   line-height: 1.5;
   margin: var(--s-1) 0 0;
   max-width: 72ch;
@@ -1463,14 +1511,14 @@ legend {
   display: block;
   font-family: var(--font-placard);
   font-weight: 700;
-  font-size: 1rem;
+  font-size: var(--fs-body);
   letter-spacing: .03em;
   color: var(--luminous);
 }
 .radio-card:has(input:checked) .rc-title { color: var(--radio-green); }
 .radio-card .rc-desc {
   color: var(--luminous-dim);
-  font-size: .89rem;
+  font-size: var(--fs-helper);
   line-height: 1.5;
   margin: var(--s-1) 0 0;
   max-width: 68ch;
@@ -1480,7 +1528,7 @@ legend {
   margin-left: .45rem;
   vertical-align: .08em;
   font-family: var(--font-placard);
-  font-size: .6rem;
+  font-size: var(--fs-legend-sm);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: var(--track-legend);
@@ -1500,7 +1548,7 @@ legend {
   align-items: center;
   gap: .3rem;
   font-family: var(--font-placard);
-  font-size: .66rem;
+  font-size: var(--fs-legend);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: var(--track-legend);
@@ -1533,7 +1581,7 @@ legend {
   border: var(--hair) solid var(--hairline-strong);
   border-radius: var(--radius-sm);
   background: var(--lum-wash);
-  font-size: .92rem;
+  font-size: var(--fs-title);
   max-width: 78ch;
 }
 .issue-icon { flex: none; font-family: var(--font-placard); }
@@ -1569,7 +1617,7 @@ legend {
   align-items: center;
   font-family: var(--font-placard);
   font-weight: 700;
-  font-size: .95rem;
+  font-size: var(--fs-title);
   letter-spacing: .03em;
   margin: 0 0 var(--s-2);
   color: var(--luminous);
@@ -1609,7 +1657,7 @@ legend {
   gap: .35rem;
   padding: .38rem .65rem .34rem;
   font-family: var(--font-placard);
-  font-size: .66rem;
+  font-size: var(--fs-legend);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: var(--track-legend);
@@ -1645,7 +1693,7 @@ legend {
 }
 .substep-bar .label {
   font-family: var(--font-placard);
-  font-size: .68rem;
+  font-size: var(--fs-legend);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: var(--track-legend);
@@ -1685,7 +1733,7 @@ legend {
 .proj-title {
   margin: 0;
   font-family: var(--font-placard);
-  font-size: 1.02rem;
+  font-size: var(--fs-body);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: .05em;
@@ -1694,7 +1742,7 @@ legend {
 }
 .proj-sub {
   color: var(--luminous-dim);
-  font-size: .87rem;
+  font-size: var(--fs-helper);
   line-height: 1.45;
   margin: 0;
   max-width: 72ch;
@@ -1745,12 +1793,12 @@ legend {
   flex: none;
   width: 2.2rem;
   text-align: center;
-  font-size: 1.25rem;
+  font-size: var(--fs-readout);
   line-height: 1.4;
   color: var(--luminous-dim);
 }
-.eval-item h4 { margin: 0 0 var(--s-1); font-size: .98rem; }
-.eval-item p { margin: .15rem 0; font-size: .9rem; }
+.eval-item h4 { margin: 0 0 var(--s-1); font-size: var(--fs-body); }
+.eval-item p { margin: .15rem 0; font-size: var(--fs-helper); }
 .eval-item .eval-meaning {
   color: var(--luminous-dim);
   line-height: 1.5;
@@ -1774,7 +1822,7 @@ details.advanced > summary {
   list-style-position: inside;
   padding: var(--s-2) var(--s-3);
   font-family: var(--font-placard);
-  font-size: .88rem;
+  font-size: var(--fs-helper);
   font-weight: 700;
   text-transform: none;
   letter-spacing: .02em;
@@ -1806,21 +1854,21 @@ details.why .why-body p { margin: var(--s-2) 0; max-width: 70ch; }
   padding: var(--s-3) var(--s-4);
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums lining-nums;
-  font-size: .9rem;
+  font-size: var(--fs-helper);
   line-height: 1.6;
   box-shadow: var(--inset-well);
   overflow-x: auto;
 }
 .calc-box .formula {
   color: var(--luminous-dim);
-  font-size: .84rem;
+  font-size: var(--fs-control);
   padding-bottom: var(--s-2);
   margin-bottom: var(--s-2);
   border-bottom: var(--hair) solid var(--hairline);
 }
 .calc-box .result {
   font-family: var(--font-numeric);
-  font-size: 1.32rem;
+  font-size: var(--fs-readout);
   font-weight: 700;
   letter-spacing: .01em;
   color: var(--radio-green);
@@ -1832,7 +1880,7 @@ details.why .why-body p { margin: var(--s-2) 0; max-width: 70ch; }
   font-family: var(--font-numeric);
   font-variant-numeric: tabular-nums lining-nums;
   font-weight: 700;
-  font-size: .95rem;
+  font-size: var(--fs-title);
   letter-spacing: .02em;
   color: var(--radio-green);
   background: var(--green-wash);
@@ -1853,7 +1901,7 @@ details.why .why-body p { margin: var(--s-2) 0; max-width: 70ch; }
   padding: .45rem .75rem;
   font-family: var(--font-numeric);
   font-variant-numeric: tabular-nums lining-nums;
-  font-size: .95rem;
+  font-size: var(--fs-title);
   font-weight: 600;
   color: var(--luminous);
   background-color: var(--face-well);
@@ -1888,7 +1936,7 @@ table.data td {
 }
 table.data thead th {
   font-family: var(--font-placard);
-  font-size: .64rem;
+  font-size: var(--fs-legend-sm);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: var(--track-legend);
@@ -1899,7 +1947,7 @@ table.data thead th {
 table.data tbody th {
   font-family: var(--font-placard);
   font-weight: 700;
-  font-size: .82rem;
+  font-size: var(--fs-control);
   letter-spacing: .035em;
   color: var(--luminous-dim);
 }
@@ -1938,7 +1986,7 @@ table.data tbody tr:last-child td { border-bottom: 0; }
 }
 .timeline .tl-time {
   font-family: var(--font-placard);
-  font-size: .64rem;
+  font-size: var(--fs-legend-sm);
   text-transform: uppercase;
   letter-spacing: var(--track-legend);
   color: var(--luminous-dim);
@@ -1968,7 +2016,7 @@ table.data tbody tr:last-child td { border-bottom: 0; }
   border-top: var(--hair-2) solid var(--lum-line);
   border-radius: var(--radius-sm);
   box-shadow: var(--elev-3);
-  font-size: .92rem;
+  font-size: var(--fs-title);
 }
 .toast-success { border-top-color: var(--radio-green); }
 .toast-error   { border-top-color: var(--alert-red); }
@@ -2047,7 +2095,7 @@ table.data tbody tr:last-child td { border-bottom: 0; }
   font-family: var(--font-numeric);
   font-variant-numeric: tabular-nums lining-nums;
   font-weight: 700;
-  font-size: 1.35rem;
+  font-size: var(--fs-readout);
   letter-spacing: .01em;
   box-shadow: var(--inset-deep);
 }
@@ -2063,7 +2111,7 @@ table.data tbody tr:last-child td { border-bottom: 0; }
 .glossary-item dt {
   font-family: var(--font-placard);
   font-weight: 700;
-  font-size: .9rem;
+  font-size: var(--fs-helper);
   letter-spacing: .04em;
   color: var(--luminous);
 }
@@ -2098,7 +2146,7 @@ table.data tbody tr:last-child td { border-bottom: 0; }
   z-index: 1;
   padding: .35rem .6rem .3rem;
   font-family: var(--font-placard);
-  font-size: .62rem;
+  font-size: var(--fs-legend-sm);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: var(--track-legend);
@@ -2109,7 +2157,7 @@ table.data tbody tr:last-child td { border-bottom: 0; }
 .combo-item {
   padding: .45rem .6rem .45rem 1rem;
   cursor: pointer;
-  font-size: .94rem;
+  font-size: var(--fs-title);
   border-bottom: var(--hair) solid var(--hairline);
 }
 .combo-item:last-child { border-bottom: 0; }
@@ -2121,7 +2169,7 @@ table.data tbody tr:last-child td { border-bottom: 0; }
 .combo-empty {
   padding: var(--s-3);
   color: var(--luminous-dim);
-  font-size: .9rem;
+  font-size: var(--fs-helper);
 }
 
 /* ===========================================================================
@@ -2144,7 +2192,7 @@ table.data tbody tr:last-child td { border-bottom: 0; }
 .boot-panel h1,
 .startup-error h1 {
   font-family: var(--font-placard);
-  font-size: 1.05rem;
+  font-size: var(--fs-headline);
   text-transform: uppercase;
   letter-spacing: var(--track-placard);
   color: var(--radio-green);
@@ -2158,7 +2206,7 @@ table.data tbody tr:last-child td { border-bottom: 0; }
 .startup-error pre {
   white-space: pre-wrap;
   font-family: var(--font-mono);
-  font-size: .84rem;
+  font-size: var(--fs-control);
   color: var(--caution-amber);
   background: var(--face-well);
   border: var(--hair) solid var(--amber-line);
@@ -2188,9 +2236,12 @@ table.data tbody tr:last-child td { border-bottom: 0; }
   /* the dial shrinks at the ROOT so the plate's columns shrink with it */
   :root { --gauge-size: 7.5rem; }
   .app-header-inner { padding: var(--s-2) var(--s-3); gap: var(--s-2); }
-  .app-logo { font-size: .92rem; }
-  .app-nav a { min-width: 3.9rem; padding: .3rem .35rem; font-size: .56rem; }
-  .dim-switch-opt { padding: .3rem .45rem .28rem; font-size: .56rem; }
+  .app-logo { font-size: var(--fs-title); }
+  /* the header rail condenses by GEOMETRY here, not by type: both of these used
+     to drop to .56rem, a step below the ramp's smallest legend and under 9px on
+     a phone. They hold --fs-legend-sm and give the width back through padding. */
+  .app-nav a { min-width: 3.9rem; padding: .3rem .35rem; }
+  .dim-switch-opt { padding: .3rem .45rem .28rem; }
   .dim-switch-legend { display: none; }
   main { padding: var(--s-4) var(--s-3) var(--s-7); }
   .card, .instrument { padding: var(--s-3) var(--s-4) var(--s-4); }
@@ -2198,7 +2249,7 @@ table.data tbody tr:last-child td { border-bottom: 0; }
   .six-pack { gap: var(--s-3) var(--s-2); padding: var(--s-3); margin: var(--s-4) auto; }
   .eval-item { gap: var(--s-3); }
   .score-ring { width: 4.6rem; height: 4.6rem; }
-  .score-ring > span { width: 3.5rem; height: 3.5rem; font-size: 1.15rem; }
+  .score-ring > span { width: 3.5rem; height: 3.5rem; font-size: var(--fs-readout-sm); }
 }
 
 @media (max-width: 420px) {
@@ -2256,6 +2307,8 @@ table.data tbody tr:last-child td { border-bottom: 0; }
     --inset-well: none;
     --inset-face: none;
     --inset-deep: none;
+    --shadow-hardware: none;
+    --shadow-hardware-tight: none;
     --scrim: transparent;
     --shadow: none;
     --texture: none;
