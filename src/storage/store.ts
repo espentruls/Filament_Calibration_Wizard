@@ -15,13 +15,18 @@ import { idb } from './db';
  *     Diameters, buildVolume, maxPrintSpeed/Acceleration, firmware, extruder-
  *     Count, multiMaterialCompatibility, releaseYear, databasePrinterId,
  *     isManual). Purely additive — existing printers load unchanged.
- * v5: adds PrinterProfile.nozzles + CalibrationProject.nozzleIndex (dual-nozzle
+ * v5: RESERVED for upstream's automated-calibration session fields (slicerMode,
+ *     sessionStatus, workingProfile, generatedJobs, sessionWarnings,
+ *     selectedEngineId). Left deliberately empty here so a backup written by
+ *     either project can still be read by the other — if we spent v5 on our own
+ *     fields, the two meanings would be indistinguishable in a backup file.
+ * v6: adds PrinterProfile.nozzles + CalibrationProject.nozzleIndex (dual-nozzle
  *     printers, e.g. Bambu Lab X2D) and the optional ooze-control step, which
  *     only aux-nozzle projects carry in their stepOrder. ooze-control is
  *     deliberately absent from DEFAULT_ORDER, so ensureProjectSteps never
  *     injects it into single-nozzle projects.
  */
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 // --- ids -------------------------------------------------------------------
 

@@ -1,4 +1,4 @@
-import type { BackupFile, CalibrationProject, PrinterProfile, StoredPhoto } from '../types';
+﻿import type { BackupFile, CalibrationProject, PrinterProfile, StoredPhoto } from '../types';
 import { SCHEMA_VERSION, ensureProjectSteps, listPrinters, listProjects, loadSettings, saveProject, savePrinter, uid } from '../storage/store';
 import { idb } from '../storage/db';
 
@@ -71,7 +71,7 @@ export async function importBackup(json: string): Promise<ImportResult> {
     if (!printer?.id || !printer.name) continue;
     let id = printer.id;
     if (existingPrinters.has(id)) {
-      // Same id already present — assume it's the same profile; reference it, don't duplicate.
+      // Same id already present â€” assume it's the same profile; reference it, don't duplicate.
       printerIdMap.set(printer.id, id);
       continue;
     }
@@ -110,22 +110,22 @@ export async function importBackup(json: string): Promise<ImportResult> {
   };
 }
 
-/** Migrate older schema versions forward. v5 is current. */
+/** Migrate older schema versions forward. v6 is current. */
 export function migrate(file: BackupFile): BackupFile {
   const v = file.schemaVersion ?? 1;
   let out = file;
   if (v < 2) {
-    // v1 → v2: generatedProfiles added; absent means none.
+    // v1 â†’ v2: generatedProfiles added; absent means none.
     out = { ...out, schemaVersion: 2 };
   }
   if ((out.schemaVersion ?? 1) < 3) {
-    // v2 → v3: flow-verify + shrinkage steps added; ensureProjectSteps below
+    // v2 â†’ v3: flow-verify + shrinkage steps added; ensureProjectSteps below
     // inserts them as not-started.
     out = { ...out, schemaVersion: 3 };
   }
   if ((out.schemaVersion ?? 1) < 4) {
-    // v3 → v4: PrinterProfile gained optional extended specs + database link.
-    // Additive — printers without the new keys are already valid. Mark
+    // v3 â†’ v4: PrinterProfile gained optional extended specs + database link.
+    // Additive â€” printers without the new keys are already valid. Mark
     // pre-v4 printers as manual so the UI doesn't imply a database match.
     for (const printer of out.printers ?? []) {
       if (printer.databasePrinterId === undefined && printer.isManual === undefined) {
@@ -135,11 +135,17 @@ export function migrate(file: BackupFile): BackupFile {
     out = { ...out, schemaVersion: 4 };
   }
   if ((out.schemaVersion ?? 1) < 5) {
-    // v4 → v5: optional PrinterProfile.nozzles + CalibrationProject.nozzleIndex.
+    // v4 â†’ v5: reserved for upstream's automated-calibration session fields.
+    // Nothing to transform: those fields are absent on our projects, and any
+    // that arrive in a backup are carried through untouched.
+    out = { ...out, schemaVersion: 5 };
+  }
+  if ((out.schemaVersion ?? 1) < 6) {
+    // v5 â†’ v6: optional PrinterProfile.nozzles + CalibrationProject.nozzleIndex.
     // Both default to "absent" (legacy single-nozzle), and the optional
     // ooze-control step is NEVER injected into a legacy project's stepOrder
     // (it is not part of DEFAULT_ORDER, so ensureProjectSteps leaves it alone).
-    out = { ...out, schemaVersion: 5 };
+    out = { ...out, schemaVersion: 6 };
   }
   // Defensive normalization regardless of version:
   for (const p of out.projects ?? []) {
@@ -163,7 +169,7 @@ export function migrate(file: BackupFile): BackupFile {
   for (const pr of out.printers ?? []) {
     if (!pr || pr.nozzles === undefined) continue;
     if (!Array.isArray(pr.nozzles)) {
-      // Not an array at all — drop it; the Printers and New Project pages
+      // Not an array at all â€” drop it; the Printers and New Project pages
       // iterate this and would otherwise throw after a "successful" import.
       delete pr.nozzles;
       continue;

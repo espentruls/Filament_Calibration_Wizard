@@ -127,7 +127,9 @@ describe('data migration', () => {
       printers: []
     } as unknown as BackupFile;
     const out = migrate(file);
-    expect(out.schemaVersion).toBe(5);
+    // migrate() always runs the chain to the current schema, so assert against
+    // the constant rather than a literal that goes stale on the next bump.
+    expect(out.schemaVersion).toBe(SCHEMA_VERSION);
     const p = out.projects[0];
     expect(Array.isArray(p.timeline)).toBe(true);
     expect(p.finals).toBeDefined();
