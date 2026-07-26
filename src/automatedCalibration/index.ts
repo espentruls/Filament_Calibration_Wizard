@@ -54,3 +54,25 @@ export {
   markStaleJobs
 } from './workflow';
 export type { NormalizedProfileKey, StepResultValues, StepReadiness } from './workflow';
+
+export {
+  CALIBRATION_ASSETS,
+  getAsset,
+  resolveAsset,
+  joinResourcePath
+} from './assets';
+export type { AssetSourceKind, AssetResolutionContext, AssetResolution } from './assets';
+
+export {
+  JOB_MANIFEST_SCHEMA,
+  WORKSPACE_PREFIX,
+  workspaceDirName,
+  isPerfectFitWorkspaceName,
+  prepareJob
+} from './projectPreparation';
+export type {
+  StagedFileDescriptor,
+  JobManifest,
+  PreparedJobPlan,
+  PrepareJobInput
+} from './projectPreparation';

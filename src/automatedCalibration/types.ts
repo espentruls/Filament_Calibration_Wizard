@@ -334,6 +334,19 @@ export interface CalibrationAssetDefinition {
   bundledPath?: string;
   downloadUrl?: string;
   checksumSha256?: string;
+  /**
+   * Relative path under an installed slicer's resource root (e.g.
+   * 'calib/temperature_tower/temperature_tower.stl'). Lets PerfectFit reference
+   * the calibration model shipped inside the user's own Orca install instead of
+   * redistributing it — the preferred, license-clean source.
+   */
+  slicerResourceRelPath?: string;
+  /**
+   * True when the geometry alone is not a complete test: PerfectFit must inject
+   * test parameters / per-layer custom g-code (temp-tower temperatures, flow
+   * modifiers, the volumetric-speed ramp) when assembling the project.
+   */
+  requiresParameterization?: boolean;
   license: AssetLicenseMetadata;
   compatibility: AssetCompatibility;
 }
