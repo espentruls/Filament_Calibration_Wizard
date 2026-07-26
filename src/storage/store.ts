@@ -15,11 +15,13 @@ import { idb } from './db';
  *     Diameters, buildVolume, maxPrintSpeed/Acceleration, firmware, extruder-
  *     Count, multiMaterialCompatibility, releaseYear, databasePrinterId,
  *     isManual). Purely additive — existing printers load unchanged.
- * v5: RESERVED for upstream's automated-calibration session fields (slicerMode,
- *     sessionStatus, workingProfile, generatedJobs, sessionWarnings,
- *     selectedEngineId). Left deliberately empty here so a backup written by
- *     either project can still be read by the other — if we spent v5 on our own
- *     fields, the two meanings would be indistinguishable in a backup file.
+ * v5: adds optional automated-calibration session fields to CalibrationProject
+ *     (slicerMode, sessionStatus, workingProfile, generatedJobs, sessionWarnings,
+ *     selectedEngineId, automatedSchemaVersion). Purely additive and gated behind
+ *     the disabled `automatedCalibration` flag — existing projects load unchanged
+ *     and IndexedDB persists the new optional fields with no store changes.
+ *     This slot was reserved for upstream before their branch landed, so a
+ *     backup written by either project still means the same thing here.
  * v6: adds PrinterProfile.nozzles + CalibrationProject.nozzleIndex (dual-nozzle
  *     printers, e.g. Bambu Lab X2D) and the optional ooze-control step, which
  *     only aux-nozzle projects carry in their stepOrder. ooze-control is

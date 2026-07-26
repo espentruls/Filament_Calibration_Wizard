@@ -10,9 +10,12 @@
 
 pub mod backup;
 pub mod discovery;
+pub mod engine;
 pub mod filesystem;
 pub mod install;
+pub mod preset_resolver;
 pub mod processes;
+pub mod project_assembly;
 pub mod security;
 
 /// Static, verified per-slicer detection data.

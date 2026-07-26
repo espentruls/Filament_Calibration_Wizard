@@ -177,8 +177,8 @@ describe('backward compatibility / migration', () => {
       exportedAt: '2026-01-01T00:00:00Z', projects: [], printers: [oldPrinter]
     } as unknown as BackupFile;
     const out = migrate(file);
-    // Migration always runs the full chain to the current schema (v5: optional
-    // PrinterProfile.nozzles + CalibrationProject.nozzleIndex), not just to v4.
+    // Migration always runs the full chain to the current schema (v5 automated
+    // session fields, then v6 nozzles/nozzleIndex), not just to v4.
     expect(out.schemaVersion).toBe(SCHEMA_VERSION);
     expect(out.printers[0].isManual).toBe(true);
     // Existing values are preserved, not reset.
