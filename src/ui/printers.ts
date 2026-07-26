@@ -11,18 +11,20 @@ export async function renderPrinters(root: HTMLElement): Promise<void> {
   const printers = await listPrinters();
 
   root.append(
-    h('div', { style: 'display:flex;align-items:center;gap:1rem;flex-wrap:wrap' },
+    h('div', { style: 'display:flex;align-items:center;gap:var(--s-4);flex-wrap:wrap' },
       h('h1', { style: 'margin:0;flex:1' }, 'Printer profiles'),
       h('button', { class: 'btn btn-primary', onClick: () => openEditor(root, null) }, '＋ Add printer')
     ),
     h('p', { class: 'field-help' },
-      `Calibration projects reference a printer profile. Its limits (max temps, max flow) are used to warn you before any suggested setting could exceed what the machine can safely do. Pick from ${PRINTER_DB_COUNT.toLocaleString()} known printers to fill the specs in automatically, or enter your own.`)
+      `Calibration projects reference a printer profile. Its limits (max temps, max flow) are used to warn you before any suggested setting could exceed what the machine can safely do. Pick from ${PRINTER_DB_COUNT.toLocaleString()} known printers to fill the specs in automatically, or enter your own.`),
+    h('hr', { class: 'rule-ticks' })
   );
 
   if (!printers.length) {
     root.append(h('div', { class: 'card', style: 'text-align:center;padding:2rem' },
-      h('p', { style: 'font-size:2rem;margin:.2rem' }, '🖨️'),
-      h('p', {}, 'No printers yet. Add the printer you\'ll calibrate on — nozzle size, temperature limits, and extruder type drive the suggested test ranges.'),
+      h('span', { class: 'placard placard-unlit' }, 'No printers on file'),
+      h('p', { style: 'max-width:58ch;margin:var(--s-4) auto var(--s-5)' },
+        'No printers yet. Add the printer you\'ll calibrate on — nozzle size, temperature limits, and extruder type drive the suggested test ranges.'),
       h('button', { class: 'btn btn-primary', onClick: () => openEditor(root, null) }, 'Add your first printer')
     ));
     return;
@@ -30,21 +32,30 @@ export async function renderPrinters(root: HTMLElement): Promise<void> {
 
   root.append(h('div', { class: 'grid grid-cards' }, printers.map(p =>
     h('div', { class: 'card' },
-      h('h3', { style: 'margin:0' }, p.name),
-      h('p', { class: 'proj-sub' }, `${p.manufacturer} · ${p.nozzleDiameter} mm nozzle · ${p.extruderType === 'direct' ? 'Direct drive' : 'Bowden'}`),
-      h('p', { class: 'proj-sub' },
-        `Max nozzle ${p.maxNozzleTemp} °C · max bed ${p.maxBedTemp} °C` +
-        (p.maxVolumetricFlow ? ` · max flow ${p.maxVolumetricFlow} mm³/s` : ' · max flow unknown')),
-      p.nozzles?.length
-        ? h('p', { class: 'proj-sub' }, '🔩 ' + p.nozzles.map(n =>
-            `${n.label}${n.maxSpeed ? ` (≤${n.maxSpeed} mm/s)` : ''}`).join(' · '))
-        : null,
-      p.databasePrinterId
-        ? h('p', { class: 'field-help', style: 'color:var(--ok)' }, '✓ Specs from printer database')
-        : h('p', { class: 'field-help' }, '✎ Manually configured'),
+      h('h3', {}, p.name),
+      h('p', { class: 'proj-vals', style: 'gap:var(--s-2)' },
+        p.manufacturer ? h('span', { class: 'placard' }, p.manufacturer) : null,
+        h('span', { class: 'placard' }, `${p.nozzleDiameter} mm nozzle`),
+        // A machine-level feed type is a lie on a multi-nozzle machine: the X2D
+        // is direct on nozzle 1 and bowden on nozzle 2, so a single "DIRECT
+        // DRIVE" placard would sit directly above a "BOWDEN FEED" nozzle panel
+        // contradicting it. When there is more than one nozzle, the per-nozzle
+        // panels below are the only statement about feed.
+        (p.nozzles?.length ?? 0) > 1
+          ? null
+          : h('span', { class: 'placard' }, p.extruderType === 'direct' ? 'Direct drive' : 'Bowden'),
+        p.databasePrinterId
+          ? h('span', { class: 'badge badge-ok' }, '✓ Database specs')
+          : h('span', { class: 'badge badge-info' }, '✎ Manually configured')),
+      h('div', { class: 'panel', style: 'padding:0 var(--s-3)' },
+        h('table', { class: 'data' }, h('tbody', {},
+          specRow('Max nozzle', p.maxNozzleTemp, '°C'),
+          specRow('Max bed', p.maxBedTemp, '°C'),
+          specRow('Max flow', p.maxVolumetricFlow, 'mm³/s')))),
+      p.nozzles?.length ? nozzlePanels(p.nozzles) : null,
       p.notes ? h('p', { class: 'field-help' }, p.notes) : null,
       refreshCallout(root, p),
-      h('div', { class: 'btn-row' },
+      h('div', { class: 'proj-actions' },
         h('button', { class: 'btn btn-sm', onClick: () => openEditor(root, p) }, '✎ Edit'),
         h('button', {
           class: 'btn btn-sm btn-danger', onClick: async () => {
@@ -65,6 +76,34 @@ export async function renderPrinters(root: HTMLElement): Promise<void> {
       )
     )
   )));
+}
+
+// --- equipment placards ------------------------------------------------------
+
+/**
+ * One machine limit as a labelled readout. An unpublished limit reads UNLIT —
+ * the app genuinely does not know it, and a dash says so where a zero would lie.
+ */
+function specRow(label: string, value: number | undefined, unit: string): HTMLElement {
+  const known = value !== undefined && Number.isFinite(value);
+  return h('tr', {},
+    h('th', { scope: 'row' }, h('span', { class: 'readout-label' }, label)),
+    h('td', { style: 'text-align:right' },
+      h('span', { class: `readout${known ? '' : ' is-unlit'}` },
+        h('b', { class: 'readout-value', style: 'font-size:1.05rem' }, known ? String(value) : '—'),
+        h('i', { class: 'readout-unit' }, unit))));
+}
+
+/** Two nozzles are two panels: each physical path gets its own placard. */
+function nozzlePanels(nozzles: NozzleProfile[]): HTMLElement {
+  return h('div', { class: 'grid grid-2', style: 'margin-top:var(--s-3)' }, nozzles.map((n, i) =>
+    h('div', { class: 'panel', style: 'margin:0' },
+      h('span', { class: 'placard' }, i === 0 ? `Nozzle ${i + 1} · Main` : `Nozzle ${i + 1} · Auxiliary`),
+      h('p', { class: 'proj-title', style: 'font-size:.88rem;margin:var(--s-2) 0 0' }, n.label),
+      h('p', { class: 'proj-vals', style: 'gap:var(--s-2);margin:var(--s-2) 0 0' },
+        h('span', { class: 'badge badge-info' }, n.feed === 'bowden' ? 'Bowden feed' : 'Direct drive'),
+        n.maxSpeed ? h('span', { class: 'badge badge-info' }, `≤ ${n.maxSpeed} mm/s`) : null,
+        n.maxAccel ? h('span', { class: 'badge badge-info' }, `≤ ${n.maxAccel} mm/s²`) : null))));
 }
 
 // --- searchable printer combobox -------------------------------------------
@@ -223,7 +262,7 @@ function openEditor(root: HTMLElement, existing: PrinterProfile | null): void {
   const mmu = h('input', { type: 'text', value: p.multiMaterialCompatibility ?? '', placeholder: 'e.g. AMS, MMU3 — leave blank if none' });
 
   const issuesHost = h('div', {});
-  const dbBadge = h('p', { class: 'field-help', style: 'display:none;color:var(--ok);font-weight:600' });
+  const dbBadge = h('p', { class: 'field-help', style: 'display:none;color:var(--radio-green)' });
   const setBadge = (spec: PrinterSpecification | null) => {
     if (spec) { dbBadge.textContent = `✓ Filled from database: ${specLabel(spec)}. Review and change any value for modified or custom hardware.`; dbBadge.style.display = ''; }
     else { dbBadge.style.display = 'none'; }
@@ -243,7 +282,8 @@ function openEditor(root: HTMLElement, existing: PrinterProfile | null): void {
   // The printer database records how many extruders a machine has, but not the
   // feed path of each physical nozzle — which is what the PA, retraction and
   // ooze-control suggestions key off. So this list stays hand-edited even on
-  // profiles filled from the database.
+  // profiles filled from the database. Each row is one instrument panel's
+  // configuration, so each gets its own bordered fieldset.
   const nozzleState: NozzleProfile[] = (p.nozzles ?? []).map(n => ({ ...n }));
   const nozzleHost = h('div', {});
   const renderNozzleRows = (): void => {
@@ -264,16 +304,19 @@ function openEditor(root: HTMLElement, existing: PrinterProfile | null): void {
         value: n.maxAccel ?? '', step: 100, min: 1, placeholder: 'no cap',
         onInput: () => { n.maxAccel = nozzleAccel.value === '' ? undefined : Number(nozzleAccel.value); }
       });
-      nozzleHost.append(h('div', { class: 'field-row', style: 'align-items:end' },
-        field(`Nozzle ${i + 1} label`, label),
-        field('Feed', feed, i === 0 ? 'Feed path drives PA and retraction suggestions.' : undefined),
-        field('Max speed (mm/s)', nozzleSpeed),
-        field('Max accel (mm/s²)', nozzleAccel),
-        h('button', {
-          class: 'btn btn-sm btn-danger', type: 'button', style: 'margin-bottom:.9rem',
-          'aria-label': `Remove nozzle ${i + 1}`,
-          onClick: () => { nozzleState.splice(i, 1); renderNozzleRows(); }
-        }, '🗑')
+      nozzleHost.append(h('fieldset', { style: 'margin:var(--s-3) 0' },
+        h('legend', {}, i === 0 ? `Nozzle ${i + 1} · Main` : `Nozzle ${i + 1} · Auxiliary`),
+        h('div', { class: 'field-row', style: 'align-items:end' },
+          field('Nozzle label', label),
+          field('Feed', feed, i === 0 ? 'Feed path drives PA and retraction suggestions.' : undefined),
+          field('Max speed (mm/s)', nozzleSpeed),
+          field('Max accel (mm/s²)', nozzleAccel),
+          h('button', {
+            class: 'btn btn-sm btn-danger', type: 'button', style: 'margin-bottom:.9rem',
+            'aria-label': `Remove nozzle ${i + 1}`,
+            onClick: () => { nozzleState.splice(i, 1); renderNozzleRows(); }
+          }, '🗑')
+        )
       ));
     });
     if (!nozzleState.length) {
@@ -396,12 +439,15 @@ function openEditor(root: HTMLElement, existing: PrinterProfile | null): void {
     h('div', { class: 'modal', role: 'dialog', 'aria-modal': 'true', style: 'max-width:720px;max-height:90vh;overflow:auto' },
       h('h3', {}, existing ? `Edit ${existing.name}` : 'New printer profile'),
       field('Find your printer', combo.root, `Choose from ${PRINTER_DB_COUNT.toLocaleString()} known printers to auto-fill specs, then adjust anything for your setup.`),
-      h('div', { style: 'margin:-.5rem 0 .35rem' }, manualBtn),
-      h('div', { class: 'btn-row', style: 'margin:0 0 .75rem' },
-        h('button', { class: 'btn btn-sm', type: 'button', onClick: applyX2dTemplate }, '⚡ Quick-fill: Bambu Lab X2D'),
-        h('span', { class: 'field-help' }, 'Fills name, 300 °C limit, 2 extruders, and both nozzles (direct-drive main + 200 mm/s / 1000 mm/s² bowden aux).')),
+      h('div', { style: 'margin:-.5rem 0 var(--s-3)' }, manualBtn),
+      h('div', { class: 'panel' },
+        h('span', { class: 'placard' }, 'Template'),
+        h('div', { class: 'btn-row', style: 'margin-top:var(--s-2)' },
+          h('button', { class: 'btn btn-sm', type: 'button', onClick: applyX2dTemplate }, '⚡ Quick-fill: Bambu Lab X2D')),
+        h('p', { class: 'field-help', style: 'margin:var(--s-2) 0 0' },
+          'Fills name, 300 °C limit, 2 extruders, and both nozzles (direct-drive main + 200 mm/s / 1000 mm/s² bowden aux).')),
       dbBadge,
-      h('hr', { style: 'border:none;border-top:1px solid var(--border,#ddd);margin:.5rem 0 1rem' }),
+      h('hr', { class: 'rule-ticks' }),
       field('Profile name *', name),
       h('div', { class: 'field-row' },
         field('Manufacturer', manufacturer),
@@ -417,8 +463,8 @@ function openEditor(root: HTMLElement, existing: PrinterProfile | null): void {
         field('Retraction range start (mm)', retrStart),
         field('Retraction range end (mm)', retrEnd)
       ),
-      h('div', { style: 'border-top:1px solid var(--surface-2);margin-top:.6rem;padding-top:.6rem' },
-        h('h4', { style: 'margin:0 0 .2rem' }, 'Nozzles (dual-nozzle printers)'),
+      h('div', { style: 'border-top:1px solid var(--hairline);margin-top:var(--s-5);padding-top:var(--s-4)' },
+        h('h4', { style: 'margin:0 0 var(--s-1)' }, 'Nozzles (dual-nozzle printers)'),
         h('p', { class: 'field-help' },
           'For machines with two physical nozzles (e.g. Bambu Lab X2D). Each calibration project then picks which nozzle it calibrates, and suggestions adapt to that nozzle\'s feed path.'),
         nozzleHost,

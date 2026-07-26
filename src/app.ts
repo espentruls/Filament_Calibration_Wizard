@@ -36,11 +36,19 @@ function prefersDarkScheme(): boolean {
   return typeof window.matchMedia === 'function' && window.matchMedia('(prefers-color-scheme: dark)').matches;
 }
 
+/**
+ * Re-lights the header's DAY|NIGHT switch. Registered by `startApp` so that
+ * `applyTheme()` — which Settings also calls — keeps the switch honest no matter
+ * where the theme was changed from.
+ */
+let relightPanelSwitch: (() => void) | null = null;
+
 export function applyTheme(): void {
   const s = loadSettings();
   const theme = s.theme === 'auto' ? (prefersDarkScheme() ? 'dark' : 'light') : s.theme;
   document.documentElement.dataset.theme = theme;
   document.documentElement.dataset.largeText = String(s.largeText);
+  relightPanelSwitch?.();
 }
 
 function onPreferredColorSchemeChange(fn: () => void): void {
@@ -94,9 +102,9 @@ async function route(): Promise<void> {
   } catch (err) {
     clear(outlet);
     outlet.append(
-      h('div', { class: 'card' },
-        h('h1', {}, 'Something went wrong'),
-        h('p', {}, 'This view failed to load. Your data is stored locally and is not affected.'),
+      h('div', { class: 'callout callout-bad', role: 'alert' },
+        h('h1', { class: 'co-title' }, 'Instrument fault'),
+        h('p', {}, 'This view failed to load. Your data is stored locally on this device and is not affected — nothing was lost.'),
         h('p', { class: 'field-help' }, String(err)),
         h('div', { class: 'btn-row' },
           h('button', { class: 'btn btn-primary', onClick: () => navigate('#/') }, 'Back to dashboard'))
@@ -106,8 +114,13 @@ async function route(): Promise<void> {
   window.scrollTo(0, 0);
 }
 
-function navLink(href: string, label: string): HTMLElement {
-  return h('a', { href }, label);
+/**
+ * Nav items are panel placards: a short ALL-CAPS legend under an icon (the icon
+ * itself is drawn from the stylesheet, keyed off `href`). `title` carries the
+ * long name so the terse placard never costs meaning.
+ */
+function navLink(href: string, label: string, title: string = label): HTMLElement {
+  return h('a', { href, title }, label);
 }
 
 let navEl: HTMLElement;
@@ -144,38 +157,108 @@ function installExternalLinkHandler(): void {
   });
 }
 
+/** The theme actually in force right now ('auto' resolved against the OS). */
+function effectiveTheme(): 'dark' | 'light' {
+  const s = loadSettings();
+  return s.theme === 'auto' ? (prefersDarkScheme() ? 'dark' : 'light') : s.theme;
+}
+
+/**
+ * Panel lighting switch — a two-position DAY | NIGHT selector in the DIM-knob
+ * idiom. Both positions are always drawn; only the one in force is lit. A single
+ * static legend can only ever name a mode, never report which one you are in;
+ * a two-position switch reports state the way a real panel switch does.
+ *
+ * Semantics: a radiogroup with roving tabindex, so the pair is ONE tab stop and
+ * the arrow keys walk the detents. Selecting a position writes an explicit
+ * theme into settings (leaving 'auto' behind, exactly as the old button did);
+ * while settings still say 'auto', the lit position is whatever the OS resolves
+ * to, and it re-lights if the OS flips.
+ */
+function panelLightingSwitch(): { root: HTMLElement; sync: () => void } {
+  const positions: { theme: 'light' | 'dark'; label: string; name: string }[] = [
+    { theme: 'light', label: 'DAY', name: 'Day' },
+    { theme: 'dark', label: 'NIGHT', name: 'Night' }
+  ];
+
+  const buttons = positions.map(p => h('button', {
+    type: 'button',
+    class: 'dim-switch-opt',
+    role: 'radio',
+    'aria-checked': 'false',
+    'aria-label': `${p.name} panel lighting`,
+    tabindex: '-1',
+    title: `Panel lighting: ${p.name.toLowerCase()}`
+  }, p.label));
+
+  const sync = (): void => {
+    const active = effectiveTheme();
+    positions.forEach((p, i) => {
+      const lit = p.theme === active;
+      buttons[i].classList.toggle('is-active', lit);
+      buttons[i].setAttribute('aria-checked', String(lit));
+      buttons[i].tabIndex = lit ? 0 : -1;
+    });
+  };
+
+  const select = (index: number, moveFocus: boolean): void => {
+    const s = loadSettings();
+    s.theme = positions[index].theme;
+    saveSettings(s);
+    applyTheme(); // re-lights this switch via `relightPanelSwitch`
+    if (moveFocus) buttons[index].focus();
+  };
+
+  buttons.forEach((b, i) => b.addEventListener('click', () => select(i, false)));
+
+  const root = h('div', { class: 'dim-switch', role: 'radiogroup', 'aria-label': 'Panel lighting' }, buttons);
+
+  root.addEventListener('keydown', (e) => {
+    const key = (e as KeyboardEvent).key;
+    const step = key === 'ArrowRight' || key === 'ArrowDown' ? 1
+      : key === 'ArrowLeft' || key === 'ArrowUp' ? -1
+        : 0;
+    if (!step) return;
+    e.preventDefault();
+    const current = positions.findIndex(p => p.theme === effectiveTheme());
+    select((current + step + positions.length) % positions.length, true);
+  });
+
+  sync();
+  return { root, sync };
+}
+
 export function startApp(): void {
   applyTheme();
-  onPreferredColorSchemeChange(applyTheme);
   installExternalLinkHandler();
 
   const root = document.getElementById('app')!;
   clear(root);
   navEl = h('nav', { class: 'app-nav', 'aria-label': 'Main navigation' },
-    navLink('#/', 'Projects'),
-    navLink('#/printers', 'Printers'),
-    navLink('#/help', 'Help & Glossary'),
-    navLink('#/settings', 'Settings')
+    navLink('#/', 'Projects', 'Calibration projects'),
+    navLink('#/printers', 'Printers', 'Printer profiles'),
+    navLink('#/help', 'Help', 'Help & glossary'),
+    navLink('#/settings', 'Settings', 'Settings')
   );
 
-  const themeBtn = h('button', {
-    class: 'btn btn-ghost btn-sm', title: 'Toggle light/dark theme', 'aria-label': 'Toggle light/dark theme',
-    onClick: () => {
-      const s = loadSettings();
-      const current = s.theme === 'auto' ? (prefersDarkScheme() ? 'dark' : 'light') : s.theme;
-      s.theme = current === 'dark' ? 'light' : 'dark';
-      saveSettings(s);
-      applyTheme();
-    }
-  }, '🌓');
+  const lighting = panelLightingSwitch();
+  relightPanelSwitch = lighting.sync;
+  onPreferredColorSchemeChange(() => { applyTheme(); });
 
   root.append(
     h('header', { class: 'app-header' },
+      // Order matters at narrow widths: `.app-nav` goes full-width and wraps to
+      // its own line, so the lighting switch must sit BEFORE it to stay on the
+      // logo row. Trailing it would orphan it onto a third line, left-aligned,
+      // where it reads like a fifth nav item.
       h('div', { class: 'app-header-inner' },
-        h('a', { class: 'app-logo', href: '#/' }, h('span', { 'aria-hidden': 'true' }, '🧵'), 'PerfectFit', h('span', { class: 'dot' }, '•'), h('span', { style: 'font-weight:500;color:var(--text-dim)' }, 'Filament Calibration')),
-        navEl,
+        h('a', { class: 'app-logo', href: '#/', title: 'PerfectFit — filament calibration' },
+          h('span', { class: 'dot', 'aria-hidden': 'true' }, '•'),
+          h('span', { class: 'placard placard-lit', style: 'font-size:.8rem' }, 'PerfectFit'),
+          h('span', { class: 'readout-label' }, 'Filament calibration')),
         h('div', { class: 'header-spacer' }),
-        themeBtn
+        lighting.root,
+        navEl
       )
     ),
     (outlet = h('main', { id: 'main' }))

@@ -70,7 +70,7 @@ export function presetBackupCallout(p: CalibrationProject, rerender: () => Promi
 
   if (!bridge.isDesktop()) {
     return h('div', { class: 'callout callout-warn' },
-      h('p', { class: 'co-title' }, '🗄 Back up your slicer profiles before you start'),
+      h('p', { class: 'co-title' }, 'Back up your slicer profiles before you start'),
       h('p', {}, 'This wizard will ask you to change values in your filament and printer profiles. In the browser version PerfectFit cannot do the backup for you — before starting, copy your slicer\'s user preset folder somewhere safe (Orca/Bambu: the "user" folder inside the slicer\'s configuration directory), or export your presets from the slicer itself.'),
       h('div', { class: 'btn-row' },
         h('button', { class: 'btn', onClick: () => void record('skipped') }, 'Got it — continue'))
@@ -95,7 +95,7 @@ export function presetBackupCallout(p: CalibrationProject, rerender: () => Promi
   }, '🗄 Back up now') as HTMLButtonElement;
 
   return h('div', { class: 'callout callout-warn' },
-    h('p', { class: 'co-title' }, '🗄 Back up your slicer profiles before you start'),
+    h('p', { class: 'co-title' }, 'Back up your slicer profiles before you start'),
     h('p', {}, 'This wizard will ask you to change values in your filament and printer profiles. One click saves a checksummed snapshot of your current user presets (filament, printer, and process) so you can restore them exactly — Settings → Slicer profile backups.'),
     h('div', { class: 'btn-row' },
       backupBtn,
@@ -128,7 +128,7 @@ export async function maybeFirstRunBackupCard(): Promise<HTMLElement | null> {
   if (!anyPresets) return null;
 
   const card = h('div', { class: 'card' },
-    h('h2', { style: 'margin-top:0' }, '🗄 First things first: back up your slicer profiles'),
+    h('h2', {}, 'First things first: back up your slicer profiles'),
     h('p', {}, 'Calibrating means changing values in your slicer\'s filament and printer profiles. Before any of that, let PerfectFit snapshot your current user presets — every file is checksummed and restorable from Settings → Slicer profile backups.'),
     h('p', { class: 'field-help' }, 'Backups are stored in PerfectFit\'s own data folder and never touch your slicer files. You can also do this later, per project.')
   );

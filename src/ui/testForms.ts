@@ -47,6 +47,163 @@ export interface TestController {
 const num = (v: unknown): number => Number(v);
 
 // ---------------------------------------------------------------------------
+// Instrument primitives
+//
+// Presentation only. Nothing below is read by collect() or compute() — these
+// helpers draw what the user already typed, they never decide anything.
+// ---------------------------------------------------------------------------
+
+/** Aviation numerals: fixed precision, never a bare "0" standing in for "unknown". */
+function fmt(v: number, precision: number): string {
+  return Number.isFinite(v) ? v.toFixed(precision) : '—';
+}
+
+/** A recessed sub-panel with an engraved legend — used for live range previews. */
+function previewPanel(legend: string, body: HTMLElement): HTMLElement {
+  return h('div', { class: 'panel' }, h('span', { class: 'placard' }, legend), body);
+}
+
+interface BandHandle {
+  el: HTMLElement;
+  /** Redraw. `measured` of null leaves the instrument unlit (rule #1). */
+  update(measured: number | null, lo: number, hi: number): void;
+}
+
+/**
+ * Deviation readout — product rule #3.
+ *
+ * The measured value is drawn against its suggested band with a hairline from
+ * the band centre, so drift toward an edge is visible long before anything
+ * turns amber. Amber only when the value actually leaves the band; red only
+ * when it leaves by more than a full band width.
+ */
+function bandReadout(opts: {
+  precision: number;
+  unit?: string;
+  /** Word for the reference range in the legend: "suggested", "tested", "acceptable". */
+  bandNoun?: string;
+  /** Fixed outer scale, when the instrument has one (e.g. the printed range). */
+  domain?: { min: number; max: number };
+  /** Sentence-case note appended when the value sits outside the band. */
+  outsideNote?: string;
+  /** Sentence-case note shown while nothing has been measured. */
+  unlitNote?: string;
+}): BandHandle {
+  const unit = opts.unit ? ` ${opts.unit}` : '';
+  const noun = opts.bandNoun ?? 'suggested';
+  const unlitNote = opts.unlitNote ?? 'Not measured yet';
+
+  const track = h('div', { class: 'band-track', 'aria-hidden': 'true' },
+    h('span', { class: 'band-span' }),
+    h('span', { class: 'band-drift' }),
+    h('span', { class: 'band-mark' }));
+  const loLabel = h('span', {}, '');
+  const hiLabel = h('span', {}, '');
+  const legend = h('p', { class: 'band-legend', 'aria-live': 'polite' }, `${unlitNote}.`);
+  const el = h('div', { class: 'band is-unlit', style: '--lo:0%;--hi:100%;--at:50%;--mid:50%' },
+    track,
+    h('div', { class: 'band-scale', 'aria-hidden': 'true' }, loLabel, hiLabel),
+    legend);
+
+  const update = (measured: number | null, lo: number, hi: number): void => {
+    const haveBand = Number.isFinite(lo) && Number.isFinite(hi) && hi > lo;
+    const value = measured !== null && Number.isFinite(measured) ? measured : null;
+
+    if (!haveBand) {
+      el.className = 'band is-unlit';
+      el.setAttribute('style', '--lo:0%;--hi:100%;--at:50%;--mid:50%');
+      loLabel.textContent = '';
+      hiLabel.textContent = '';
+      legend.textContent = `${unlitNote}.`;
+      return;
+    }
+
+    const width = hi - lo;
+    const pad = width * 0.45 || 1;
+    let min = opts.domain?.min ?? lo - pad;
+    let max = opts.domain?.max ?? hi + pad;
+    if (value !== null) {
+      if (value < min) min = value - pad * 0.3;
+      if (value > max) max = value + pad * 0.3;
+    }
+    const span = max - min || 1;
+    const pct = (x: number): string =>
+      `${Math.min(100, Math.max(0, ((x - min) / span) * 100)).toFixed(2)}%`;
+    const mid = (lo + hi) / 2;
+
+    el.setAttribute('style',
+      `--lo:${pct(lo)};--hi:${pct(hi)};--at:${pct(value ?? mid)};--mid:${pct(mid)}`);
+    loLabel.textContent = fmt(min, opts.precision);
+    hiLabel.textContent = fmt(max, opts.precision);
+
+    const range = `${noun} ${fmt(lo, opts.precision)}–${fmt(hi, opts.precision)}${unit}`;
+    if (value === null) {
+      el.className = 'band is-unlit';
+      legend.textContent = `${unlitNote} — ${range}.`;
+      return;
+    }
+    const outside = value < lo || value > hi;
+    const far = value < lo - width || value > hi + width;
+    el.className = `band ${far ? 'is-alert' : outside ? 'is-caution' : 'is-lit'}`;
+    const base = `Measured ${fmt(value, opts.precision)} · ${range}.`;
+    legend.textContent = outside && opts.outsideNote ? `${base} ${opts.outsideNote}` : base;
+  };
+
+  return { el, update };
+}
+
+interface GaugeHandle {
+  el: HTMLElement;
+  /** `null` leaves the dial dark — "not yet measured", never a fake zero. */
+  update(value: number | null): void;
+}
+
+/**
+ * One dial from the six-pack. Unlit until a value exists (product rule #1);
+ * the needle settle plays once, when the face first lights.
+ */
+function gaugeInstrument(opts: {
+  placard: string;
+  unit: string;
+  min: number;
+  max: number;
+  precision: number;
+  /** Let the needle settle when this dial lights. Off for recalled values. */
+  settle?: boolean;
+}): GaugeHandle {
+  const valueEl = h('b', { class: 'gauge-value' }, '—');
+  const status = h('span', { class: 'sr-only' }, `${opts.placard}: not measured yet.`);
+  const base = `gauge gauge-sm${opts.settle ? '' : ' no-settle'}`;
+
+  const el = h('div', { class: `${base} is-unlit`, style: '--angle:-135deg' },
+    h('div', { class: 'gauge-face' },
+      h('span', { class: 'gauge-ticks', 'aria-hidden': 'true' }),
+      h('span', { class: 'gauge-needle', 'aria-hidden': 'true' }),
+      h('span', { class: 'gauge-hub', 'aria-hidden': 'true' }),
+      h('span', { class: 'gauge-readout', 'aria-hidden': 'true' },
+        valueEl, h('i', { class: 'gauge-unit' }, opts.unit))),
+    h('span', { class: 'gauge-placard' }, opts.placard),
+    status);
+
+  const update = (value: number | null): void => {
+    if (value === null || !Number.isFinite(value)) {
+      el.className = `${base} is-unlit`;
+      el.setAttribute('style', '--angle:-135deg');
+      valueEl.textContent = '—';
+      status.textContent = `${opts.placard}: not measured yet.`;
+      return;
+    }
+    const p = Math.min(1, Math.max(0, (value - opts.min) / ((opts.max - opts.min) || 1)));
+    el.className = `${base} is-lit`;
+    el.setAttribute('style', `--angle:${(-135 + p * 270).toFixed(2)}deg`);
+    valueEl.textContent = fmt(value, opts.precision);
+    status.textContent = `${opts.placard}: ${fmt(value, opts.precision)} ${opts.unit}.`;
+  };
+
+  return { el, update };
+}
+
+// ---------------------------------------------------------------------------
 // Temperature
 // ---------------------------------------------------------------------------
 
@@ -65,7 +222,8 @@ const temperatureController: TestController = {
           h('p', { class: 'field-help' }, `${r.count} tower blocks: `,
             h('span', { class: 'value-chip' }, r.values.join(' · ') + ' °C')));
       }
-      for (const w of r.warnings) preview.append(h('p', { class: 'issue issue-warning' }, '⚠ ' + w));
+      const warned = issueList(r.warnings.map(w => ({ level: 'warning' as const, message: w })));
+      if (warned) preview.append(warned);
     };
     [start, end, step].forEach(i => i.addEventListener('input', refresh));
     refresh();
@@ -77,7 +235,7 @@ const temperatureController: TestController = {
         field('End temperature (°C)', end, 'The cooler end.'),
         field('Step (°C)', step, 'Orca uses 5 °C per block.')
       ),
-      preview
+      previewPanel('Tower plan', preview)
     );
     return {
       el,
@@ -107,6 +265,24 @@ const temperatureController: TestController = {
       source.forEach(t => normalSel.append(h('option', { value: String(t), selected: String(t) === cur }, `${t} °C`)));
     };
 
+    // Deviation readout: where the chosen temperature sits inside the window
+    // the user actually marked acceptable (rule #3 — drift before alarm).
+    const band = bandReadout({
+      precision: 0, unit: '°C', bandNoun: 'acceptable',
+      domain: r.values.length
+        ? { min: Math.min(...r.values) - 5, max: Math.max(...r.values) + 5 }
+        : undefined,
+      unlitNote: 'Mark the acceptable blocks and pick a normal temperature',
+      outsideNote: 'That is outside the blocks you marked acceptable.'
+    });
+    const refreshBand = () => {
+      const acc = [...acceptable].sort((a, b) => a - b);
+      const chosen = normalSel.value ? num(normalSel.value) : null;
+      if (acc.length >= 2) band.update(chosen, acc[0], acc[acc.length - 1]);
+      else if (acc.length === 1) band.update(chosen, acc[0] - 2.5, acc[0] + 2.5);
+      else band.update(chosen, NaN, NaN);
+    };
+
     r.values.forEach(t => {
       const chip = h('button', {
         type: 'button', class: 'sample-chip', 'aria-pressed': String(acceptable.has(t)),
@@ -114,19 +290,22 @@ const temperatureController: TestController = {
           if (acceptable.has(t)) acceptable.delete(t); else acceptable.add(t);
           chip.setAttribute('aria-pressed', String(acceptable.has(t)));
           refreshNormalOptions();
+          refreshBand();
         }
       }, `${t} °C`);
       chipHost.append(chip);
     });
     refreshNormalOptions();
     if (prior?.normalTemp) normalSel.value = String(prior.normalTemp);
+    normalSel.addEventListener('change', refreshBand);
+    refreshBand();
 
     const adhesionChecked = h('input', { type: 'checkbox', checked: prior?.adhesionChecked ?? false });
     const firstLayer = numberInput({ value: prior?.firstLayerTemp ?? '', placeholder: 'optional', step: 5 });
     const highFlow = numberInput({ value: prior?.highFlowTemp ?? '', placeholder: 'optional', step: 5 });
 
     const unsure = ctx.coach ? h('details', { class: 'why' },
-      h('summary', {}, '🤔 I\'m not sure which blocks are best'),
+      h('summary', {}, 'I\'m not sure which blocks are best'),
       h('div', { class: 'why-body' },
         h('p', {}, h('strong', {}, 'Q1 — Strength first: '), 'flex each block with pliers. Cross out every block that cracks along a layer line with little force — those are too cold, no matter how clean they look.'),
         h('p', {}, h('strong', {}, 'Q2 — Of the survivors, look between the towers: '), 'heavy hairs/strings? Cross out the worst stringers (usually the hottest blocks).'),
@@ -137,7 +316,9 @@ const temperatureController: TestController = {
 
     const el = h('div', {},
       h('p', {}, 'Mark every temperature that produced an acceptable block (strength included), then choose your normal printing temperature.'),
+      h('span', { class: 'placard' }, 'Printed blocks'),
       chipHost,
+      band.el,
       unsure,
       h('div', { class: 'check-item' }, adhesionChecked,
         h('div', {}, h('strong', {}, 'I checked layer adhesion, not just looks'),
@@ -207,9 +388,21 @@ function flowController(pass: 1 | 2 | 'verify'): TestController {
     settingsForm(ctx, prior) {
       const priorRatio = ctx.project.finals.flowRatio ?? ctx.material.startingFlowRatio;
       const oldRatio = numberInput({ value: prior?.oldRatio ?? priorRatio, step: 0.001 });
+      const band = bandReadout({
+        precision: 3, bandNoun: 'typical',
+        domain: { min: 0.7, max: 1.3 },
+        unlitNote: 'Enter the ratio saved in the profile',
+        outsideNote: 'Outside the usual 0.90–1.10 window — check you entered a decimal, not a percentage.'
+      });
+      const refreshBand = () =>
+        band.update(oldRatio.value === '' ? null : num(oldRatio.value), 0.9, 1.1);
+      oldRatio.addEventListener('input', refreshBand);
+      refreshBand();
+
       const el = h('div', {},
         field(`Current flow ratio in the slicer profile ${pass === 2 ? '(after Pass 1 was saved)' : pass === 'verify' ? '(your calibrated value)' : ''} *`, oldRatio,
           'Find it under Filament settings → Filament → Flow ratio. A decimal like 0.98 — if the field shows something like 98, that\'s a percentage from another slicer; enter 0.98.'),
+        band.el,
         h('p', { class: 'field-help' },
           pass === 1
             ? 'The printed blocks carry their modifiers; you\'ll pick one after printing.'
@@ -245,7 +438,7 @@ function flowController(pass: 1 | 2 | 'verify'): TestController {
       });
 
       const unsure = ctx.coach ? h('details', { class: 'why' },
-        h('summary', {}, '🤔 I\'m not sure which block is best'),
+        h('summary', {}, 'I\'m not sure which block is best'),
         h('div', { class: 'why-body' },
           h('p', {}, h('strong', {}, 'Q1: '), 'Tilt each block against the light. Do you see parallel grooves/gaps between lines? Those blocks are UNDER-extruded — eliminate them.'),
           h('p', {}, h('strong', {}, 'Q2: '), 'Run a fingernail across the tops. Ridgy, bumpy, "corduroy" texture that catches the nail = OVER-extruded — eliminate those too.'),
@@ -255,6 +448,7 @@ function flowController(pass: 1 | 2 | 'verify'): TestController {
 
       const el = h('div', {},
         h('p', {}, `Pick the block with the smoothest, gap-free, ridge-free top surface. Labels match what's printed on each block (${isYolo ? 'absolute modifiers' : 'percent modifiers'}).`),
+        h('span', { class: 'placard' }, 'Printed blocks'),
         chips, unsure
       );
       return {
@@ -307,7 +501,8 @@ const paController: TestController = {
       clear(preview);
       const r = generateRange(num(start.value), num(end.value), num(step.value), 4);
       if (r.count > 0 && r.values.length) preview.append(h('p', { class: 'field-help' }, `${r.count} samples from ${r.values[0]} to ${r.values[r.values.length - 1]}.`));
-      for (const w of r.warnings) preview.append(h('p', { class: 'issue issue-warning' }, '⚠ ' + w));
+      const warned = issueList(r.warnings.map(w => ({ level: 'warning' as const, message: w })));
+      if (warned) preview.append(warned);
     };
     [start, end, step].forEach(i => i.addEventListener('input', refresh));
     refresh();
@@ -320,7 +515,7 @@ const paController: TestController = {
       h('div', { class: 'field-row' },
         field('Start PA', start), field('End PA', end), field('Step', step)
       ),
-      preview
+      previewPanel('Sample plan', preview)
     );
     return {
       el,
@@ -347,6 +542,27 @@ const paController: TestController = {
       h('option', { value: 'zero', selected: prior?.numbering !== 'one' }, 'Zero-based — the FIRST sample equals the start value'),
       h('option', { value: 'one', selected: prior?.numbering === 'one' }, 'One-based — I counted the first sample as #1'));
 
+    // Where the value you just read lands inside the range you actually printed.
+    const lo = Math.min(num(settings.start), num(settings.end));
+    const hi = Math.max(num(settings.start), num(settings.end));
+    const band = bandReadout({
+      precision: 3, bandNoun: 'printed range',
+      unlitNote: 'Nothing read from the print yet',
+      outsideNote: 'This falls outside the range you printed — re-run the test centred on it.'
+    });
+    const refreshBand = () => {
+      let v: number | null = null;
+      if (method === 'tower') {
+        const mm = height.value === '' ? NaN : num(height.value);
+        if (Number.isFinite(mm)) v = paTower(num(settings.start), num(settings.step), mm).rounded;
+      } else if (mode === 'direct') {
+        v = direct.value === '' ? null : num(direct.value);
+      }
+      band.update(v, lo, hi);
+    };
+    height.addEventListener('input', refreshBand);
+    direct.addEventListener('input', refreshBand);
+
     if (method === 'tower') {
       el.append(
         h('p', {}, 'Examine the tower\'s corners. Find the height where corners are sharpest — no bulge, no gap after the corner — and measure that height from the base in millimeters.'),
@@ -364,6 +580,7 @@ const paController: TestController = {
         mode = modeSel.value as 'direct' | 'sample';
         directWrap.style.display = mode === 'direct' ? '' : 'none';
         sampleWrap.style.display = mode === 'sample' ? '' : 'none';
+        refreshBand();
       });
       el.append(
         h('p', {}, 'Find the line/corner with the most even width: no bulging at the corner, no thin gaps right after it.'),
@@ -372,9 +589,12 @@ const paController: TestController = {
       );
     }
 
+    el.append(band.el);
+    refreshBand();
+
     if (ctx.coach) {
       el.append(h('details', { class: 'why' },
-        h('summary', {}, '🤔 I\'m not sure which sample is best'),
+        h('summary', {}, 'I\'m not sure which sample is best'),
         h('div', { class: 'why-body' },
           h('p', {}, h('strong', {}, 'Q1: '), 'Look at the corners. Swollen/bulging outward with rounded blobs? PA too low there — look HIGHER in the print/values.'),
           h('p', {}, h('strong', {}, 'Q2: '), 'Corners look hollow, chamfered, or the line thins/breaks right after the turn? PA too high there — look LOWER.'),
@@ -449,7 +669,8 @@ const retractionController: TestController = {
       clear(preview);
       const r = generateRange(num(start.value), num(end.value), num(step.value), 2);
       if (r.values.length) preview.append(h('p', { class: 'field-help' }, `${r.count} sections, ${r.values[0]} → ${r.values[r.values.length - 1]} mm.`));
-      for (const w of r.warnings) preview.append(h('p', { class: 'issue issue-warning' }, '⚠ ' + w));
+      const warned = issueList(r.warnings.map(w => ({ level: 'warning' as const, message: w })));
+      if (warned) preview.append(warned);
     };
     [start, end, step].forEach(i => i.addEventListener('input', refresh));
     refresh();
@@ -460,9 +681,10 @@ const retractionController: TestController = {
       h('div', { class: 'field-row' },
         field('Start length (mm)', start), field('End length (mm)', end), field('Step (mm)', step)
       ),
+      previewPanel('Tower plan', preview),
       field('Retraction speed for this test (mm/s)', speed, 'Optional. Test ONE variable at a time: run the distance tower first at the profile\'s default speed; only test speed afterwards if problems remain.'),
       h('div', { class: 'callout callout-warn' },
-        h('p', { class: 'co-title' }, '⚠ More is not better'),
+        h('p', { class: 'co-title' }, 'More is not better'),
         h('p', {}, 'Long retractions drag soft plastic into the cold zone: clogs, heat creep, and filament grinding. You\'re looking for the SHORTEST distance that\'s acceptably clean.'))
     );
     return {
@@ -492,15 +714,38 @@ const retractionController: TestController = {
     const heightWrap = h('div', {}, field('Lowest clean height (mm)', height, 'The LOWEST height where stringing stops being objectionable — not the very top.'));
     const gcodeWrap = h('div', { style: prior?.entry === 'gcode' ? '' : 'display:none' },
       field('Retraction length read from G-code (mm)', gcodeLen, 'In the sliced preview, search the G-code for "Calib_Retraction_tower" at your chosen height.'));
+    // Where the resulting distance lands inside the tower you printed.
+    const lo = Math.min(num(settings.start), num(settings.end));
+    const hi = Math.max(num(settings.start), num(settings.end));
+    const band = bandReadout({
+      precision: 2, unit: 'mm', bandNoun: 'printed range',
+      unlitNote: 'Nothing measured from the tower yet',
+      outsideNote: 'This sits outside the tower you printed — re-run over a range that covers it.'
+    });
+    const refreshBand = () => {
+      let v: number | null = null;
+      if (byHeight.value === 'gcode') {
+        v = gcodeLen.value === '' ? null : num(gcodeLen.value);
+      } else {
+        const mm = height.value === '' ? NaN : num(height.value);
+        if (Number.isFinite(mm)) v = retractionFromHeight(num(settings.start), num(settings.step), mm).rounded;
+      }
+      band.update(v, lo, hi);
+    };
+    [height, gcodeLen].forEach(i => i.addEventListener('input', refreshBand));
+
     byHeight.addEventListener('change', () => {
       heightWrap.style.display = byHeight.value === 'height' ? '' : 'none';
       gcodeWrap.style.display = byHeight.value === 'gcode' ? '' : 'none';
+      refreshBand();
     });
     if (prior?.entry === 'gcode') heightWrap.style.display = 'none';
+    refreshBand();
 
     const el = h('div', {},
       field('How are you reporting the result?', byHeight),
       heightWrap, gcodeWrap,
+      band.el,
       h('div', { class: 'check-item' }, stillStringy,
         h('div', {}, h('strong', {}, 'Strings persisted even in the top (longest-retraction) sections'),
           h('p', { class: 'coach-note' }, 'If checked, the app will suggest drying the filament and revisiting temperature rather than chasing more retraction.'))),
@@ -508,7 +753,7 @@ const retractionController: TestController = {
         h('div', {}, h('strong', {}, 'I heard clicking/grinding during the print'),
           h('p', { class: 'coach-note' }, 'A sign the tested range went too far for this extruder.'))),
       ctx.coach ? h('details', { class: 'why' },
-        h('summary', {}, '🤔 What am I looking at?'),
+        h('summary', {}, 'What am I looking at?'),
         h('div', { class: 'why-body' },
           h('p', {}, h('strong', {}, 'Fine hairs '), 'that brush away = borderline; acceptable for most people.'),
           h('p', {}, h('strong', {}, 'Thick strings/branches '), '= clearly under-retracted at that height.'),
@@ -585,10 +830,17 @@ const mvsController: TestController = {
     const lw = numberInput({ value: prior?.lineWidth ?? (ctx.printer ? roundTo(ctx.printer.nozzleDiameter * 1.05, 2) : 0.42), step: 0.02 });
     const spd = numberInput({ value: 150, step: 10 });
     const calcOut = h('p', { class: 'field-help' });
+    const demandValue = h('b', { class: 'readout-value' }, '—');
+    const demandReadout = h('span', { class: 'readout is-unlit' },
+      demandValue, h('i', { class: 'readout-unit' }, 'mm³/s'));
     const refreshCalc = () => {
       const r = volumetricFlow(num(lh.value), num(lw.value), num(spd.value));
-      calcOut.textContent = r.warnings.length ? r.warnings[0] :
-        `${r.substituted} mm³/s — that's what printing at ${spd.value} mm/s actually demands.`;
+      const ok = !r.warnings.length;
+      demandReadout.className = ok ? 'readout' : 'readout is-unlit';
+      demandValue.textContent = ok ? fmt(r.rounded, r.precision) : '—';
+      calcOut.textContent = ok
+        ? `${r.substituted} mm³/s — that's what printing at ${spd.value} mm/s actually demands.`
+        : r.warnings[0];
     };
     [lh, lw, spd].forEach(i => i.addEventListener('input', refreshCalc));
     refreshCalc();
@@ -608,18 +860,20 @@ const mvsController: TestController = {
 
     const el = h('div', {},
       h('div', { class: 'panel' },
-        h('h3', { style: 'margin:0 0 .3rem' }, '🧮 What flow do you actually need?'),
+        h('h3', {}, 'Flow demand'),
+        h('p', { class: 'field-help' }, 'Work out what your normal printing speed actually asks for, so you can tell whether the measured ceiling is generous or tight.'),
         h('div', { class: 'field-row' },
           field('Layer height (mm)', lh), field('Line width (mm)', lw), field('Print speed (mm/s)', spd)),
+        demandReadout,
         calcOut),
       h('div', { class: 'field-row' },
         field('Start (mm³/s)', start), field('End (mm³/s)', end), field('Step (mm³/s per mm)', step)
       ),
+      previewPanel('Tower plan', preview),
       h('div', { class: 'field-row' },
         field('Test temperature (°C)', temp, 'Use your calibrated temp — or your high-flow temp if you set one. Max flow rises with temperature.'),
         field('Safety margin (%)', margin, 'Headroom kept below the measured max. Default 15% — the official guidance is 10–20%, more for critical parts. This is deliberately conservative: the test is a best-case scenario.')
       ),
-      preview,
       ctx.printer?.maxVolumetricFlow
         ? h('p', { class: 'field-help' }, `Printer profile limit: ${ctx.printer.maxVolumetricFlow} mm³/s — recommendations will never exceed it.`)
         : h('p', { class: 'field-help' }, 'No max flow set in the printer profile — consider adding the manufacturer\'s rating so recommendations can be capped.'),
@@ -659,9 +913,31 @@ const mvsController: TestController = {
 
     const heightWrap = h('div', {}, field('Measured height (mm)', height, 'Calipers from the base to the point you identified.'));
     const manualWrap = h('div', { style: 'display:none' }, field('Safe limit (mm³/s)', manual));
+
+    // Where the measured ceiling lands inside the flow ramp you printed.
+    const lo = Math.min(num(settings.start), num(settings.end));
+    const hi = Math.max(num(settings.start), num(settings.end));
+    const band = bandReadout({
+      precision: 1, unit: 'mm³/s', bandNoun: 'printed ramp',
+      unlitNote: 'Nothing measured from the tower yet',
+      outsideNote: 'This is outside the ramp you printed — the tower never reached it.'
+    });
+    const refreshBand = () => {
+      let v: number | null = null;
+      if (modeSel.value === 'manual') {
+        v = manual.value === '' ? null : num(manual.value);
+      } else {
+        const mm = height.value === '' ? NaN : num(height.value);
+        if (Number.isFinite(mm)) v = mvsFromHeight(num(settings.start), num(settings.step), mm).rounded;
+      }
+      band.update(v, lo, hi);
+    };
+    [height, manual].forEach(i => i.addEventListener('input', refreshBand));
+
     const sync = () => {
       heightWrap.style.display = modeSel.value === 'manual' ? 'none' : '';
       manualWrap.style.display = modeSel.value === 'manual' ? '' : 'none';
+      refreshBand();
     };
     modeSel.addEventListener('change', sync); sync();
 
@@ -669,11 +945,12 @@ const mvsController: TestController = {
       h('p', {}, 'Inspect the tower bottom-up: sheen change → rough/gappy walls → weak layers → clicking → failure. Report the point you\'re most confident about.'),
       field('What are you reporting?', modeSel),
       heightWrap, manualWrap,
+      band.el,
       h('div', { class: 'check-item' }, clicking,
         h('div', {}, h('strong', {}, 'I heard extruder clicking during the print'),
           h('p', { class: 'coach-note' }, 'Note roughly where — clicking is the extruder losing the fight, a hard limit.'))),
       ctx.coach ? h('details', { class: 'why' },
-        h('summary', {}, '🤔 I\'m not sure where it failed'),
+        h('summary', {}, 'I\'m not sure where it failed'),
         h('div', { class: 'why-body' },
           h('p', {}, h('strong', {}, 'Q1: '), 'Any point where the surface goes from shiny to matte (or the reverse)? That\'s often the earliest warning — note that height.'),
           h('p', {}, h('strong', {}, 'Q2: '), 'Slide a fingertip up the wall: where does it turn rough, thin, or see-through?'),
@@ -824,13 +1101,30 @@ const shrinkageController: TestController = {
           field('Feature A nominal (mm)', nomA), field('Feature A measured (mm)', measA)),
         h('div', { class: 'field-row' },
           field('Feature B nominal (mm)', nomB), field('Feature B measured (mm)', measB, 'Leave empty to use feature A alone.')));
+      const plateBand = bandReadout({
+        precision: 2, unit: 'mm', bandNoun: 'within 0.5% of',
+        unlitNote: 'Nothing measured yet',
+        outsideNote: 'More than 0.5% off nominal — that is worth compensating for.'
+      });
+      const refreshPlateBand = () => {
+        const nominal = num(nomA.value);
+        if (!Number.isFinite(nominal) || nominal <= 0 || mode !== 'measure') {
+          plateBand.update(null, NaN, NaN);
+          return;
+        }
+        plateBand.update(measA.value === '' ? null : num(measA.value), nominal * 0.995, nominal * 1.005);
+      };
+      [nomA, measA].forEach(i => i.addEventListener('input', refreshPlateBand));
+
       const sync = () => {
         mode = modeSel.value as 'sheet' | 'measure';
         sheetWrap.style.display = mode === 'sheet' ? '' : 'none';
         measureWrap.style.display = mode === 'measure' ? '' : 'none';
+        refreshPlateBand();
       };
       modeSel.addEventListener('change', sync); sync();
 
+      measureWrap.append(plateBand.el);
       el.append(field('How are you reporting the result?', modeSel), sheetWrap, measureWrap);
       return {
         el,
@@ -861,6 +1155,31 @@ const shrinkageController: TestController = {
     const direct = entry !== 'measured';
     const xIn = numberInput({ value: prior?.x ?? '', step: 0.01, placeholder: direct ? 'e.g. 99.4' : 'e.g. 99.42' });
     const yIn = numberInput({ value: prior?.y ?? '', step: 0.01, placeholder: 'optional — leave empty to reuse X' });
+
+    // Deviation on the X axis: measured size against nominal ±0.5%, or the
+    // reported shrinkage percentage against the range filaments normally land in.
+    const nominalX = num(settings.nominalX);
+    const xBand = direct
+      ? bandReadout({
+        precision: 2, unit: '%', bandNoun: 'usual',
+        domain: { min: 97, max: 102 },
+        unlitNote: 'Nothing entered yet',
+        outsideNote: 'Outside what common filaments shrink — re-check the measurement before compensating.'
+      })
+      : bandReadout({
+        precision: 2, unit: 'mm', bandNoun: 'within 0.5% of',
+        unlitNote: 'Nothing measured yet',
+        outsideNote: 'More than 0.5% off nominal — that is worth compensating for.'
+      });
+    const refreshXBand = () => {
+      const v = xIn.value === '' ? null : num(xIn.value);
+      if (direct) xBand.update(v, 99, 100.5);
+      else if (Number.isFinite(nominalX) && nominalX > 0) xBand.update(v, nominalX * 0.995, nominalX * 1.005);
+      else xBand.update(v, NaN, NaN);
+    };
+    xIn.addEventListener('input', refreshXBand);
+    refreshXBand();
+
     el.append(
       direct
         ? h('p', {}, 'Enter the shrinkage percentage(s) from the tool\'s calculator (after measuring the fully cooled part).')
@@ -868,11 +1187,12 @@ const shrinkageController: TestController = {
       h('div', { class: 'field-row' },
         field(direct ? 'Shrinkage X (%)' : 'Measured X (mm)', xIn),
         field(direct ? 'Shrinkage Y (%)' : 'Measured Y (mm)', yIn, 'If your tool/measurement only gives one number, leave Y empty.')
-      )
+      ),
+      xBand.el
     );
     if (ctx.coach) {
       el.append(h('details', { class: 'why' },
-        h('summary', {}, '🤔 My X and Y disagree'),
+        h('summary', {}, 'My X and Y disagree'),
         h('div', { class: 'why-body' },
           h('p', {}, 'Filament shrinks the same in every direction — it has no idea which way X is. A real X/Y difference means the PRINTER is drawing rectangles that aren\'t quite square or true to size: belt tension, frame squareness, or skew. Small differences (≤0.2%) are normal; beyond ~0.5%, fix the mechanics before compensating in the filament profile.')
         )));
@@ -953,8 +1273,35 @@ const oozeControlController: TestController = {
     const overrideSet = h('input', { type: 'checkbox', checked: prior?.overrideSet ?? false });
     const rammingTuned = h('input', { type: 'checkbox', checked: prior?.rammingTuned ?? false });
 
+    // Two nozzles, two panels. The main dial stays dark until the retraction
+    // test has actually been run — an unmeasured nozzle is never a fake zero.
+    const mainRetraction = ctx.project.finals.retractionDistance;
+    const mainGauge = gaugeInstrument({ placard: 'Main nozzle', unit: 'mm', min: 0, max: 8, precision: 2 });
+    const auxGauge = gaugeInstrument({ placard: 'Aux nozzle', unit: 'mm', min: 0, max: 8, precision: 2, settle: true });
+    mainGauge.update(typeof mainRetraction === 'number' ? mainRetraction : null);
+
+    // Deviation readout for the aux override: most filaments land 2–4 mm.
+    const auxBand = bandReadout({
+      precision: 2, unit: 'mm', bandNoun: 'usual',
+      domain: { min: 0, max: 8 },
+      unlitNote: 'No override entered yet',
+      outsideNote: 'Beyond the window most filaments need — move in 0.5 mm steps and re-check the toolchanges.'
+    });
+    const refreshAux = () => {
+      const v = auxRetraction.value === '' ? null : num(auxRetraction.value);
+      auxGauge.update(v);
+      auxBand.update(v, 2, 4);
+    };
+    auxRetraction.addEventListener('input', refreshAux);
+    refreshAux();
+
     const el = h('div', {},
       h('p', {}, 'Confirm each mitigation below, then print a small two-filament model with several toolchanges to verify.'),
+      h('div', { class: 'six-pack six-pack-2' }, mainGauge.el, auxGauge.el),
+      h('p', { class: 'field-help' },
+        typeof mainRetraction === 'number'
+          ? 'The main nozzle carries the retraction distance you calibrated earlier. The auxiliary nozzle is a separate bowden path and needs its own value — they are rarely the same.'
+          : 'The main nozzle is dark because the retraction test has not been run yet. The auxiliary nozzle is a separate bowden path and needs its own value regardless.'),
       h('div', { class: 'check-item' }, primeTower,
         h('div', {}, h('strong', {}, 'Prime tower is enabled'),
           ctx.coach ? h('p', { class: 'coach-note' }, 'The primary mitigation: every toolchange wipes and re-primes on the tower instead of on your part.') : null)),
@@ -962,6 +1309,7 @@ const oozeControlController: TestController = {
         field('Prime volume (mm³, optional)', primeVolume, 'Per-filament prime volume. Leave empty to keep the slicer default; raise it for leaky pairings (PETG especially).'),
         field('Aux (Bowden Extruder) retraction override (mm)', auxRetraction, 'The value ticked under Filament settings → Setting Overrides → "Bowden Extruder" → Retraction → Length. Machine default is 2 mm; most filaments land between 2 and 4 mm.')
       ),
+      auxBand.el,
       h('div', { class: 'check-item' }, overrideSet,
         h('div', {}, h('strong', {}, 'The bowden Length override is ticked and set — not left blank ("nil")'),
           ctx.coach ? h('p', { class: 'coach-note' }, 'Bambu Studio bug #10404: an unset bowden override silently falls back to the 0.8 mm MAIN default on the auxiliary nozzle.') : null)),
@@ -969,7 +1317,7 @@ const oozeControlController: TestController = {
         h('div', {}, h('strong', {}, 'Developer-Mode ramming/precooling parameters adjusted (optional)'),
           ctx.coach ? h('p', { class: 'coach-note' }, 'Bambu Studio 2.5+ Developer Mode exposes ramming length, precooling temperature, and post-ramming travel time — worth raising for leaky pairings like PETG on the aux nozzle.') : null)),
       h('div', { class: 'callout' },
-        h('p', { class: 'co-title' }, '💡 Why the idle nozzle oozes'),
+        h('p', { class: 'co-title' }, 'Why the idle nozzle oozes'),
         h('p', {}, 'On toolchange Bambu Studio emits M104 S0 for the inactive nozzle (letting it cool toward ~60 °C) and reheats it when needed again. The reheat causes a melt-zone pressure spike that oozes on resume — PETG worst. There is no official standby-temperature field.'),
         h('p', { class: 'field-help' }, 'Advanced users only: the change-filament G-code can be edited to hold the idle nozzle at ~160–180 °C instead — less thermal cycling, at the cost of some standing ooze.'))
     );
@@ -1018,6 +1366,7 @@ const oozeControlController: TestController = {
 
     const el = h('div', {},
       h('p', {}, 'Inspect the verification print around each toolchange, then rate the remaining ooze.'),
+      h('span', { class: 'placard' }, 'Remaining ooze'),
       chips,
       h('div', { class: 'check-item' }, suspectMoisture,
         h('div', {}, h('strong', {}, 'I saw popping, steam, or bubbly extrusion'),
@@ -1089,6 +1438,13 @@ const verificationController: TestController = {
     const marks = new Map<string, VerificationMark>();
     const el = h('div', {},
       h('p', {}, 'Inspect the print category by category. Nothing here is perfectly objective — mark honestly, "Acceptable" is a valid answer.'));
+    // Annunciator per category: unlit until marked, red only for a real fault.
+    const lampFor: Record<VerificationMark, string> = {
+      pass: 'lamp lamp-ok',
+      acceptable: 'lamp',
+      'needs-adjustment': 'lamp lamp-alert',
+      'not-tested': 'lamp lamp-unlit'
+    };
     const options: { v: VerificationMark; label: string; cls: string; icon: string }[] = [
       { v: 'pass', label: 'Pass', cls: 'badge-ok', icon: '✓' },
       { v: 'acceptable', label: 'Acceptable', cls: 'badge-accent', icon: '~' },
@@ -1098,6 +1454,7 @@ const verificationController: TestController = {
     for (const cat of VERIFICATION_CATEGORIES) {
       const preset = (prior?.[`cat-${cat.id}`] as VerificationMark) ?? null;
       if (preset) marks.set(cat.id, preset);
+      const lamp = h('span', { class: preset ? lampFor[preset] : 'lamp lamp-unlit', 'aria-hidden': 'true' });
       const group = h('div', { role: 'radiogroup', 'aria-label': cat.label, class: 'sample-grid' },
         options.map(o => {
           const b = h('button', {
@@ -1106,11 +1463,13 @@ const verificationController: TestController = {
               marks.set(cat.id, o.v);
               group.querySelectorAll('.sample-chip').forEach(c => c.setAttribute('aria-pressed', 'false'));
               b.setAttribute('aria-pressed', 'true');
+              lamp.className = lampFor[o.v];
             }
           }, `${o.icon} ${o.label}`);
           return b;
         }));
       el.append(h('div', { class: 'eval-item' },
+        h('div', { class: 'eval-icon' }, lamp),
         h('div', { style: 'flex:1' },
           h('h4', {}, cat.label),
           ctx.coach ? h('p', { class: 'eval-meaning' }, cat.coachHint) : null,

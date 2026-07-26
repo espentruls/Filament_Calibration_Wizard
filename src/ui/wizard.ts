@@ -10,6 +10,7 @@ import { MODEL_MANIFEST } from '../data/models';
 import { CONTROLLERS, type TestCtx, type ComputeOutput } from './testForms';
 import { applyRetestFlags } from '../logic/recommendations';
 import { navigate, setLeaveGuard } from '../app';
+import type { CalcResult } from '../logic/formulas';
 import type {
   CalibrationId, CalibrationProject, CalibrationAttempt, ConfidenceLevel, PrinterProfile, StoredPhoto
 } from '../types';
@@ -76,7 +77,9 @@ export async function renderWizard(root: HTMLElement, projectId: string, stepId:
   root.append(frag(
     h('p', {}, h('a', { href: `#/project/${project.id}` }, '← Project overview')),
     h('h1', {}, `${def.icon} ${def.name}`),
-    coach ? null : h('p', { class: 'field-help' }, '⚙ Expert mode — condensed steps. Switch modes from the project page.'),
+    coach ? null : h('p', { class: 'field-help' },
+      h('span', { class: 'placard' }, 'Expert mode'),
+      ' Condensed steps. Switch modes from the project page.'),
     container
   ));
 
@@ -85,16 +88,41 @@ export async function renderWizard(root: HTMLElement, projectId: string, stepId:
     slicer: 'Slicer steps', evaluate: 'Inspect the print', result: 'Enter results', calc: 'Calculation', done: 'Save & finish'
   };
 
+  /** Short engraved names for the cross-check sweep placards. */
+  const stagePlacards: Record<StageId, string> = {
+    purpose: 'Why', prereq: 'Preflight', method: 'Method', range: 'Range',
+    slicer: 'Slicer', evaluate: 'Inspect', result: 'Results', calc: 'Calc', done: 'Save'
+  };
+
   function renderStage(): void {
     ctx.method = state.method;
     clear(container);
     const idx = stages.indexOf(state.stage);
     const pct = Math.round((idx / (stages.length - 1)) * 100);
 
+    // The cross-check sweep: every stage of this test as a ranked placard.
+    // Done reads lit, the current one reads active, the rest sit unlit.
     container.append(
+      h('ol', { class: 'progress-steps', 'aria-label': 'Cross-check sweep for this test' },
+        stages.map((s, i) => h('li', {
+          class: `progress-step${i < idx ? ' is-done' : i === idx ? ' is-current' : ''}`,
+          'aria-current': i === idx ? 'step' : null
+        },
+          h('span', { class: 'sr-only' },
+            i < idx ? 'Done: ' : i === idx ? 'Current step: ' : 'Not reached: '),
+          h('b', {}, String(i + 1).padStart(2, '0')),
+          stagePlacards[s]))),
       h('div', { class: 'substep-bar' },
-        h('span', { class: 'label' }, `Step ${idx + 1} of ${stages.length}: ${stageLabels[state.stage]}`),
-        h('div', { class: 'bar' }, h('div', { style: `width:${pct}%` }))
+        h('span', { class: 'label' }, stageLabels[state.stage]),
+        h('div', {
+          class: 'bar', role: 'progressbar',
+          'aria-label': 'Progress through this test',
+          'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(pct)
+        }, h('div', { style: `--fill:${pct / 100}` })),
+        h('span', {
+          class: 'placard placard-lit',
+          'aria-label': `Step ${idx + 1} of ${stages.length}`
+        }, `${idx + 1} / ${stages.length}`)
       )
     );
 
@@ -130,7 +158,7 @@ export async function renderWizard(root: HTMLElement, projectId: string, stepId:
           h('h2', { style: 'margin-top:0' }, 'What this calibrates'),
           h('p', {}, def.purpose),
           h('div', { class: 'callout' },
-            h('p', { class: 'co-title' }, '📍 Why now?'),
+            h('p', { class: 'co-title' }, 'Why now?'),
             h('p', {}, def.whyThisOrder)),
           h('details', { class: 'why' },
             h('summary', {}, 'Why am I doing this? (the full story)'),
@@ -149,15 +177,17 @@ export async function renderWizard(root: HTMLElement, projectId: string, stepId:
         card.append(frag(
           h('h2', { style: 'margin-top:0' }, 'Before you begin'),
           coach ? h('p', { class: 'field-help' }, 'These aren\'t bureaucracy — each unchecked box is a common way this test produces garbage results.') : null,
-          def.prerequisites.map(pr => {
-            const cb = h('input', {
-              type: 'checkbox', checked: checks.has(pr.id),
-              onChange: () => { cb.checked ? checks.add(pr.id) : checks.delete(pr.id); }
-            });
-            return h('div', { class: 'check-item' }, cb,
-              h('div', {}, h('strong', {}, pr.label),
-                coach && pr.coachNote ? h('p', { class: 'coach-note' }, pr.coachNote) : null));
-          }),
+          h('fieldset', {},
+            h('legend', {}, 'Preflight checks'),
+            def.prerequisites.map(pr => {
+              const cb = h('input', {
+                type: 'checkbox', checked: checks.has(pr.id),
+                onChange: () => { cb.checked ? checks.add(pr.id) : checks.delete(pr.id); }
+              });
+              return h('div', { class: 'check-item' }, cb,
+                h('div', {}, h('strong', {}, pr.label),
+                  coach && pr.coachNote ? h('p', { class: 'coach-note' }, pr.coachNote) : null));
+            })),
           nav({
             onNext: async () => {
               state.prereqs = [...checks];
@@ -182,7 +212,7 @@ export async function renderWizard(root: HTMLElement, projectId: string, stepId:
         card.append(h('h2', { style: 'margin-top:0' }, 'Select the test method'));
         if (!applicable.length) {
           card.append(h('div', { class: 'callout callout-warn' },
-            h('p', { class: 'co-title' }, `⚠ ${slicer.slicerLabel} has no built-in test for this`),
+            h('p', { class: 'co-title' }, `${slicer.slicerLabel} has no built-in test for this`),
             h('p', {}, 'See the slicer steps page for alternatives (external model or running this one test in Orca Slicer).')));
         }
         const groupName = `method-${stepId}`;
@@ -206,7 +236,7 @@ export async function renderWizard(root: HTMLElement, projectId: string, stepId:
           (stepId === 'max-volumetric-speed' && mm.test.startsWith('Max flow')));
         if (relevantModels.length) {
           card.append(h('details', { class: 'why' },
-            h('summary', {}, '📦 External test models (optional)'),
+            h('summary', {}, 'External test models (optional)'),
             h('div', { class: 'why-body' }, relevantModels.map(mm =>
               h('p', {}, h('strong', {}, mm.test), ` — ${mm.recommendedUse} `,
                 h('a', { href: mm.sourceUrl, target: '_blank', rel: 'noopener' }, 'Download (opens third-party site)'),
@@ -239,27 +269,29 @@ export async function renderWizard(root: HTMLElement, projectId: string, stepId:
         card.append(h('h2', { style: 'margin-top:0' }, `Slicer instructions — ${slicer.slicerLabel} ${slicer.version}`));
         if (project.filament.startingProfile) {
           card.append(h('p', {},
-            h('strong', {}, 'Profile you\'re calibrating: '),
+            h('span', { class: 'placard' }, 'Profile you\'re calibrating'), ' ',
             h('span', { class: 'value-chip' }, project.filament.startingProfile),
             h('span', { class: 'field-help', style: 'margin-left:.4rem' }, 'Make sure THIS filament preset is the one selected in the slicer before running the test.')));
         }
         if (!instructions || !instructions.available) {
           card.append(frag(
             h('div', { class: 'callout callout-warn' },
-              h('p', { class: 'co-title' }, '⚠ No built-in test in this slicer'),
+              h('p', { class: 'co-title' }, 'No built-in test in this slicer'),
               instructions ? h('ol', {}, instructions.steps.map(s => h('li', {}, s))) : h('p', {}, 'Use an external model from the previous step.'))
           ));
         } else {
           card.append(frag(
-            h('p', {}, h('strong', {}, 'Where: '), `${instructions.menuPath}`),
+            h('p', {}, h('span', { class: 'placard' }, 'Where'), ' ', `${instructions.menuPath}`),
             instructions.builtIn ? h('p', {}, h('span', { class: 'badge badge-ok' }, '✓ Generated in-slicer — nothing to download')) : null,
             multiFilamentCallout(printer, instructions.builtIn),
             instructions.disableFirst?.length ? h('div', { class: 'callout callout-warn' },
-              h('p', { class: 'co-title' }, '⚠ Temporarily disable first'),
+              h('p', { class: 'co-title' }, 'Temporarily disable first'),
               h('ul', {}, instructions.disableFirst.map(d => h('li', {}, d)))) : null,
-            h('ol', {}, instructions.steps.map(s => h('li', { style: 'margin:.4rem 0' }, s))),
+            h('div', { class: 'panel' },
+              h('span', { class: 'placard placard-lit' }, 'Procedure'),
+              h('ol', {}, instructions.steps.map(s => h('li', { style: 'margin:.4rem 0' }, s)))),
             instructions.gotchas?.length ? h('details', { class: 'why', open: coach ? true : null },
-              h('summary', {}, '💡 Gotchas'),
+              h('summary', {}, 'Gotchas'),
               h('div', { class: 'why-body' }, h('ul', {}, instructions.gotchas.map(g => h('li', {}, g))))) : null,
             h('p', { class: 'field-help' }, `Content verified against official docs on ${slicer.verifiedOn}. `,
               h('a', { href: slicer.docsUrl, target: '_blank', rel: 'noopener' }, 'Official documentation ↗'))
@@ -276,7 +308,11 @@ export async function renderWizard(root: HTMLElement, projectId: string, stepId:
           h('p', { class: 'field-help' }, 'Good light matters more than good eyes: one bright lamp at a shallow (raking) angle reveals texture that overhead light hides.'),
           def.evaluationGuide.map(ev => h('div', { class: 'eval-item' },
             h('div', { class: 'eval-icon', 'aria-hidden': 'true' },
-              ev.severity === 'good' ? '👍' : ev.severity === 'bad' ? '🚫' : '🔍'),
+              h('span', {
+                class: ev.severity === 'good' ? 'lamp lamp-ok'
+                  : ev.severity === 'bad' ? 'lamp lamp-alert'
+                    : 'lamp lamp-caution'
+              })),
             h('div', {},
               h('h4', {}, ev.title, ' ',
                 h('span', { class: `badge ${ev.severity === 'good' ? 'badge-ok' : ev.severity === 'bad' ? 'badge-bad' : 'badge-warn'}` },
@@ -318,42 +354,43 @@ export async function renderWizard(root: HTMLElement, projectId: string, stepId:
       // ---------------------------------------------------------------- calc
       case 'calc': {
         const out = controller.compute(ctx, state.settings ?? {}, state.result ?? {});
-        card.append(h('h2', { style: 'margin-top:0' }, 'Calculation — no black boxes'));
+        card.append(
+          h('h2', { style: 'margin-top:0' }, 'Calculation — no black boxes'),
+          h('p', { class: 'field-help' }, 'Every input, the formula it feeds, the substitution and the rounding are laid out below. Check them against your own reading of the print — nothing here is hidden.')
+        );
         if (out.calcs.length) {
-          out.calcs.forEach(c => card.append(
-            h('div', { class: 'calc-box', style: 'margin:.6rem 0' },
-              h('div', { class: 'formula' }, c.formulaText),
-              h('div', {}, c.substituted),
-              h('div', { class: 'result' }, `→ ${c.rounded}${c.unit ? ' ' + c.unit : ''}`,
-                h('span', { class: 'field-help', style: 'font-weight:400;margin-left:.5rem' }, `(rounded to ${c.precision} decimal${c.precision === 1 ? '' : 's'})`)))
-          ));
+          out.calcs.forEach((c, i) => card.append(calcInstrument(c, i, out.calcs.length)));
         } else {
           const v = out.computed['verdict'];
-          if (v) card.append(h('p', { style: 'font-size:1.1rem' }, String(v)));
+          if (v) card.append(h('div', { class: 'instrument', style: 'margin:1.5rem 0 0' },
+            h('span', { class: 'placard placard-lit' }, 'Verdict'),
+            h('p', { style: 'margin:1rem 0 0;font-size:1.05rem' }, String(v))));
         }
         if (out.warnings.length) {
+          card.append(h('h3', {}, 'Notes and cautions'));
           const l = issueList(out.warnings.map(w => ({ level: 'warning' as const, message: w })));
           if (l) card.append(l);
         }
         if (out.enterInSlicer.length) {
           const dest = instructions?.saveTo;
           card.append(frag(
-            h('h3', {}, '💾 Save it in the slicer'),
+            h('h3', {}, 'Save it in the slicer'),
             project.filament.startingProfile && dest?.scope === 'filament' ? h('p', {},
-              h('strong', {}, 'Profile to modify: '),
+              h('span', { class: 'placard' }, 'Profile to modify'), ' ',
               h('span', { class: 'value-chip' }, project.filament.startingProfile),
               h('span', { class: 'field-help', style: 'margin-left:.4rem' }, '— the filament preset this project is calibrating. Enter the value there (saving it as a user preset), not in whichever preset happens to be selected.')) : null,
-            dest ? h('p', {}, h('strong', {}, 'Where: '), `${dest.path} → `, h('strong', {}, dest.field)) : null,
+            dest ? h('p', {}, h('span', { class: 'placard' }, 'Where'), ' ', `${dest.path} → `, h('strong', {}, dest.field)) : null,
             dest ? h('p', {}, h('span', { class: `badge ${dest.scope === 'filament' ? 'badge-accent' : dest.scope === 'printer' ? 'badge-warn' : 'badge-info'}` },
-              dest.scope === 'filament' ? '🧵 Filament profile setting' :
-              dest.scope === 'printer' ? '🖨 Printer profile setting (not filament!)' :
+              dest.scope === 'filament' ? 'Filament profile setting' :
+              dest.scope === 'printer' ? 'Printer profile setting (not filament!)' :
               dest.scope === 'process' ? 'Process profile setting' :
               dest.scope === 'per-object' ? 'Per-object setting' : 'Calibration-only — nothing to save')) : null,
             h('div', { class: 'panel' },
-              out.enterInSlicer.map(e => h('p', { style: 'margin:.25rem 0' }, `${e.label}: `, h('span', { class: 'value-chip' }, e.value)))),
+              h('span', { class: 'placard placard-lit' }, 'Values to enter'),
+              valuesTable(out.enterInSlicer)),
             dest?.note ? h('div', { class: 'callout' }, h('p', {}, dest.note)) : null,
             h('div', { class: 'callout callout-warn' },
-              h('p', { class: 'co-title' }, '⚠ Don\'t overwrite stock presets'),
+              h('p', { class: 'co-title' }, 'Don\'t overwrite stock presets'),
               h('p', {}, 'Save as a NEW user preset — suggested name: ',
                 h('span', { class: 'value-chip' }, presetName(project, printer))))
           ));
@@ -374,7 +411,7 @@ export async function renderWizard(root: HTMLElement, projectId: string, stepId:
         photoInput.addEventListener('change', () => {
           for (const f of photoInput.files ?? []) {
             pendingPhotos.push({ name: f.name, type: f.type, blob: f });
-            photoList.append(h('span', { class: 'badge badge-info' }, `📷 ${f.name}`));
+            photoList.append(h('span', { class: 'badge badge-info' }, f.name));
           }
           photoInput.value = '';
         });
@@ -388,14 +425,15 @@ export async function renderWizard(root: HTMLElement, projectId: string, stepId:
                 confGroup.querySelectorAll('.sample-chip').forEach(x => x.setAttribute('aria-pressed', 'false'));
                 b.setAttribute('aria-pressed', 'true');
               }
-            }, c === 'low' ? '😕 Low — I guessed' : c === 'medium' ? '🙂 Medium — fairly sure' : '😎 High — clear winner');
+            }, c === 'low' ? 'Low — I guessed' : c === 'medium' ? 'Medium — fairly sure' : 'High — clear winner');
             return b;
           }));
 
         card.append(frag(
           h('h2', { style: 'margin-top:0' }, 'Save this result'),
           out.enterInSlicer.length ? h('div', { class: 'panel' },
-            out.enterInSlicer.map(e => h('p', { style: 'margin:.25rem 0' }, `${e.label}: `, h('span', { class: 'value-chip' }, e.value)))) : null,
+            h('span', { class: 'placard placard-lit' }, 'Values recorded'),
+            valuesTable(out.enterInSlicer)) : null,
           field('How confident are you in this result?', confGroup, coach ? 'Honest answers make the profile\'s confidence score meaningful — and tell the app when to suggest retests.' : undefined),
           h('div', { class: 'check-item' }, retest,
             h('div', {}, h('strong', {}, 'I\'d like to retest this later'),
@@ -475,9 +513,69 @@ function multiFilamentCallout(printer: PrinterProfile | undefined, builtIn: bool
     ? `${tools} extruders`
     : `${mmu} — multiple filament slots on one extruder`;
   return h('div', { class: 'callout callout-warn' },
-    h('p', { class: 'co-title' }, `⚠ Multi-filament setup (${what}) — check the filament assignment`),
+    h('p', { class: 'co-title' }, `Multi-filament setup (${what}) — check the filament assignment`),
     h('p', {}, 'The built-in calibration tests always place the generated plate on filament slot 1, and the calibration dialogs have no extruder or slot picker — so there is no way to mark a different filament as "the one being tested".'),
     h('p', {}, 'Either load the filament you are calibrating into slot 1 before running the test, or after the plate is generated, select all objects and switch them to the slot holding it. Check the temperature shown on the plate matches the filament you meant to test — if it does not, the test is using the wrong slot.'));
+}
+
+/** camelCase / snake_case calculation key → a short engraved placard label. */
+function humanizeKey(key: string): string {
+  return key
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[_-]+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+/**
+ * The calculation instrument — this app's core promise made visible.
+ *
+ * The landed value reads as an instrument readout; every input, the formula,
+ * the substitution and the rounding sit legibly beneath it. Nothing is folded
+ * away behind a disclosure: "no black boxes" is the product, not a slogan.
+ */
+function calcInstrument(c: CalcResult, index: number, total: number): HTMLElement {
+  const inputs = Object.entries(c.inputs);
+  const decimals = `${c.precision} decimal${c.precision === 1 ? '' : 's'}`;
+  const rawText = Number.isFinite(c.raw) ? String(Number(c.raw.toPrecision(10))) : '—';
+
+  return h('div', { class: 'instrument', style: 'margin:1.5rem 0 0' },
+    h('div', { style: 'display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:.45rem' },
+      h('span', { class: 'placard placard-lit' }, 'Result'),
+      total > 1 ? h('span', { class: 'placard' }, `Step ${index + 1} of ${total}`) : null),
+
+    h('div', { class: 'readout', style: 'margin-top:1rem' },
+      h('b', { class: 'readout-value' }, String(c.rounded)),
+      c.unit ? h('i', { class: 'readout-unit' }, c.unit) : null),
+
+    h('div', { class: 'rule-ticks', 'aria-hidden': 'true' }),
+
+    inputs.length ? frag(
+      h('span', { class: 'placard-sub' }, 'Inputs'),
+      h('div', { style: 'display:flex;flex-wrap:wrap;gap:.45rem;margin:.4rem 0 1rem' },
+        inputs.map(([k, v]) => h('span', { class: 'placard' }, `${humanizeKey(k)} · ${v}`)))
+    ) : null,
+
+    h('div', { class: 'calc-box' },
+      h('span', { class: 'placard-sub' }, 'Formula'),
+      h('div', { class: 'formula' }, c.formulaText),
+      h('span', { class: 'placard-sub' }, 'Substitution'),
+      h('div', {}, c.substituted),
+      h('span', { class: 'placard-sub' }, 'Result'),
+      h('div', { class: 'result' }, `= ${c.rounded}${c.unit ? ' ' + c.unit : ''}`),
+      h('p', { class: 'field-help', style: 'margin:.4rem 0 0' },
+        `Rounded to ${decimals} from ${rawText}.`))
+  );
+}
+
+/** The "enter this in your slicer" values, as a ruled instrument table. */
+function valuesTable(entries: { label: string; value: string }[]): HTMLElement {
+  return h('div', { class: 'table-scroll' },
+    h('table', { class: 'data' },
+      h('tbody', {}, entries.map(e =>
+        h('tr', {},
+          h('th', { scope: 'row' }, e.label),
+          h('td', {}, h('span', { class: 'value-chip' }, e.value)))))));
 }
 
 function presetName(p: CalibrationProject, printer?: PrinterProfile): string {

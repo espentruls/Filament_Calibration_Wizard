@@ -3,7 +3,12 @@ import { importBackup } from '../export/backup';
 
 /** Open a file picker, import the chosen JSON, then run onDone. */
 export function importFilePicker(onDone: () => void): void {
-  const input = h('input', { type: 'file', accept: 'application/json,.json', style: 'display:none' });
+  // Off-screen rather than display:none-with-focus: the picker is opened
+  // programmatically, so the control must never take a tab stop or a focus ring.
+  const input = h('input', {
+    type: 'file', accept: 'application/json,.json',
+    class: 'sr-only', tabindex: '-1', 'aria-hidden': 'true'
+  });
   input.addEventListener('change', async () => {
     const file = input.files?.[0];
     input.remove();

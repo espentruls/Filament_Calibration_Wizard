@@ -107,10 +107,11 @@ export async function renderProfileWizard(root: HTMLElement, projectId: string):
   const rerender = () => { clear(root); void renderProfileWizard(root, projectId); };
 
   root.append(
-    h('p', {}, h('a', { href: `#/project/${projectId}` }, '← Back to project')),
-    h('h1', { style: 'margin:.2rem 0' }, 'Create Slicer Profile'),
+    h('p', { class: 'no-print', style: 'margin:0' }, h('a', { href: `#/project/${projectId}` }, '← Back to project')),
+    h('p', { style: 'margin:.6rem 0 0' }, h('span', { class: 'placard' }, 'Profile build')),
+    h('h1', { style: 'margin:.2rem 0' }, 'Create slicer profile'),
     h('p', { class: 'field-help' },
-      h('span', { class: 'badge badge-warn' }, '🧪 Experimental Profile Installer'), ' ',
+      h('span', { class: 'badge badge-warn' }, 'Experimental installer'), ' ',
       'PerfectFit will back up the affected slicer files before installation. Profile formats can change between slicer versions, so support is verified per version. Export always works.'),
     stageNav(st)
   );
@@ -132,11 +133,20 @@ function stageNav(st: WizState): HTMLElement {
     { id: 'preview', label: '4. Preview & validate' },
     { id: 'result', label: '5. Install / export' }
   ];
-  return h('p', {}, stages.map(s =>
-    h('span', {
-      class: `badge ${st.stage === s.id ? 'badge-accent' : 'badge-info'}`,
-      style: 'margin-right:.35rem'
-    }, s.label)));
+  const at = stages.findIndex(s => s.id === st.stage);
+  return h('ol', { class: 'progress-steps' }, stages.map((s, i) => {
+    const state = i < at ? 'is-done' : i === at ? 'is-current' : '';
+    const lamp = i < at ? 'lamp lamp-ok' : i === at ? 'lamp' : 'lamp lamp-unlit';
+    return h('li', {
+      class: `progress-step ${state}`.trim(),
+      'aria-current': i === at ? 'step' : null
+    },
+      h('span', {
+        class: lamp, 'aria-hidden': 'true',
+        style: i === at ? 'background:var(--on-green);box-shadow:none' : null
+      }),
+      s.label);
+  }));
 }
 
 // --- stage 1: slicer --------------------------------------------------------
@@ -144,12 +154,12 @@ function stageNav(st: WizState): HTMLElement {
 async function renderSlicerStage(
   root: HTMLElement, st: WizState, project: CalibrationProject, rerender: () => void
 ): Promise<void> {
-  const card = h('div', { class: 'card' }, h('h2', { style: 'margin-top:0' }, 'Choose the target slicer'));
+  const card = h('div', { class: 'card' }, h('h2', {}, 'Choose the target slicer'));
   root.append(card);
 
   if (!bridge.isDesktop()) {
     card.append(
-      h('div', { class: 'callout callout-warn' },
+      h('div', { class: 'callout' },
         h('p', { class: 'co-title' }, 'Browser mode'),
         h('p', {}, 'Automatic slicer detection and installation require the PerfectFit desktop app. In the browser you can still load an exported profile below, apply your calibration to it, and download the result for manual import.'))
     );
@@ -158,7 +168,7 @@ async function renderSlicerStage(
   }
 
   if (st.installations === null) {
-    card.append(h('p', {}, '🔍 Scanning for installed slicers…'));
+    card.append(h('p', { class: 'field-help', role: 'status' }, 'Scanning for installed slicers…'));
     try {
       st.installations = await detectInstallations();
     } catch (e) {
@@ -185,7 +195,7 @@ async function renderSlicerStage(
     const locations = inst.userDataLocations;
     const selected = st.installation?.id === inst.id;
 
-    const locationRows = locations.map(loc => h('label', { class: 'check-item', style: 'display:flex;gap:.5rem;align-items:center' },
+    const locationRows = locations.map(loc => h('label', { class: 'check-item' },
       h('input', {
         type: 'radio', name: `loc-${inst.id}`,
         checked: selected && st.location?.id === loc.id,
@@ -195,11 +205,18 @@ async function renderSlicerStage(
         h('strong', {}, loc.accountId === 'default' ? 'Local presets' : `Account ${loc.accountId}`),
         loc.active ? h('span', { class: 'badge badge-ok', style: 'margin-left:.35rem' }, 'active in slicer') : null,
         loc.cloudLinked ? h('span', { class: 'badge badge-warn', style: 'margin-left:.35rem' }, 'cloud-linked') : null,
-        h('p', { class: 'field-help', style: 'margin:0' }, `${loc.filamentProfileCount} filament preset(s) — ${loc.path}`))
+        h('p', { class: 'field-help', style: 'margin:.2rem 0 0' }, `${loc.filamentProfileCount} filament preset(s) — ${loc.path}`))
     ));
 
-    card.append(h('div', { class: 'eval-item', style: selected ? 'outline:2px solid var(--accent);border-radius:8px' : '' },
-      h('div', { class: 'eval-icon', 'aria-hidden': 'true' }, '🖨'),
+    card.append(h('div', {
+      class: 'eval-item',
+      style: selected
+        ? 'background:var(--green-wash);border:var(--hair) solid var(--green-line);border-radius:var(--radius-sm);padding:var(--s-3)'
+        : ''
+    },
+      h('div', { class: 'eval-icon' },
+        h('span', { class: selected ? 'lamp lamp-ok' : 'lamp lamp-unlit', 'aria-hidden': 'true' }),
+        h('span', { class: 'sr-only' }, selected ? 'Selected: ' : 'Not selected: ')),
       h('div', { style: 'flex:1' },
         h('h4', {}, inst.displayName, ' ',
           h('span', { class: 'badge badge-info' }, inst.version ?? 'version unknown'),
@@ -241,14 +258,17 @@ async function renderSlicerStage(
         download('perfectfit-diagnostics.txt', report, 'text/plain');
       }
     }
-  }, '🩺 Copy diagnostic report');
+  }, 'Copy diagnostic report');
   const diagSave = h('button', {
     class: 'btn btn-ghost btn-sm', onClick: async () => {
       const platform = await currentPlatform();
       download('perfectfit-diagnostics.txt', buildDiagnosticReport({ appVersion: '1.1.0-experimental', platform, installations: st.installations ?? [] }), 'text/plain');
     }
-  }, '💾 Save diagnostic report');
-  root.append(h('div', { class: 'btn-row' }, diagBtn, diagSave));
+  }, 'Save diagnostic report');
+  root.append(
+    h('hr', { class: 'rule-ticks' }),
+    h('p', { style: 'margin:0' }, h('span', { class: 'placard' }, 'Troubleshooting')),
+    h('div', { class: 'btn-row', style: 'margin-top:.6rem' }, diagBtn, diagSave));
 }
 
 function manualSelectionBlock(st: WizState, project: CalibrationProject, rerender: () => void): HTMLElement {
@@ -285,7 +305,8 @@ function manualSelectionBlock(st: WizState, project: CalibrationProject, rerende
     }
   });
 
-  return h('div', { style: 'margin-top:1rem;border-top:1px solid var(--surface-2);padding-top:.8rem' },
+  return h('div', {},
+    h('hr', { class: 'rule-ticks' }),
     h('h3', { style: 'margin:0 0 .3rem' }, 'Use a profile file from another location'),
     h('p', { class: 'field-help' },
       'For experienced users: pick an exported filament preset (.json) to use as the base profile. The original file is never modified. Without a detected slicer, the result is export-only.'),
@@ -303,13 +324,13 @@ async function renderProfilesStage(
 ): Promise<void> {
   if (!st.installation || !st.location) { st.stage = 'slicer'; rerender(); return; }
   const card = h('div', { class: 'card' },
-    h('h2', { style: 'margin-top:0' }, `Select a base profile — ${st.installation.displayName}`),
+    h('h2', {}, `Select a base profile — ${st.installation.displayName}`),
     h('p', { class: 'field-help' },
       'PerfectFit clones the base profile and changes only the values you calibrated. Everything else (cooling, speeds, unknown future settings) is preserved. The base profile itself is never modified.'));
   root.append(card);
 
   if (!st.scan) {
-    card.append(h('p', {}, '📂 Scanning filament presets…'));
+    card.append(h('p', { class: 'field-help', role: 'status' }, 'Scanning filament presets…'));
     try {
       st.scan = await scanProfiles(st.installation.slicerId, st.location);
     } catch (e) {
@@ -333,8 +354,14 @@ async function renderProfilesStage(
     const parts = ['system', 'user', 'cloud', 'project'].filter(k => bySource.has(k))
       .map(k => `${bySource.get(k)} ${k === 'system' ? 'stock' : k === 'project' ? 'cached' : k}`);
     card.append(h('p', { class: 'field-help' },
-      `Scanned ${st.scan.profiles.length} preset(s): ${parts.join(' · ') || 'none'}${st.scan.parseFailures.length ? ` · ${st.scan.parseFailures.length} unparsable` : ''}.`,
-      !bySource.has('system') ? ' ⚠ No stock (system) presets were found in this scan — suggestions below fall back to user presets.' : ''));
+      `Scanned ${st.scan.profiles.length} preset(s): ${parts.join(' · ') || 'none'}${st.scan.parseFailures.length ? ` · ${st.scan.parseFailures.length} unparsable` : ''}.`));
+    if (!bySource.has('system')) {
+      card.append(h('ul', { class: 'issues' },
+        h('li', { class: 'issue issue-warning' },
+          h('span', { class: 'issue-icon', 'aria-hidden': 'true' }, '⚠'),
+          h('span', { class: 'sr-only' }, 'Warning: '),
+          'No stock (system) presets were found in this scan — suggestions below fall back to user presets.')));
+    }
   }
 
   const choose = (p: DetectedFilamentProfile) => {
@@ -382,7 +409,7 @@ async function renderProfilesStage(
 
   card.append(h('div', { class: 'field-row' },
     field('Search', search), field('Source', sourceSel),
-    h('label', { class: 'check-item', style: 'align-self:end' }, compatOnly, h('span', {}, ' Compatible only'))));
+    h('label', { class: 'check-item', style: 'align-self:end' }, compatOnly, h('span', {}, 'Compatible only'))));
 
   const tableHost = h('div', { class: 'table-scroll' });
   card.append(tableHost);
@@ -404,8 +431,10 @@ async function renderProfilesStage(
       h('tbody', {}, rows.slice(0, 400).map(r => h('tr', {},
         h('td', {},
           r.profile.name,
-          r.compatibility.errors.length ? h('span', { class: 'badge badge-warn', style: 'margin-left:.3rem' }, '⚠ incompatible') : null,
-          r.profile.warnings.length ? h('span', { title: r.profile.warnings.join('\n'), style: 'cursor:help' }, ' ⚠') : null),
+          r.compatibility.errors.length ? h('span', { class: 'badge badge-warn', style: 'margin-left:.3rem' }, 'incompatible') : null,
+          r.profile.warnings.length ? h('span', { title: r.profile.warnings.join('\n'), style: 'cursor:help;margin-left:.35rem' },
+            h('span', { class: 'lamp lamp-caution', 'aria-hidden': 'true' }),
+            h('span', { class: 'sr-only' }, `Warning: ${r.profile.warnings.join(' ')}`)) : null),
         h('td', {}, r.profile.materialType ?? '—'),
         h('td', {}, r.profile.vendor ?? '—'),
         h('td', {}, r.profile.sourceType),
@@ -438,8 +467,14 @@ async function renderProfilesStage(
 }
 
 function recommendedCard(s: ScoredProfile, best: boolean, choose: (p: DetectedFilamentProfile) => void): HTMLElement {
-  return h('div', { class: 'eval-item', style: best ? 'outline:2px solid var(--ok);border-radius:8px' : '' },
-    h('div', { class: 'eval-icon', 'aria-hidden': 'true' }, best ? '⭐' : '◽'),
+  return h('div', {
+    class: 'eval-item',
+    style: best
+      ? 'background:var(--green-wash);border:var(--hair) solid var(--green-line);border-radius:var(--radius-sm);padding:var(--s-3)'
+      : ''
+  },
+    h('div', { class: 'eval-icon' },
+      h('span', { class: best ? 'lamp lamp-ok' : 'lamp lamp-unlit', 'aria-hidden': 'true' })),
     h('div', { style: 'flex:1' },
       h('h4', {}, best ? 'Recommended: ' : 'Alternative: ', s.profile.name,
         h('span', { class: 'badge badge-info', style: 'margin-left:.3rem' }, s.profile.sourceType)),
@@ -447,7 +482,10 @@ function recommendedCard(s: ScoredProfile, best: boolean, choose: (p: DetectedFi
       h('ul', { style: 'margin:.2rem 0 .3rem;padding-left:1.2rem' },
         s.reasons.filter(r => r.matched && r.points > 0).slice(0, 6).map(r => h('li', {}, `✓ ${r.label}`))),
       s.compatibility.warnings.length
-        ? h('p', { class: 'field-help' }, `⚠ ${s.compatibility.warnings.join(' · ')}`)
+        ? h('ul', { class: 'issues' }, h('li', { class: 'issue issue-warning' },
+            h('span', { class: 'issue-icon', 'aria-hidden': 'true' }, '⚠'),
+            h('span', { class: 'sr-only' }, 'Warning: '),
+            s.compatibility.warnings.join(' · ')))
         : null),
     h('div', {}, h('button', { class: `btn btn-sm ${best ? 'btn-primary' : ''}`, onClick: () => choose(s.profile) }, best ? 'Continue →' : 'Choose'))
   );
@@ -474,7 +512,7 @@ function renderConfigureStage(
   if (!st.newName) st.newName = defaultName(project, printer);
 
   const card = h('div', { class: 'card' },
-    h('h2', { style: 'margin-top:0' }, 'Configure the new profile'),
+    h('h2', {}, 'Configure the new profile'),
     h('p', { class: 'field-help' }, `Base: ${base.profile.name} (${base.profile.sourceType}${base.profile.parentProfileName ? `, inherits “${base.profile.parentProfileName}”` : ''})`));
   root.append(card);
 
@@ -497,7 +535,10 @@ function renderConfigureStage(
         if (cb.checked) st.enabledPatchKeys!.add(p.presetKey); else st.enabledPatchKeys!.delete(p.presetKey);
       });
       card.append(h('label', { class: 'check-item' }, cb,
-        h('div', {}, h('strong', {}, p.label), h('p', { class: 'coach-note' }, `${p.value}${p.unit ? ` ${p.unit}` : ''}`))));
+        h('div', {},
+          h('strong', {}, p.label),
+          h('p', { class: 'coach-note' },
+            h('span', { class: 'value-chip' }, `${p.value}${p.unit ? ` ${p.unit}` : ''}`)))));
     }
   }
 
@@ -531,7 +572,7 @@ function renderConfigureStage(
         : []),
       h('div', { class: 'field-row' },
         field('Apply calibration to', toolSel),
-        h('label', { class: 'check-item', style: 'align-self:end' }, allCb, h('span', {}, ' Apply to ALL slots (only if the calibrated values hold for every tool/hotend)'))));
+        h('label', { class: 'check-item', style: 'align-self:end' }, allCb, h('span', {}, 'Apply to ALL slots (only if the calibrated values hold for every tool/hotend)'))));
   }
 
   // Bambu Studio ignores the native pressure_advance field for Bambu machines,
@@ -542,14 +583,16 @@ function renderConfigureStage(
     bakeCb.addEventListener('change', () => { st.bakePaGcode = bakeCb.checked; });
     card.append(
       h('h3', {}, 'Bambu Studio: pressure advance delivery'),
-      h('div', { class: 'callout callout-warn' },
+      h('div', { class: 'panel' },
         h('label', { class: 'check-item' }, bakeCb,
           h('div', {},
             h('strong', {}, 'Bake pressure advance into start G-code (M900)'),
             h('p', { class: 'coach-note' },
-              'Bambu Studio ignores the profile’s pressure-advance field for Bambu machines — the printer’s on-machine Flow Dynamics owns it. Tick this to write your calibrated value as “M900 K… L1000 M10” into the filament start G-code so it actually reaches the printer.'))),
-        h('p', { class: 'field-help', style: 'margin:.5rem 0 0' },
-          '⚠ For this to take effect you must turn Flow Dynamics off at print time: click ',
+              'Bambu Studio ignores the profile’s pressure-advance field for Bambu machines — the printer’s on-machine Flow Dynamics owns it. Tick this to write your calibrated value as “M900 K… L1000 M10” into the filament start G-code so it actually reaches the printer.')))),
+      h('div', { class: 'callout callout-warn' },
+        h('p', { class: 'co-title' }, 'Turn Flow Dynamics off at print time'),
+        h('p', {},
+          'For the baked value to take effect you must turn Flow Dynamics off at print time: click ',
           h('strong', {}, 'Print Plate'), ', then in the ', h('strong', {}, 'Send print job'),
           ' dialog set ', h('strong', {}, 'Flow Dynamics Calibration'), ' to ',
           h('strong', {}, 'Off'), ' (options are Auto / On / Off). Left On or Auto, the machine may override the baked value.')));
@@ -594,9 +637,10 @@ function renderPreviewStage(
   const diff = summarizeDiff(base.profile.rawProfile as Record<string, unknown>, gen);
 
   const card = h('div', { class: 'card' },
-    h('h2', { style: 'margin-top:0' }, 'Preview changes'),
-    h('p', {}, h('strong', {}, 'Base profile: '), base.profile.name),
-    h('p', {}, h('strong', {}, 'New profile: '), gen.name),
+    h('h2', {}, 'Preview changes'),
+    h('div', { class: 'panel' },
+      h('p', { style: 'margin:0' }, h('span', { class: 'placard' }, 'Base'), ' ', base.profile.name),
+      h('p', { style: 'margin:.4rem 0 0' }, h('span', { class: 'placard placard-lit' }, 'New'), ' ', gen.name)),
     printer ? h('p', { class: 'field-help' }, `Target printer: ${printer.name} · ${printer.nozzleDiameter} mm nozzle`) : null,
     st.installation ? h('p', { class: 'field-help' }, `Target slicer: ${st.installation.displayName} ${st.installation.version ?? ''} · destination: ${st.location?.path ?? '—'}`) : h('p', { class: 'field-help' }, 'No slicer selected — export only.'));
   root.append(card);
@@ -626,14 +670,20 @@ function renderPreviewStage(
     const kPatched = gen.changedFields.some(c =>
       c.presetKey === 'pressure_advance' && (c.extruderIndex === undefined || c.extruderIndex === st.targetExtruder));
     const bugIntro = 'Bambu Studio bug #10404: a preset whose bowden retraction override is left unset ("nil") silently falls back to the 0.8 mm MAIN default on the auxiliary nozzle. ';
-    card.append(h('div', { class: 'callout' },
-      h('p', { class: 'co-title' }, 'ℹ Auxiliary (bowden) nozzle notes'),
+
+    // Two separate annunciators: the retraction override is only a caution when
+    // it is genuinely missing, while the printer-side K note is always a caution.
+    card.append(h('div', { class: retrExplicit ? 'callout callout-ok' : 'callout callout-warn' },
+      h('p', { class: 'co-title' }, 'Auxiliary (bowden) nozzle — retraction override'),
       retrExplicit
         ? h('p', {}, bugIntro +
             `This generated preset carries an explicit ${retrAt} mm retraction at the bowden index, so that fallback cannot happen — verify the "Bowden Extruder" override stays ticked if you edit the preset later.` +
             (retrChangedHere ? '' : ' Note: that value is inherited from the base preset, not changed by this project.'))
-        : h('p', {}, '⚠ ' + bugIntro +
-            'This preset does NOT set the bowden retraction override (the retraction step was not completed, or its patch was deselected in the previous stage), so that fallback CAN still happen — complete the retraction calibration, or set the "Bowden Extruder" retraction override explicitly in Bambu Studio.'),
+        : h('p', {}, bugIntro +
+            'This preset does NOT set the bowden retraction override (the retraction step was not completed, or its patch was deselected in the previous stage), so that fallback CAN still happen — complete the retraction calibration, or set the "Bowden Extruder" retraction override explicitly in Bambu Studio.')));
+
+    card.append(h('div', { class: 'callout callout-warn' },
+      h('p', { class: 'co-title' }, 'Pressure advance (K) lives on the printer'),
       h('p', {}, 'Pressure advance (K) on Bambu printers lives ON the printer, keyed to filament + nozzle. ' +
         (kPatched
           ? 'The preset\'s K field is patched for completeness, but manual K only applies when the pre-print calibration gear is set to "Off".'
@@ -641,7 +691,7 @@ function renderPreviewStage(
   }
 
   // full JSON diff (advanced)
-  const details = h('details', {},
+  const details = h('details', { class: 'advanced' },
     h('summary', {}, 'Full JSON diff (advanced)'),
     h('div', { class: 'table-scroll' }, h('table', { class: 'data' },
       h('thead', {}, h('tr', {}, h('th', {}, 'Field'), h('th', {}, 'Before'), h('th', {}, 'After'))),
@@ -650,25 +700,38 @@ function renderPreviewStage(
   card.append(details);
 
   // validation
-  const vCard = h('div', { class: 'card' }, h('h2', { style: 'margin-top:0' }, 'Validation'));
+  const vCard = h('div', { class: 'card' }, h('h2', {}, 'Validation'));
   root.append(vCard);
   if (val.errors.length === 0 && val.warnings.length === 0) {
-    vCard.append(h('p', {}, '✅ All checks passed.'));
+    vCard.append(h('div', { class: 'callout callout-ok' },
+      h('p', { class: 'co-title' }, 'All checks passed'),
+      h('p', {}, 'Nothing in the generated profile conflicts with this printer, this slicer version, or your calibrated values.')));
   }
   if (val.errors.length) {
-    vCard.append(h('p', {}, `✖ ${val.errors.length} error(s) — installation and export are blocked until fixed:`),
-      h('ul', { class: 'issues' }, val.errors.map(e => h('li', { class: 'issue issue-error' }, `✖ ${e.message}`))));
+    vCard.append(h('p', { class: 'field-help' }, `${val.errors.length} error(s) — installation and export are blocked until fixed:`),
+      h('ul', { class: 'issues' }, val.errors.map(e => h('li', { class: 'issue issue-error' },
+        h('span', { class: 'issue-icon', 'aria-hidden': 'true' }, '✖'),
+        h('span', { class: 'sr-only' }, 'Error: '),
+        e.message))));
   }
   if (val.warnings.length) {
-    vCard.append(h('p', {}, `⚠ ${val.warnings.length} warning(s):`));
-    for (const w of val.warnings) {
-      if (w.requiresAcknowledgement) {
+    const plain = val.warnings.filter(w => !w.requiresAcknowledgement);
+    const acks = val.warnings.filter(w => w.requiresAcknowledgement);
+    vCard.append(h('p', { class: 'field-help' }, `${val.warnings.length} warning(s) — read each one before continuing.`));
+    if (plain.length) {
+      vCard.append(h('ul', { class: 'issues' }, plain.map(w => h('li', { class: 'issue issue-warning' },
+        h('span', { class: 'issue-icon', 'aria-hidden': 'true' }, '⚠'),
+        h('span', { class: 'sr-only' }, 'Warning: '),
+        w.message))));
+    }
+    if (acks.length) {
+      const fs = h('fieldset', {}, h('legend', {}, 'Acknowledge to continue'));
+      for (const w of acks) {
         const cb = h('input', { type: 'checkbox', checked: st.acknowledged.has(w.code) }) as HTMLInputElement;
         cb.addEventListener('change', () => { if (cb.checked) st.acknowledged.add(w.code); else st.acknowledged.delete(w.code); });
-        vCard.append(h('label', { class: 'check-item' }, cb, h('div', {}, h('strong', {}, 'I understand: '), w.message)));
-      } else {
-        vCard.append(h('p', { class: 'field-help' }, `⚠ ${w.message}`));
+        fs.append(h('label', { class: 'check-item' }, cb, h('div', {}, h('strong', {}, 'I understand: '), w.message)));
       }
+      vCard.append(fs);
     }
   }
 
@@ -740,13 +803,18 @@ function renderResultStage(
   if (res?.success) {
     const applied = gen.changedFields.map(c => `✓ ${formatChange(c)}`);
     root.append(h('div', { class: 'card' },
-      h('h2', { style: 'margin-top:0' }, '✅ Profile Installed Successfully'),
+      h('h2', {}, 'Profile installed successfully'),
       h('p', {}, h('strong', {}, gen.name), ` — installed into ${st.installation!.displayName}.`),
       h('p', { class: 'field-help' }, `Based on: ${gen.baseProfileName}`),
       h('h3', {}, 'Applied'),
       h('ul', { style: 'margin:.2rem 0;padding-left:1.2rem' }, applied.map(a => h('li', {}, a))),
       h('p', {}, `A backup was created before installation${res.backupId ? ` (id ${res.backupId})` : ''}. The installed file was re-read and verified.`),
-      res.warnings.length ? h('p', { class: 'field-help' }, res.warnings.map(w => `⚠ ${w}`).join(' ')) : null,
+      res.warnings.length
+        ? h('ul', { class: 'issues' }, res.warnings.map(w => h('li', { class: 'issue issue-warning' },
+            h('span', { class: 'issue-icon', 'aria-hidden': 'true' }, '⚠'),
+            h('span', { class: 'sr-only' }, 'Warning: '),
+            w)))
+        : null,
       h('p', {}, h('strong', {}, `Restart ${st.installation!.displayName} to load the new profile.`)),
       h('div', { class: 'btn-row' },
         h('button', { class: 'btn btn-primary', onClick: () => bridge.openSlicer(gen.slicerId).catch(e => toast(String(e), 'error')) }, `▶ Launch ${st.installation!.displayName}`),
@@ -758,16 +826,16 @@ function renderResultStage(
     return;
   }
 
-  const card = h('div', { class: 'card' }, h('h2', { style: 'margin-top:0' }, 'Install or export'));
+  const card = h('div', { class: 'card' }, h('h2', {}, 'Install or export'));
   root.append(card);
 
   if (res && res.error) {
     const t = errorTemplate(res.error.code);
-    card.append(h('div', { class: 'callout callout-warn' },
-      h('p', { class: 'co-title' }, `✖ ${t.title}`),
+    card.append(h('div', { class: 'callout callout-bad' },
+      h('p', { class: 'co-title' }, t.title),
       h('p', {}, t.whatHappened, ' ', t.anythingChanged),
       h('ul', { style: 'margin:.2rem 0;padding-left:1.2rem' }, t.nextSteps.map(s2 => h('li', {}, s2))),
-      res.error.detail ? h('details', {}, h('summary', {}, 'Technical details'), h('p', { class: 'field-help' }, res.error.detail)) : null,
+      res.error.detail ? h('details', { class: 'advanced' }, h('summary', {}, 'Technical details'), h('p', { class: 'field-help' }, res.error.detail)) : null,
       res.backupId ? h('p', { class: 'field-help' }, `Backup id: ${res.backupId} (Settings → Slicer profile backups)`) : null));
   }
 
@@ -789,7 +857,9 @@ function renderResultStage(
           } catch (e) { toast(String(e), 'error'); }
         }
       }, '⭳ Export profile'),
-      st.exportedTo ? h('span', { class: 'badge badge-ok' }, `exported ✓`) : null));
+      st.exportedTo
+        ? h('span', { class: 'badge badge-ok' }, h('span', { class: 'lamp lamp-ok', 'aria-hidden': 'true' }), 'exported')
+        : null));
 
   // Install
   card.append(h('h3', {}, '2. Install automatically'));

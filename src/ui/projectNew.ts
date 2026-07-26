@@ -9,14 +9,20 @@ import { rankBaselineNames } from '../slicerIntegration/recommendations';
 import type { DetectedFilamentProfile, IntegrationSlicerId } from '../slicerIntegration/types';
 import type { CalibrationProject, MaterialId, SlicerId, ExperienceMode } from '../types';
 
+/** Display scale for the material temperature band (presentation only). */
+const TEMP_SCALE_MIN = 150;
+const TEMP_SCALE_MAX = 350;
+
 export async function renderNewProject(root: HTMLElement): Promise<void> {
   const printers = await listPrinters();
   const settings = loadSettings();
 
   if (!printers.length) {
     root.append(h('div', { class: 'card', style: 'text-align:center;padding:2rem' },
-      h('h1', {}, 'Add a printer first'),
-      h('p', {}, 'A calibration project needs a printer profile — its nozzle size, temperature limits, and extruder type shape every suggested range.'),
+      h('span', { class: 'placard placard-unlit' }, 'No printer profile'),
+      h('h1', { style: 'margin-top:var(--s-4)' }, 'Add a printer first'),
+      h('p', { style: 'max-width:56ch;margin:var(--s-3) auto var(--s-5)' },
+        'A calibration project needs a printer profile — its nozzle size, temperature limits, and extruder type shape every suggested range.'),
       h('a', { class: 'btn btn-primary', href: '#/printers' }, 'Create a printer profile')
     ));
     return;
@@ -100,6 +106,9 @@ export async function renderNewProject(root: HTMLElement): Promise<void> {
   const modeExpert = h('input', { type: 'radio', name: 'mode', value: 'expert', checked: settings.defaultMode === 'expert' });
 
   // --- nozzle selector (multi-nozzle printers, e.g. Bambu Lab X2D) ----------
+  // Two nozzles are two separate instrument panels: the feed path, not the
+  // machine, decides the pressure-advance and retraction envelopes. Picking one
+  // here is picking which panel the whole project will calibrate.
   let nozzleChoice = 0;
   const nozzleHost = h('div', {});
   const refreshNozzles = () => {
@@ -116,17 +125,25 @@ export async function renderNewProject(root: HTMLElement): Promise<void> {
       const caps = [
         n.maxSpeed ? `≤ ${n.maxSpeed} mm/s` : null,
         n.maxAccel ? `≤ ${n.maxAccel} mm/s²` : null
-      ].filter(Boolean).join(' · ');
+      ].filter((c): c is string => Boolean(c));
       return h('label', { class: 'radio-card' }, radio,
-        h('span', { class: 'rc-title' }, n.label,
+        h('span', { class: 'placard' }, i === 0 ? `Panel ${i + 1} · Main` : `Panel ${i + 1} · Auxiliary`),
+        h('span', { class: 'rc-title', style: 'margin-top:var(--s-2)' }, n.label,
           i === 0 ? h('span', { class: 'rc-badge' }, 'default') : null),
+        h('span', { class: 'rule-ticks', style: 'display:block;margin:var(--s-2) 0' }),
+        h('span', { class: 'proj-vals', style: 'gap:var(--s-2)' },
+          h('span', { class: 'placard' }, n.feed === 'bowden' ? 'Bowden / remote feed' : 'Direct drive'),
+          caps.map(c => h('span', { class: 'placard' }, c))),
         h('p', { class: 'rc-desc' },
           n.feed === 'bowden'
-            ? `Bowden/remote feed${caps ? ` (${caps})` : ''} — wider K (0–1) and retraction (2–6 mm) ranges, no flexible filaments, and a dual-nozzle ooze-control step is added to the plan.`
-            : `Direct drive${caps ? ` (${caps})` : ''} — standard test ranges.`));
+            ? 'Wider K (0–1) and retraction (2–6 mm) ranges, no flexible filaments, and a dual-nozzle ooze-control step is added to the plan.'
+            : 'Standard test ranges — the extruder motor sits on the toolhead, so the pressure response is short and predictable.'));
     }));
-    nozzleHost.append(field('Which nozzle does this project calibrate? *', group,
-      'Each physical nozzle needs its own calibration — the feed path changes pressure advance and retraction completely.'));
+    nozzleHost.append(h('fieldset', {},
+      h('legend', {}, 'Nozzle under calibration *'),
+      h('p', { class: 'field-help', style: 'margin-top:0' },
+        'Which nozzle does this project calibrate? Each physical nozzle needs its own calibration — the feed path changes pressure advance and retraction completely.'),
+      group));
   };
   printerSel.addEventListener('change', refreshNozzles);
   refreshNozzles();
@@ -152,11 +169,12 @@ export async function renderNewProject(root: HTMLElement): Promise<void> {
     materialInfo.append(
       h('div', { class: 'panel' },
         h('p', { style: 'margin:.2rem 0' }, h('strong', {}, m.label), ` — ${m.description}`),
-        h('p', { class: 'field-help' },
-          `Typical nozzle ${m.nozzleTemp.min}–${m.nozzleTemp.max} °C · bed ${m.bedTemp.min}–${m.bedTemp.max} °C` +
-          (m.hygroscopic ? ' · moisture-sensitive (dry first)' : '') +
-          (m.enclosureRecommended ? ' · enclosure recommended' : '') +
-          (m.flexible ? ' · flexible' : '')),
+        tempBand(m.label, m.nozzleTemp.min, m.nozzleTemp.max),
+        h('p', { class: 'proj-vals', style: 'gap:var(--s-2);margin:var(--s-3) 0 0' },
+          h('span', { class: 'placard' }, `Bed ${m.bedTemp.min}–${m.bedTemp.max} °C`),
+          m.hygroscopic ? h('span', { class: 'placard' }, 'Moisture-sensitive') : null,
+          m.enclosureRecommended ? h('span', { class: 'placard' }, 'Enclosure recommended') : null,
+          m.flexible ? h('span', { class: 'placard' }, 'Flexible') : null),
         h('p', { class: 'field-help' }, 'These are suggested starting points, not guarantees — spool labels and datasheets win. Every range stays editable later.'),
         warnings.length ? h('ul', { class: 'issues' }, warnings.map(w =>
           h('li', { class: 'issue issue-warning' }, h('span', { class: 'issue-icon' }, '⚠'), w))) : null
@@ -171,8 +189,10 @@ export async function renderNewProject(root: HTMLElement): Promise<void> {
 
   root.append(
     h('h1', {}, 'New calibration project'),
+    h('p', { class: 'field-help' },
+      'Three panels of setup, then the instruments go dark until you measure them. Nothing here is locked in — every range stays editable once the project exists.'),
     h('div', { class: 'card' },
-      h('h2', { style: 'margin-top:0' }, 'Filament'),
+      h('h2', {}, 'Filament'),
       h('div', { class: 'field-row' },
         field('Manufacturer *', manufacturer),
         field('Product / line', productLine),
@@ -186,7 +206,7 @@ export async function renderNewProject(root: HTMLElement): Promise<void> {
       materialInfo
     ),
     h('div', { class: 'card' },
-      h('h2', { style: 'margin-top:0' }, 'Printer & slicer'),
+      h('h2', {}, 'Printer & slicer'),
       h('div', { class: 'field-row' },
         field('Printer profile *', printerSel),
         field('Nozzle type / material', nozzleType, 'Abrasive filaments (CF/GF) need hardened nozzles.')
@@ -200,7 +220,7 @@ export async function renderNewProject(root: HTMLElement): Promise<void> {
       profileOptions
     ),
     h('div', { class: 'card' },
-      h('h2', { style: 'margin-top:0' }, 'Guidance level'),
+      h('h2', {}, 'Guidance level'),
       h('div', { class: 'grid grid-2' },
         h('label', { class: 'radio-card' }, modeCoach,
           h('span', { class: 'rc-title' }, '🧭 Coach Mode', h('span', { class: 'rc-badge' }, 'recommended')),
@@ -260,4 +280,28 @@ export async function renderNewProject(root: HTMLElement): Promise<void> {
       )
     )
   );
+}
+
+/**
+ * The material's typical nozzle-temperature envelope, drawn as a suggested band
+ * on a fixed scale. It is deliberately UNLIT: no tower has been run yet, so
+ * there is no measured mark to place — only the band the tower will aim into.
+ */
+function tempBand(materialLabel: string, min: number, max: number): HTMLElement {
+  const span = TEMP_SCALE_MAX - TEMP_SCALE_MIN;
+  const at = (v: number) => Math.min(100, Math.max(0, ((v - TEMP_SCALE_MIN) / span) * 100));
+  const lo = at(min), hi = at(max), mid = (lo + hi) / 2;
+  return h('div', {
+    class: 'band is-unlit',
+    style: `--lo:${lo.toFixed(1)}%;--hi:${hi.toFixed(1)}%;--at:${mid.toFixed(1)}%;--mid:${mid.toFixed(1)}%`
+  },
+    h('div', { class: 'band-track' },
+      h('span', { class: 'band-span' }),
+      h('span', { class: 'band-drift' }),
+      h('span', { class: 'band-mark' })),
+    h('div', { class: 'band-scale' },
+      h('span', {}, `${TEMP_SCALE_MIN} °C`),
+      h('span', {}, `${TEMP_SCALE_MAX} °C`)),
+    h('p', { class: 'band-legend' },
+      `Typical nozzle temperature for ${materialLabel} is ${min}–${max} °C. Nothing is measured yet — the temperature tower places the mark inside this band.`));
 }

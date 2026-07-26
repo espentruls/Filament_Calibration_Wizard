@@ -25,8 +25,8 @@ export function renderSettings(root: HTMLElement): void {
 
   const theme = h('select', {},
     h('option', { value: 'auto', selected: s.theme === 'auto' }, 'Follow system'),
-    h('option', { value: 'light', selected: s.theme === 'light' }, 'Light'),
-    h('option', { value: 'dark', selected: s.theme === 'dark' }, 'Dark'));
+    h('option', { value: 'light', selected: s.theme === 'light' }, 'Light — day panel'),
+    h('option', { value: 'dark', selected: s.theme === 'dark' }, 'Dark — night panel'));
   const largeText = h('input', { type: 'checkbox', checked: s.largeText });
   const mode = h('select', {},
     h('option', { value: 'coach', selected: s.defaultMode === 'coach' }, 'Coach (guided)'),
@@ -49,9 +49,10 @@ export function renderSettings(root: HTMLElement): void {
   margin.addEventListener('change', save);
 
   root.append(
+    h('p', { style: 'margin:0' }, h('span', { class: 'placard' }, 'Panel setup')),
     h('h1', {}, 'Settings'),
     h('div', { class: 'card' },
-      h('h2', { style: 'margin-top:0' }, 'Appearance & guidance'),
+      h('h2', {}, 'Appearance & guidance'),
       h('div', { class: 'field-row' },
         field('Theme', theme),
         field('Default guidance level for new projects', mode),
@@ -61,7 +62,7 @@ export function renderSettings(root: HTMLElement): void {
         h('div', {}, h('strong', {}, 'Larger text'), h('p', { class: 'coach-note' }, 'Increases the base font size across the app.')))
     ),
     h('div', { class: 'card' },
-      h('h2', { style: 'margin-top:0' }, '💾 App data backup (projects & printers)'),
+      h('h2', {}, 'App data backup (projects & printers)'),
       h('p', { class: 'field-help' }, 'Exports/restores PerfectFit\'s OWN data: calibration projects, printer profiles, and settings, as a JSON file you keep. Everything lives in this browser\'s local storage — clearing site data deletes it, so export regularly. (Looking for your slicer preset backups? They\'re in the "Slicer profile backups" card below.)'),
       h('div', { class: 'btn-row' },
         h('button', {
@@ -80,37 +81,62 @@ export function renderSettings(root: HTMLElement): void {
     experimentalCard(),
     slicerBackupsCard(),
     h('div', { class: 'card' },
-      h('h2', { style: 'margin-top:0' }, 'Privacy'),
+      h('h2', {}, 'Privacy'),
       h('ul', {},
         h('li', {}, 'No account. No cloud. No analytics, ads, trackers, or telemetry.'),
         h('li', {}, 'Nothing you enter — including photos — ever leaves this device.'),
         h('li', {}, 'External model links open third-party websites; nothing is sent to them from your data.'),
         h('li', {}, 'The optional offline (PWA) cache stores only the app\'s own files.'))
     ),
-    h('div', { class: 'card' },
-      h('h2', { style: 'margin-top:0' }, 'Danger zone'),
-      h('div', { class: 'btn-row' },
-        h('button', {
-          class: 'btn btn-danger', onClick: async () => {
-            const ok = await confirmDialog({
-              title: 'Erase ALL data?',
-              body: 'Deletes every project, printer profile, photo, and setting from this device. This cannot be undone. Export a backup first.',
-              confirmLabel: 'Erase everything', danger: true
-            });
-            if (!ok) return;
-            const really = await confirmDialog({
-              title: 'Really erase everything?',
-              body: 'Last chance — there is no cloud copy to recover from.',
-              confirmLabel: 'Yes, erase', danger: true
-            });
-            if (!really) return;
-            await idb.clear('projects'); await idb.clear('printers'); await idb.clear('photos');
-            localStorage.clear();
-            toast('All local data erased.', 'info');
-            location.hash = '#/'; location.reload();
-          }
-        }, '🗑 Erase all local data'))
-    )
+    dangerZoneCard()
+  );
+}
+
+/**
+ * The erase control is a guarded switch, not a bare red button: the cover has
+ * to be lifted (arm) before the switch can be thrown, and the two existing
+ * confirmations still follow.
+ */
+function dangerZoneCard(): HTMLElement {
+  const arm = h('input', { type: 'checkbox' }) as HTMLInputElement;
+
+  const eraseBtn = h('button', {
+    class: 'btn btn-danger', disabled: true, 'aria-disabled': 'true', onClick: async () => {
+      const ok = await confirmDialog({
+        title: 'Erase ALL data?',
+        body: 'Deletes every project, printer profile, photo, and setting from this device. This cannot be undone. Export a backup first.',
+        confirmLabel: 'Erase everything', danger: true
+      });
+      if (!ok) return;
+      const really = await confirmDialog({
+        title: 'Really erase everything?',
+        body: 'Last chance — there is no cloud copy to recover from.',
+        confirmLabel: 'Yes, erase', danger: true
+      });
+      if (!really) return;
+      await idb.clear('projects'); await idb.clear('printers'); await idb.clear('photos');
+      localStorage.clear();
+      toast('All local data erased.', 'info');
+      location.hash = '#/'; location.reload();
+    }
+  }, '🗑 Erase all local data') as HTMLButtonElement;
+
+  arm.addEventListener('change', () => {
+    eraseBtn.disabled = !arm.checked;
+    eraseBtn.setAttribute('aria-disabled', String(!arm.checked));
+  });
+
+  return h('div', { class: 'card' },
+    h('h2', {}, 'Danger zone'),
+    h('div', { class: 'callout callout-bad' },
+      h('p', { class: 'co-title' }, 'Erase all local data'),
+      h('p', {}, 'This deletes every calibration project, printer profile, photo, and setting stored in this browser. There is no cloud copy and no undo — export a backup before you throw this switch.'),
+      h('div', { class: 'panel' },
+        h('label', { class: 'check-item' }, arm,
+          h('div', {},
+            h('strong', {}, 'Arm the erase control'),
+            h('p', { class: 'coach-note' }, 'Unlocks the switch below. Two confirmations still follow before anything is deleted.')))),
+      h('div', { class: 'btn-row' }, eraseBtn))
   );
 }
 
@@ -128,8 +154,10 @@ function experimentalCard(): HTMLElement {
       h('div', {}, h('strong', {}, label), h('p', { class: 'coach-note' }, help)));
   };
   return h('div', { class: 'card' },
-    h('h2', { style: 'margin-top:0' }, '🧪 Experimental features'),
-    h('p', { class: 'field-help' }, 'The slicer profile installer is experimental. PerfectFit backs up affected slicer files before any installation, and unverified slicer versions stay export-only.'),
+    h('h2', {}, 'Experimental features'),
+    h('div', { class: 'callout callout-warn' },
+      h('p', { class: 'co-title' }, 'Unfinished instrumentation'),
+      h('p', {}, 'The slicer profile installer is experimental. PerfectFit backs up affected slicer files before any installation, and unverified slicer versions stay export-only.')),
     mk('slicerProfileGeneration', 'Slicer profile generation', 'Create filament profiles from completed calibrations (clone a base profile, patch calibrated values).'),
     mk('automaticProfileInstallation', 'Automatic profile installation', 'Allow direct installation into verified slicer versions (desktop app only). Export always remains available.'),
     mk('advancedProfileSelection', 'Advanced profile selection', 'Show every detected profile with filters, raw JSON, and override options.'),
@@ -139,7 +167,7 @@ function experimentalCard(): HTMLElement {
 
 function slicerBackupsCard(): HTMLElement {
   const card = h('div', { class: 'card' },
-    h('h2', { style: 'margin-top:0' }, '🗄 Slicer profile backups'),
+    h('h2', {}, 'Slicer profile backups'),
     h('p', { class: 'field-help' }, 'Backups of your SLICER\'s preset files (Orca/Bambu filament, printer, and process profiles) — separate from the app data backup above. Before installing a profile, PerfectFit backs up the affected slicer files with checksums; you can also snapshot your entire user preset library at any time. Restore puts the original files back exactly as they were.'));
   if (!bridge.isDesktop()) {
     card.append(h('p', { class: 'field-help' }, 'Available in the PerfectFit desktop app.'));
@@ -185,7 +213,7 @@ function slicerBackupsCard(): HTMLElement {
         h('td', {}, b.slicer_id),
         h('td', {}, b.installed_profile_name),
         h('td', {}, String(b.file_count)),
-        h('td', {}, h('div', { class: 'btn-row' },
+        h('td', {}, h('div', { class: 'btn-row', style: 'margin-top:0' },
           h('button', {
             class: 'btn btn-sm', onClick: () => bridge.openBackupDirectory(b.backup_id).catch(e => toast(String(e), 'error'))
           }, '📂 Open'),
@@ -204,7 +232,8 @@ function slicerBackupsCard(): HTMLElement {
             }
           }, '⟲ Restore'),
           h('button', {
-            class: 'btn btn-sm btn-danger', onClick: async () => {
+            class: 'btn btn-sm btn-danger', title: 'Delete this backup', 'aria-label': `Delete the backup made ${formatBackupTime(b.created_at)}`,
+            onClick: async () => {
               const ok = await confirmDialog({
                 title: 'Delete this backup?',
                 body: 'The backed-up slicer files will no longer be restorable from PerfectFit.',
