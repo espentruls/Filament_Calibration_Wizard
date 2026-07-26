@@ -8,3 +8,15 @@ dist/
 # Stray slicer/CLI logs
 *.log
 /CLAUDE.local.md
+
+# Local agent / design-tooling artifacts — never publish these
+/CLAUDE.md
+/AGENTS.md
+/GEMINI.md
+/PRODUCT.md
+/DESIGN.md
+/DESIGN.sidecar.md
+.impeccable/
+.cursor/
+.windsurf/
+.aider*
