@@ -41,3 +41,16 @@ export {
   resumableSessions
 } from './sessionManager';
 export type { WorkingProfileSeed, TransitionResult, SafeSessionLoad } from './sessionManager';
+
+export {
+  WORKFLOW_STEPS,
+  getStepDefinition,
+  orderWorkflow,
+  missingDependencies,
+  stepReadiness,
+  validateStepResult,
+  applyStepResult,
+  inputFingerprintForStep,
+  markStaleJobs
+} from './workflow';
+export type { NormalizedProfileKey, StepResultValues, StepReadiness } from './workflow';
