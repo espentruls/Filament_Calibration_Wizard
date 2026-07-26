@@ -31,11 +31,16 @@ import type {
 import { emptyEngineCapabilities } from '../capabilities';
 import { type EngineNativeBridge, nativeEngineBridge, type RawEngineDetection } from '../engineBridge';
 import type { EngineStatus } from '../engineRegistry';
+import { getAsset, resolveAsset } from '../assets';
+import { inputFingerprintForStep } from '../workflow';
+import { workspaceDirName } from '../projectPreparation';
+import { mergeCalibrationIntoProjectConfig } from '../orcaProjectConfig';
 import {
   baseName,
   inspectSlicedJob,
   notSlicedJob,
   notUntilStage6,
+  resourcesRootFromExe,
   splitRawDetection
 } from './engineSupport';
 
@@ -143,11 +148,69 @@ export class InstalledOrcaEngine implements SlicingEngine {
     return notUntilStage6<ResolvedPrinterPreset>('resolvePrinterPreset');
   }
 
-  prepareProject(
-    _session: AutomatedCalibrationSession,
-    _step: CalibrationStepDefinition
+  /**
+   * Assemble a complete, sliceable Orca project 3mf for one step: take the
+   * calibration template shipped in the user's Orca install, merge the session's
+   * calibrated filament values into its `project_settings.config`, and stage it
+   * in the job workspace. Narrow support in this increment — only steps whose
+   * asset is already a complete project (`project-template`, e.g. the pressure
+   * advance pattern). Bare-model steps (temperature/flow towers) need parameterized
+   * project generation and are the next increment. Arbitrary-printer preset
+   * resolution is `resolvePrinterPreset` (also next); this carries the template's
+   * own printer plus the calibrated filament values.
+   */
+  async prepareProject(
+    session: AutomatedCalibrationSession,
+    step: CalibrationStepDefinition
   ): Promise<PreparedCalibrationProject> {
-    return notUntilStage6<PreparedCalibrationProject>('prepareProject');
+    if (!this.bridge.isDesktop()) {
+      throw new Error('NOT_DESKTOP: project assembly requires the desktop app.');
+    }
+    const exe = this.lastRaw?.executable_path ?? (await this.ensureDetected());
+    if (!exe) throw new Error('ENGINE_NOT_DETECTED: detect the engine before preparing a project.');
+
+    const asset = getAsset(step.id);
+    if (!asset || asset.assetType !== 'project-template') {
+      throw new Error(
+        `UNSUPPORTED_ASSET: '${step.id}' needs parameterized project generation, not yet available.`
+      );
+    }
+    const resolved = resolveAsset(step.id, { slicerResourceRoot: resourcesRootFromExe(exe) });
+    if (!resolved.available || !resolved.location) {
+      throw new Error(`ASSET_UNAVAILABLE: ${resolved.remedy ?? step.id}`);
+    }
+
+    const fingerprint = inputFingerprintForStep(session.workingProfile, step.id);
+    const jobId = workspaceDirName(session.id, step.id, fingerprint);
+    const templateConfig = await this.bridge.readProjectConfig(resolved.location);
+    const merged = mergeCalibrationIntoProjectConfig(templateConfig, session);
+    const assembled = await this.bridge.assembleCalibrationProject({
+      engineId: ENGINE_ID,
+      sessionId: session.id,
+      jobId,
+      templatePath: resolved.location,
+      mergedConfigJson: merged.text,
+      outputFileName: 'project.3mf'
+    });
+
+    return {
+      id: jobId,
+      projectId: session.id,
+      stepId: step.id,
+      workspaceDir: assembled.workspace_dir,
+      projectFilePath: assembled.project_path,
+      // The job manifest is written alongside in a later staging step; report
+      // its intended location so the workspace layout is discoverable.
+      manifestPath: `${assembled.workspace_dir}/job-manifest.json`,
+      sliced: false,
+      createdAt: new Date().toISOString()
+    };
+  }
+
+  /** Ensure detection has run at least once, returning the executable path. */
+  private async ensureDetected(): Promise<string | null> {
+    if (!this.lastRaw) await this.detect();
+    return this.lastRaw?.executable_path ?? null;
   }
 
   /** Slice a staged project via the native runner. The prepared project's

@@ -85,17 +85,29 @@ export type {
   RawEngineDetection,
   RawEngineCapabilities,
   RawSliceRun,
-  RunSliceArgs
+  RunSliceArgs,
+  RawAssembledProject,
+  AssembleProjectArgs
 } from './engineBridge';
 
 export { InstalledOrcaEngine } from './engines/installedOrcaEngine';
 export { ManualExportEngine } from './engines/manualExportEngine';
 export {
   baseName,
+  dirName,
+  resourcesRootFromExe,
   inspectSlicedJob,
   notSlicedJob,
   splitRawDetection
 } from './engines/engineSupport';
+
+export {
+  parseProjectConfig,
+  applyPatchesToConfig,
+  serializeProjectConfig,
+  mergeCalibrationIntoProjectConfig
+} from './orcaProjectConfig';
+export type { ConfigMergeResult } from './orcaProjectConfig';
 
 export { createEngines, discoverEngines } from './engineRegistry';
 export type { EngineStatus, EngineDiagnostics } from './engineRegistry';

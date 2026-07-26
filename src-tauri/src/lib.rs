@@ -1,6 +1,6 @@
 pub mod slicer_integration;
 
-use slicer_integration::{backup, discovery, engine, filesystem, install, processes};
+use slicer_integration::{backup, discovery, engine, filesystem, install, processes, project_assembly};
 
 /// Remove service-worker registrations and HTTP caches left behind by previous
 /// installs. A cache-first service worker registered by an older version keeps
@@ -80,6 +80,8 @@ pub fn run() {
       engine::validate_slicing_engine,
       engine::run_calibration_slice,
       engine::cancel_calibration_slice,
+      project_assembly::read_project_config,
+      project_assembly::assemble_calibration_project,
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

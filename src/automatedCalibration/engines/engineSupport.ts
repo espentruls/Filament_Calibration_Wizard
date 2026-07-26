@@ -19,6 +19,21 @@ export function baseName(path: string): string {
   return parts[parts.length - 1] ?? path;
 }
 
+/** Directory portion of a path (everything before the last separator). */
+export function dirName(path: string): string {
+  const i = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
+  return i >= 0 ? path.slice(0, i) : '';
+}
+
+/** The `resources/` root that sits beside an Orca executable, matching the
+ *  executable's path separator. Windows/Linux layout (the verified install
+ *  path); the native side handles the macOS `.app` bundle case for validation. */
+export function resourcesRootFromExe(exePath: string): string {
+  const dir = dirName(exePath);
+  const sep = exePath.includes('\\') ? '\\' : '/';
+  return `${dir}${sep}resources`;
+}
+
 /** Map a native detection payload to the two split contract results. */
 export function splitRawDetection(raw: RawEngineDetection): {
   detection: EngineDetectionResult;

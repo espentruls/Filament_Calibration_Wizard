@@ -4,15 +4,19 @@ import {
   ManualExportEngine,
   discoverEngines,
   splitRawDetection,
-  fromRawCapabilities
+  fromRawCapabilities,
+  getStepDefinition,
+  buildWorkingProfile,
+  applyStepResult
 } from '../../src/automatedCalibration';
 import type {
   EngineNativeBridge,
   RawEngineDetection,
   RawSliceRun,
-  RunSliceArgs
+  RunSliceArgs,
+  AssembleProjectArgs
 } from '../../src/automatedCalibration';
-import type { PreparedCalibrationProject } from '../../src/automatedCalibration';
+import type { PreparedCalibrationProject, AutomatedCalibrationSession } from '../../src/automatedCalibration';
 
 // --- fixtures ---------------------------------------------------------------
 
@@ -64,6 +68,23 @@ const PREPARED: PreparedCalibrationProject = {
   createdAt: '2026-07-26T00:00:00Z'
 };
 
+const ASSEMBLED = {
+  project_file_name: 'project.3mf',
+  project_path: 'C:\\PerfectFit\\sessions\\sess-1\\jobs\\job-x\\workspace\\project.3mf',
+  workspace_dir: 'C:\\PerfectFit\\sessions\\sess-1\\jobs\\job-x\\workspace',
+  config_replaced: true,
+  entry_count: 12,
+  warnings: []
+};
+
+// A template project_settings.config the fake bridge hands back.
+const TEMPLATE_CONFIG = JSON.stringify({
+  pressure_advance: ['0.02'],
+  enable_pressure_advance: ['0'],
+  filament_flow_ratio: ['1'],
+  printer_settings_id: 'Bambu Lab N1 0.4 nozzle'
+});
+
 function fakeBridge(overrides: Partial<EngineNativeBridge> = {}): EngineNativeBridge {
   return {
     isDesktop: () => true,
@@ -71,6 +92,8 @@ function fakeBridge(overrides: Partial<EngineNativeBridge> = {}): EngineNativeBr
     validateSlicingEngine: async () => VALID_ORCA,
     runCalibrationSlice: async () => SLICE_OK,
     cancelCalibrationSlice: async () => true,
+    readProjectConfig: async () => TEMPLATE_CONFIG,
+    assembleCalibrationProject: async () => ASSEMBLED,
     ...overrides
   };
 }
@@ -172,11 +195,74 @@ describe('InstalledOrcaEngine (desktop)', () => {
     expect(job.sliced).toBe(false);
   });
 
-  it('project assembly rejects clearly until Stage 6', async () => {
+  it('arbitrary-printer preset resolution rejects clearly (next increment)', async () => {
     const engine = new InstalledOrcaEngine(fakeBridge());
     await expect(engine.resolvePrinterPreset({ printerProfileId: 'p', nozzleDiameterMm: 0.4, slicer: 'orca' })).rejects.toThrow(
       /STAGE6_NOT_IMPLEMENTED/
     );
+  });
+});
+
+// --- InstalledOrcaEngine.prepareProject (project-template assembly) ----------
+
+function paSession(): AutomatedCalibrationSession {
+  let wp = buildWorkingProfile({ projectId: 'sess-1', displayName: 'w' });
+  wp = applyStepResult(wp, 'pressure-advance', { pressureAdvance: 0.03 });
+  return {
+    id: 'sess-1',
+    workingProfile: wp,
+    steps: { 'pressure-advance': { status: 'completed' } },
+    finals: { pressureAdvance: 0.03 }
+  } as unknown as AutomatedCalibrationSession;
+}
+
+describe('InstalledOrcaEngine.prepareProject', () => {
+  it('assembles a complete project from a project-template asset', async () => {
+    let capturedRead: string | null = null;
+    let capturedAssemble: AssembleProjectArgs | null = null;
+    const engine = new InstalledOrcaEngine(
+      fakeBridge({
+        readProjectConfig: async (p) => {
+          capturedRead = p;
+          return TEMPLATE_CONFIG;
+        },
+        assembleCalibrationProject: async (a) => {
+          capturedAssemble = a;
+          return ASSEMBLED;
+        }
+      })
+    );
+    await engine.detect();
+    const step = getStepDefinition('pressure-advance')!;
+    const prepared = await engine.prepareProject(paSession(), step);
+
+    expect(prepared.stepId).toBe('pressure-advance');
+    expect(prepared.projectId).toBe('sess-1');
+    expect(prepared.projectFilePath).toContain('project.3mf');
+    expect(prepared.sliced).toBe(false);
+
+    // template read from the resolved installed-slicer resource path
+    expect(capturedRead).toContain('pa_pattern.3mf');
+    // the merged config carried the calibrated PA value + its companion enable
+    expect(capturedAssemble).not.toBeNull();
+    const merged = JSON.parse(capturedAssemble!.mergedConfigJson);
+    expect(merged.pressure_advance).toEqual(['0.03']);
+    expect(merged.enable_pressure_advance).toEqual(['1']);
+    expect(capturedAssemble!.outputFileName).toBe('project.3mf');
+    expect(capturedAssemble!.sessionId).toBe('sess-1');
+  });
+
+  it('rejects a step that needs parameterized generation (bare model)', async () => {
+    const engine = new InstalledOrcaEngine(fakeBridge());
+    await engine.detect();
+    const step = getStepDefinition('temperature')!;
+    await expect(engine.prepareProject(paSession(), step)).rejects.toThrow(/UNSUPPORTED_ASSET/);
+  });
+
+  it('refuses to assemble off the desktop', async () => {
+    const engine = new InstalledOrcaEngine(fakeBridge({ isDesktop: () => false }));
+    const step = getStepDefinition('pressure-advance')!;
+    await expect(engine.prepareProject(paSession(), step)).rejects.toThrow(/NOT_DESKTOP/);
   });
 });
 

@@ -178,7 +178,7 @@ fn find_installed_orca() -> Option<PathBuf> {
 
 /// Locate the `resources/` directory that ships beside an Orca executable.
 /// On macOS the executable lives inside the `.app` bundle, so walk up to it.
-fn resources_dir_for(exe: &Path) -> Option<PathBuf> {
+pub(crate) fn resources_dir_for(exe: &Path) -> Option<PathBuf> {
     // Windows/Linux: <install>/orca-slicer.exe → <install>/resources.
     if let Some(parent) = exe.parent() {
         let r = parent.join("resources");
@@ -270,6 +270,14 @@ fn write_manifest_to(dir: &Path, m: &StoredEngineManifest) -> Result<(), String>
     let json = serde_json::to_string_pretty(m).map_err(|e| format!("Serialize failed: {e}"))?;
     let path = manifest_path(dir, &m.engine_id);
     std::fs::write(&path, json).map_err(|e| format!("Cannot write {}: {e}", path.display()))
+}
+
+/// The `resources/` root of a vetted engine, resolved from its persisted
+/// manifest. Used to confine a calibration template to the user's own install.
+pub(crate) fn engine_resources_root(engine_id: &str) -> Option<PathBuf> {
+    let dir = security::engines_root().ok()?;
+    let m = read_manifest_from(&dir, engine_id).ok()??;
+    resources_dir_for(Path::new(&m.executable_path))
 }
 
 fn read_manifest_from(dir: &Path, engine_id: &str) -> Result<Option<StoredEngineManifest>, String> {

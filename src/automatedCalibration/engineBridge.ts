@@ -61,6 +61,26 @@ export interface RunSliceArgs {
   cancellationToken?: string;
 }
 
+export interface RawAssembledProject {
+  project_file_name: string;
+  project_path: string;
+  workspace_dir: string;
+  config_replaced: boolean;
+  entry_count: number;
+  warnings: string[];
+}
+
+export interface AssembleProjectArgs {
+  engineId: EngineId;
+  sessionId: string;
+  jobId: string;
+  /** Source calibration template 3mf (under the user's Orca install). */
+  templatePath: string;
+  /** The merged project_settings.config text to embed. */
+  mergedConfigJson: string;
+  outputFileName: string;
+}
+
 /** The native surface the engines depend on. Injectable for tests. */
 export interface EngineNativeBridge {
   isDesktop(): boolean;
@@ -68,6 +88,10 @@ export interface EngineNativeBridge {
   validateSlicingEngine(engineId: EngineId): Promise<RawEngineDetection>;
   runCalibrationSlice(args: RunSliceArgs): Promise<RawSliceRun>;
   cancelCalibrationSlice(cancellationToken: string): Promise<boolean>;
+  /** Read a template project 3mf's project_settings.config text. */
+  readProjectConfig(templatePath: string): Promise<string>;
+  /** Stage a complete project 3mf (template + merged config) into the job. */
+  assembleCalibrationProject(args: AssembleProjectArgs): Promise<RawAssembledProject>;
 }
 
 // --- production implementation (Tauri via window.__TAURI__) ------------------
@@ -113,6 +137,19 @@ export const nativeEngineBridge: EngineNativeBridge = {
   },
   cancelCalibrationSlice(cancellationToken) {
     return invoke<boolean>('cancel_calibration_slice', { cancellationToken });
+  },
+  readProjectConfig(templatePath) {
+    return invoke<string>('read_project_config', { templatePath });
+  },
+  assembleCalibrationProject(args) {
+    return invoke<RawAssembledProject>('assemble_calibration_project', {
+      engineId: args.engineId,
+      sessionId: args.sessionId,
+      jobId: args.jobId,
+      templatePath: args.templatePath,
+      mergedConfigJson: args.mergedConfigJson,
+      outputFileName: args.outputFileName
+    });
   }
 };
 

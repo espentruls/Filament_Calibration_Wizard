@@ -14,6 +14,7 @@ pub mod engine;
 pub mod filesystem;
 pub mod install;
 pub mod processes;
+pub mod project_assembly;
 pub mod security;
 
 /// Static, verified per-slicer detection data.

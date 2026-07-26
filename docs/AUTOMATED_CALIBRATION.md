@@ -117,6 +117,36 @@ Discovery, validation, and slicing are delegated to native Tauri commands in
 recommended engine) for the diagnostics screen; the rendered panel lands with
 the Stage 7 UX (a visible screen now would be dead code while the flag is off).
 
+### Project generation (Stage 6)
+
+PerfectFit turns a shipped calibration project into one carrying the session's
+calibrated values by assembling a complete project 3mf:
+
+- **Config merge (pure TS,
+  [`orcaProjectConfig.ts`](../src/automatedCalibration/orcaProjectConfig.ts)).**
+  Parses the template's flat `project_settings.config`, overwrites only the
+  calibrated filament keys (reusing the profile installer's verified
+  calibration→Orca-key mapping and array-of-strings semantics), and serializes
+  it back with the template's key order preserved. Every other setting stays
+  byte-for-byte.
+- **Assembly (native,
+  [`project_assembly.rs`](../src-tauri/src/slicer_integration/project_assembly.rs)).**
+  `read_project_config` extracts the template's config for the merge;
+  `assemble_calibration_project` copies the template 3mf and swaps in the merged
+  config, writing `project.3mf` into the job workspace. Only the one config
+  entry changes; the model, per-layer custom g-code, and relationships are
+  preserved. The source template is confined to the vetted engine's own
+  `resources/` (a calibration model always comes from the user's install).
+- **Verified end-to-end on real Orca (2.4.2, Windows).** An assembled, modified
+  `pa_pattern` project slices headless to a 94 KB `plate_1.gcode`, exit 0.
+
+Support is narrow in this increment: steps whose asset is already a complete
+project (`project-template`, e.g. the pressure-advance pattern). Bare-model
+steps (temperature/flow towers) need parameterized project generation, and
+resolving an **arbitrary** user printer's presets from Orca's `inherits` chains
+(`resolvePrinterPreset`) is the following increment — until then an assembled
+project carries the template's own printer plus the calibrated filament values.
+
 ### Relationship to existing code
 
 The automated session **extends the existing `CalibrationProject`** — it is not a
