@@ -1,11 +1,13 @@
 import { h, clear, field, numberInput, toast, confirmDialog, download } from './dom';
-import { loadSettings, saveSettings } from '../storage/store';
+import { DEFAULT_SETTINGS, loadSettings, saveSettings } from '../storage/store';
 import { exportAll, importBackup } from '../export/backup';
 import { applyTheme } from '../app';
 import { idb } from '../storage/db';
 import { loadExperimentalFeatures, saveExperimentalFeatures } from '../slicerIntegration/featureFlags';
 import * as bridge from '../slicerIntegration/bridge';
 import { backupDetectedPresetLibraries, totalFileCount } from '../slicerIntegration/libraryBackup';
+import { slicerDisplayName } from '../slicerIntegration/registry';
+import type { IntegrationSlicerId } from '../slicerIntegration/types';
 
 /**
  * Render a backup timestamp in the local time of the machine running the app.
@@ -17,6 +19,28 @@ function formatBackupTime(createdAt: string): string {
   const d = new Date(createdAt);
   if (Number.isNaN(d.getTime())) return createdAt; // fall back to raw string
   return d.toLocaleString();
+}
+
+/**
+ * Turn the "max-flow safety margin (%)" box into the stored `mvsSafetyMargin`
+ * factor (headroom 15 % → 0.85).
+ *
+ * Read defensively, because this number scales the maximum volumetric flow the
+ * app recommends. `min`/`max` on an <input type="number"> do NOT clamp what a
+ * user types — they only mark the field invalid — so the raw box could hand
+ * back "500" (stored as -4, a negative flow limit) or "" (silently meaning
+ * "0 % headroom", removing the safety margin). Anything outside the 0–50 %
+ * the field offers is clamped, and anything unreadable falls back to the
+ * default instead of being invented. This is the same range `importBackup`
+ * enforces on a backup file: the app must not be able to persist a value its
+ * own import path would throw out.
+ */
+export function safetyMarginFromHeadroomPercent(raw: string): number {
+  if (!raw.trim()) return DEFAULT_SETTINGS.mvsSafetyMargin;
+  const pct = Number(raw);
+  if (!Number.isFinite(pct)) return DEFAULT_SETTINGS.mvsSafetyMargin;
+  const clamped = Math.min(50, Math.max(0, pct));
+  return Number((1 - clamped / 100).toFixed(4));
 }
 
 export function renderSettings(root: HTMLElement): void {
@@ -37,7 +61,7 @@ export function renderSettings(root: HTMLElement): void {
       theme: theme.value as typeof s.theme,
       largeText: largeText.checked,
       defaultMode: mode.value as typeof s.defaultMode,
-      mvsSafetyMargin: 1 - Number(margin.value) / 100
+      mvsSafetyMargin: safetyMarginFromHeadroomPercent(margin.value)
     };
     saveSettings(next);
     applyTheme();
@@ -154,10 +178,28 @@ export function clearAppLocalStorage(): number {
   return ours.length;
 }
 
-/** Delete every trace of this app's own data from this device. */
+/** Every IndexedDB store this app owns (see src/storage/db.ts). */
+const APP_IDB_STORES = ['projects', 'printers', 'photos'] as const;
+
+/**
+ * Delete every trace of this app's own data from this device.
+ *
+ * IndexedDB has no cross-store clear, so this is one transaction per store.
+ * Each is attempted even when an earlier one failed: the user asked for
+ * EVERYTHING to go, and stopping at the first failure left them with almost
+ * all of it plus an error that did not say what survived. Anything that could
+ * not be erased is named in the thrown error, which the Danger zone shows.
+ */
 export async function eraseAllLocalData(): Promise<void> {
-  await idb.clear('projects'); await idb.clear('printers'); await idb.clear('photos');
-  clearAppLocalStorage();
+  const failures: string[] = [];
+  for (const store of APP_IDB_STORES) {
+    try { await idb.clear(store); } catch (err) { failures.push(`${store} (${String(err)})`); }
+  }
+  try { clearAppLocalStorage(); } catch (err) { failures.push(`settings (${String(err)})`); }
+  if (failures.length) {
+    throw new Error(
+      `Everything else was erased, but this could NOT be deleted and is still on this device: ${failures.join('; ')}.`);
+  }
 }
 
 /**
@@ -185,9 +227,9 @@ function dangerZoneCard(): HTMLElement {
       try {
         await eraseAllLocalData();
       } catch (err) {
-        // Storage can refuse the clear. Say so rather than reloading into what
-        // looks like a wiped app while some of the data is still there.
-        toast(`Erase failed — some data may still be here. ${String(err)}`, 'error');
+        // Storage can refuse the clear. Say exactly what survived rather than
+        // reloading into what looks like a wiped app while data is still there.
+        toast(`Erase incomplete. ${String(err)}`, 'error');
         return;
       }
       toast('All local data erased.', 'info');
@@ -239,7 +281,86 @@ function experimentalCard(): HTMLElement {
   );
 }
 
-function slicerBackupsCard(): HTMLElement {
+/**
+ * Show what a failed restore had already changed — permanently, until the user
+ * dismisses it or leaves the page.
+ *
+ * A restore that stops part-way leaves the preset library half old and half
+ * new, and the backend's report of exactly which files were already reverted is
+ * the only way to finish the job by hand. That report runs to dozens of lines;
+ * a 3.5-second toast collapsed it into an unreadable block and then threw it
+ * away. Install failures already get a panel that stays on screen — this
+ * matches it.
+ */
+export function reportRestoreFailure(host: HTMLElement, detail: string): HTMLElement {
+  const running = detail.includes('SLICER_RUNNING');
+  const panel = h('div', { class: 'callout callout-bad' },
+    h('p', { class: 'co-title' }, running ? 'The slicer is still open' : 'Restore stopped part-way'),
+    h('p', {}, running
+      ? 'Nothing was changed. The slicer holds its preset files open and rewrites them when it exits, so a restore has to wait until it is closed. Close it, then press Restore again.'
+      : 'Some files were already put back and some were not. Close the slicer and run this restore again — it is safe to repeat and will finish the remaining files.'),
+    h('details', { class: 'advanced' },
+      h('summary', {}, 'Exactly what was changed'),
+      h('pre', { style: 'white-space:pre-wrap;max-height:16rem;overflow:auto;user-select:text' }, detail)),
+    h('div', { class: 'btn-row' },
+      h('button', {
+        class: 'btn btn-sm',
+        onClick: () => { void navigator.clipboard?.writeText(detail); }
+      }, 'Copy list'),
+      h('button', { class: 'btn btn-sm btn-ghost', onClick: () => panel.remove() }, 'Dismiss')));
+  host.prepend(panel);
+  return panel;
+}
+
+/**
+ * Restore one slicer preset backup, addressed by the (slicer, id) pair.
+ *
+ * A restore rewrites the exact files an open slicer holds — and Orca and Bambu
+ * Studio write their whole user preset library back out when they exit, so a
+ * restore performed underneath a live slicer is silently undone minutes later.
+ * The install path has always refused to run in that state; this holds the same
+ * line, with the same "Check again" loop, so the user is stopped BEFORE
+ * anything is written rather than left reading an error afterwards.
+ *
+ * The check is advisory — the slicer can still be launched between it and the
+ * write — so the backend refuses again, and that refusal lands on the panel
+ * below rather than in a toast that expires.
+ */
+export async function restoreSlicerBackup(host: HTMLElement, b: bridge.RawBackupSummary): Promise<void> {
+  const name = slicerDisplayName(b.slicer_id as IntegrationSlicerId);
+  const ok = await confirmDialog({
+    title: 'Restore this backup?',
+    body: `Restores the ${name} files covered by “${b.installed_profile_name}” exactly as they were when this backup was made (${b.file_count} file(s)). Files this backup recorded as not-yet-existing will be removed. Close ${name} first — PerfectFit will refuse to restore while it is open.`,
+    confirmLabel: 'Restore'
+  });
+  if (!ok) return;
+
+  for (;;) {
+    let running = false;
+    try {
+      running = await bridge.detectRunningSlicerProcess(b.slicer_id as IntegrationSlicerId);
+    } catch {
+      // Native check unavailable (older build, unknown slicer id) — the
+      // restore command re-checks before it writes anything.
+    }
+    if (!running) break;
+    const again = await confirmDialog({
+      title: `${name} is currently open`,
+      body: `Close ${name} before restoring these presets. It holds the preset files open and writes its own copy back out when it exits, which would undo the restore without telling you. Click “Check again” after closing it.`,
+      confirmLabel: 'Check again'
+    });
+    if (!again) return;
+  }
+
+  try {
+    const r = await bridge.restoreProfileBackup(b.slicer_id, b.backup_id);
+    toast(`Restored ${r.restored_files.length} file(s), removed ${r.deleted_files.length}.`, 'success');
+  } catch (e) {
+    reportRestoreFailure(host, String(e));
+  }
+}
+
+export function slicerBackupsCard(): HTMLElement {
   const card = h('div', { class: 'card' },
     h('h2', {}, 'Slicer profile backups'),
     h('p', { class: 'field-help' }, 'Backups of your SLICER\'s preset files (Orca/Bambu filament, printer, and process profiles) — separate from the app data backup above. Before installing a profile, PerfectFit backs up the affected slicer files with checksums; you can also snapshot your entire user preset library at any time. Restore puts the original files back exactly as they were.'));
@@ -248,6 +369,11 @@ function slicerBackupsCard(): HTMLElement {
     return card;
   }
   const host = h('div', {});
+  // The half-restored report lives OUTSIDE the region `refresh()` clears. It is
+  // the only record of which presets were already reverted, and rebuilding the
+  // table — which deleting or making any other backup does — would otherwise
+  // wipe it without the user ever dismissing it.
+  const reportHost = h('div', {});
   const backupNowBtn = h('button', {
     class: 'btn', onClick: async () => {
       backupNowBtn.disabled = true;
@@ -265,7 +391,7 @@ function slicerBackupsCard(): HTMLElement {
       }
     }
   }, '🗄 Back up all slicer presets now') as HTMLButtonElement;
-  card.append(h('div', { class: 'btn-row' }, backupNowBtn), host);
+  card.append(h('div', { class: 'btn-row' }, backupNowBtn), reportHost, host);
   const refresh = async () => {
     clear(host);
     let backups;
@@ -289,21 +415,14 @@ function slicerBackupsCard(): HTMLElement {
         h('td', {}, String(b.file_count)),
         h('td', {}, h('div', { class: 'btn-row', style: 'margin-top:0' },
           h('button', {
-            class: 'btn btn-sm', onClick: () => bridge.openBackupDirectory(b.backup_id).catch(e => toast(String(e), 'error'))
+            // A backup id is unique only inside one slicer's folder, so every
+            // one of these addresses the (slicer, id) PAIR — resolving by id
+            // alone opened, restored, or deleted whichever slicer read_dir
+            // happened to list first.
+            class: 'btn btn-sm', onClick: () => bridge.openBackupDirectory(b.slicer_id, b.backup_id).catch(e => toast(String(e), 'error'))
           }, '📂 Open'),
           h('button', {
-            class: 'btn btn-sm', onClick: async () => {
-              const ok = await confirmDialog({
-                title: 'Restore this backup?',
-                body: `Restores the slicer files covered by “${b.installed_profile_name}” exactly as they were when this backup was made (${b.file_count} file(s)). Files this backup recorded as not-yet-existing will be removed. Close the slicer first.`,
-                confirmLabel: 'Restore'
-              });
-              if (!ok) return;
-              try {
-                const r = await bridge.restoreProfileBackup(b.backup_id);
-                toast(`Restored ${r.restored_files.length} file(s), removed ${r.deleted_files.length}.`, 'success');
-              } catch (e) { toast(`Restore failed: ${String(e)}`, 'error'); }
-            }
+            class: 'btn btn-sm', onClick: () => void restoreSlicerBackup(reportHost, b)
           }, '⟲ Restore'),
           h('button', {
             class: 'btn btn-sm btn-danger', title: 'Delete this backup', 'aria-label': `Delete the backup made ${formatBackupTime(b.created_at)}`,
@@ -314,7 +433,7 @@ function slicerBackupsCard(): HTMLElement {
                 confirmLabel: 'Delete backup', danger: true
               });
               if (!ok) return;
-              try { await bridge.deleteProfileBackup(b.backup_id); await refresh(); }
+              try { await bridge.deleteProfileBackup(b.slicer_id, b.backup_id); await refresh(); }
               catch (e) { toast(String(e), 'error'); }
             }
           }, '🗑')

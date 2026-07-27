@@ -575,6 +575,28 @@ function renderConfigureStage(
         h('label', { class: 'check-item', style: 'align-self:end' }, allCb, h('span', {}, 'Apply to ALL slots (only if the calibrated values hold for every tool/hotend)'))));
   }
 
+  // A base preset narrower than the machine cannot address the nozzle this
+  // project calibrated: Orca-family slicers fall back to slot 1 for every
+  // higher index, so one nozzle's calibration would drive all of them. The
+  // slot selector above is hidden in exactly this case (it needs >1 slot), so
+  // say it here — validateGeneratedProfile blocks it in the next stage anyway,
+  // but the user should not have to press Generate to find out.
+  {
+    const baseSlots = base.extruderCount;
+    const calibratedNozzle = project.nozzleIndex ?? 0;
+    const physicalNozzles = printer?.nozzles?.length ?? 0;
+    if (baseSlots <= calibratedNozzle) {
+      const nozzleLabel = printer?.nozzles?.[calibratedNozzle]?.label;
+      card.append(h('div', { class: 'callout callout-bad' },
+        h('p', { class: 'co-title' }, `This base preset cannot hold a value for nozzle ${calibratedNozzle + 1}`),
+        h('p', {}, `It carries only ${baseSlots} value slot(s), but this project calibrated nozzle ${calibratedNozzle + 1}${nozzleLabel ? ` (${nozzleLabel})` : ''}. Orca-family slicers apply a single-slot value to EVERY nozzle, so installing it would give every nozzle — including the main one — nozzle ${calibratedNozzle + 1}'s calibration. Go back and pick a base preset for this machine that carries ${calibratedNozzle + 1} value slots.`)));
+    } else if (physicalNozzles > baseSlots) {
+      card.append(h('div', { class: 'callout callout-warn' },
+        h('p', { class: 'co-title' }, 'This base preset is narrower than the printer'),
+        h('p', {}, `It carries ${baseSlots} value slot(s) but the printer profile declares ${physicalNozzles} physical nozzles. The slicer will apply slot 1's values to every nozzle, including ones this project did not calibrate.`)));
+    }
+  }
+
   // Bambu Studio ignores the native pressure_advance field for Bambu machines,
   // so offer to bake the calibrated K into the filament start g-code as M900.
   // Orca-family targets honor the native field and never see this option.
@@ -819,7 +841,9 @@ function renderResultStage(
       h('div', { class: 'btn-row' },
         h('button', { class: 'btn btn-primary', onClick: () => bridge.openSlicer(gen.slicerId).catch(e => toast(String(e), 'error')) }, `▶ Launch ${st.installation!.displayName}`),
         h('button', { class: 'btn', onClick: () => bridge.openProfileDirectory(st.location!.path + '\\filament').catch(() => bridge.openProfileDirectory(st.location!.path)).catch(e => toast(String(e), 'error')) }, '📂 Open profile folder'),
-        res.backupId ? h('button', { class: 'btn', onClick: () => bridge.openBackupDirectory(res.backupId!).catch(e => toast(String(e), 'error')) }, '🗄 View backup') : null,
+        // Backup ids repeat across slicers, so the slicer this install targeted
+        // is part of the address.
+        res.backupId ? h('button', { class: 'btn', onClick: () => bridge.openBackupDirectory(gen.slicerId, res.backupId!).catch(e => toast(String(e), 'error')) }, '🗄 View backup') : null,
         h('a', { class: 'btn', href: `#/report/${project.id}` }, '📄 View calibration report'),
         h('button', { class: 'btn btn-ghost', onClick: () => { states.delete(project.id); rerender(); } }, '↺ Create another profile'))
     ));

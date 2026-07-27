@@ -15,8 +15,10 @@
 // step with the project's own record, and let the user override a value on
 // purpose.
 //
-// Everything in this module runs with the experimental `automatedCalibration`
-// flag off. The flag gates engines and slicing, not data shapes.
+// This module reads and writes data shapes only. It never slices, launches an
+// engine, or touches a slicer preset file — the assisted auto-prepare path that
+// would have done so was deleted before release, so `slicerMode` here is always
+// `manual_export`: the user prints and measures, and the app records.
 // ---------------------------------------------------------------------------
 
 import type {

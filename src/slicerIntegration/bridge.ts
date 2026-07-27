@@ -144,20 +144,27 @@ export function listProfileBackups(): Promise<RawBackupSummary[]> {
   return invoke('list_profile_backups');
 }
 
-export function getBackupManifest(backupId: string): Promise<ProfileBackupManifest> {
-  return invoke('get_profile_backup_manifest', { backupId });
+// A backup id is unique only inside one slicer's folder — backing up several
+// slicers in one pass mints the same id for each — so every one of these
+// addresses a backup by the (slicerId, backupId) PAIR. Both halves are already
+// in every RawBackupSummary the caller is holding.
+
+export function getBackupManifest(slicerId: string, backupId: string): Promise<ProfileBackupManifest> {
+  return invoke('get_profile_backup_manifest', { slicerId, backupId });
 }
 
-export function restoreProfileBackup(backupId: string): Promise<{ restored_files: string[]; deleted_files: string[] }> {
-  return invoke('restore_profile_backup', { backupId });
+export function restoreProfileBackup(
+  slicerId: string, backupId: string
+): Promise<{ restored_files: string[]; deleted_files: string[] }> {
+  return invoke('restore_profile_backup', { slicerId, backupId });
 }
 
-export function deleteProfileBackup(backupId: string): Promise<void> {
-  return invoke('delete_profile_backup', { backupId });
+export function deleteProfileBackup(slicerId: string, backupId: string): Promise<void> {
+  return invoke('delete_profile_backup', { slicerId, backupId });
 }
 
-export function openBackupDirectory(backupId: string): Promise<void> {
-  return invoke('open_backup_directory', { backupId });
+export function openBackupDirectory(slicerId: string, backupId: string): Promise<void> {
+  return invoke('open_backup_directory', { slicerId, backupId });
 }
 
 export function saveExportedProfile(defaultFileName: string, presetJson: string): Promise<string | null> {

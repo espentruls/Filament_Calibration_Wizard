@@ -259,6 +259,12 @@ function presetKeyLabel(key: string): string {
  * - Per-extruder arrays keep their shape. A patch writes only the target
  *   extruder index unless applyToAllExtruders is set; other positions keep
  *   their original value (including "nil").
+ * - When the base preset has FEWER value slots than the calibrated nozzle's
+ *   index (the single-slot case included), it cannot address that nozzle at
+ *   all: Orca-family `get_at(i)` falls back to slot 0 for any index past the
+ *   end of the array, so whatever is written is what EVERY nozzle reads.
+ *   Nothing calibrated is written and every patch is reported in
+ *   `skippedFields` — see `baseCannotAddressNozzle` below.
  * - When a patched key is missing (delta preset), it is added as an array
  *   sized to the preset's extruder count, with "nil" — the no-filament-override
  *   sentinel — in untouched positions. Settings where "nil" is invalid
@@ -296,6 +302,16 @@ export function cloneAndPatch(args: {
   patches: CalibratedFieldPatch[];
   targetExtruderIndex: number;
   applyToAllExtruders: boolean;
+  /**
+   * The PHYSICAL nozzle the project calibrated (`project.nozzleIndex`), which
+   * is NOT the same thing as `targetExtruderIndex`: callers clamp the target to
+   * the base preset's slot count (see `defaultTargetExtruder`), so a project
+   * that calibrated nozzle 2 arrives here as target 0 on a single-slot base.
+   * Without this the clamp is invisible and the aux nozzle's calibration is
+   * written into the slot the MAIN nozzle reads. Defaults to
+   * `targetExtruderIndex` for callers that do not track a physical nozzle.
+   */
+  calibratedNozzleIndex?: number;
 }): ClonePatchResult {
   const { base, newName, patches, targetExtruderIndex, applyToAllExtruders } = args;
   const src = base.profile.rawProfile as PresetJson;
@@ -385,7 +401,49 @@ export function cloneAndPatch(args: {
 
   const skipped: SkippedFieldNote[] = [];
 
+  // The nozzle the user actually calibrated, before any caller-side clamping.
+  const calibratedNozzle = args.calibratedNozzleIndex ?? targetExtruderIndex;
+  /**
+   * The base preset has fewer value slots than the calibrated nozzle needs, so
+   * it CANNOT hold a value addressed to that nozzle — the single-slot preset
+   * targeting nozzle 2 is the common case. Orca-family `get_at(i)` falls back
+   * to slot 0 for every index past the end of a per-extruder array, so anything
+   * written into the slots that DO exist is what every nozzle on the machine
+   * reads, including the ones this project never calibrated. On a Bambu X2D
+   * that means a bowden auxiliary pressure advance (0.5–1.0) landing on the
+   * direct-drive main nozzle, whose own band is 0–0.1, and a bowden retraction
+   * distance landing on a direct-drive feed.
+   *
+   * There is no slot to target and no neutral value to put beside it, so
+   * NOTHING calibrated is written; every patch and companion is reported in
+   * `skippedFields` instead. Guessing a value here would be exactly the silent
+   * cross-nozzle write the multi-slot rule below already refuses to make.
+   */
+  const baseCannotAddressNozzle = !applyToAllExtruders && calibratedNozzle > extruders - 1;
+  const cannotAddressReason = (label: string, key: string, valueNote: string): string =>
+    `${label} (${key}) was NOT written: this base preset carries only ${extruders} value slot(s), so it cannot hold a value for nozzle ${calibratedNozzle + 1} — the nozzle this project calibrated. Orca-family slicers read slot 1 for every nozzle a preset has no slot for, so ${valueNote} would have been applied to EVERY nozzle, including the main one. Pick a base preset for this machine that carries ${calibratedNozzle + 1} value slots, or set ${key} by hand in the slicer for nozzle ${calibratedNozzle + 1}.`;
+
   for (const patch of patches) {
+    // Withhold everything before any slot maths: no honest write exists here.
+    if (baseCannotAddressNozzle) {
+      const after = formatPresetNumber(patch.value) + (patch.valueSuffix ?? '');
+      skipped.push({
+        presetKey: patch.presetKey, label: patch.label,
+        reason: cannotAddressReason(patch.label, patch.presetKey,
+          `${after}${patch.unit ? ` ${patch.unit}` : ''}`)
+      });
+      // Companions are this value's plumbing; withheld with it, and reported
+      // with it, so the skipped list matches the file exactly.
+      for (const comp of patch.companions ?? []) {
+        skipped.push({
+          presetKey: comp.presetKey, label: presetKeyLabel(comp.presetKey),
+          reason: cannotAddressReason(presetKeyLabel(comp.presetKey), comp.presetKey, `"${comp.value}"`) +
+            ` It belongs to ${patch.label} (${patch.presetKey}), which was withheld for the same reason.`
+        });
+      }
+      continue;
+    }
+
     const key = patch.presetKey;
     const after = formatPresetNumber(patch.value) + (patch.valueSuffix ?? '');
     const existing = data[key];
@@ -402,7 +460,19 @@ export function cloneAndPatch(args: {
         presetKey: key, label: patch.label,
         reason: `${patch.label} (${key}) was NOT written: the base preset does not set it, so nozzle ${others} has no existing value to keep and this setting does not accept the "nil" (no override) sentinel. Writing ${after}${patch.unit ? ` ${patch.unit}` : ''} would have applied nozzle ${idx + 1}'s calibration to nozzle ${others} as well. Pick a base preset that already sets ${key}, set it by hand in the slicer for nozzle ${idx + 1}, or re-run with "apply to all extruders" if every nozzle really should use this value.`
       });
-      continue; // companions belong to this value; they must not be written either
+      // Companions are this value's plumbing (e.g. the flag that switches
+      // pressure advance on). With the value itself withheld they must not be
+      // written either — and each one has to be REPORTED, or the preview and
+      // the install summary claim one field was left out when two were. The
+      // guarantee this whole rule rests on is that the reported list matches
+      // exactly what lands in the file.
+      for (const comp of patch.companions ?? []) {
+        skipped.push({
+          presetKey: comp.presetKey, label: presetKeyLabel(comp.presetKey),
+          reason: `${presetKeyLabel(comp.presetKey)} (${comp.presetKey}) was NOT written either: it belongs to ${patch.label} (${key}), which was withheld above. ${comp.presetKey} is left exactly as the base preset had it. Setting ${patch.label} by hand in the slicer for nozzle ${idx + 1} covers both.`
+        });
+      }
+      continue;
     }
 
     let arr: string[];

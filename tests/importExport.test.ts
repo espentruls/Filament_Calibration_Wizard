@@ -308,6 +308,42 @@ describe('settings in a full backup', () => {
     expect(loadSettings().theme).toBe('dark');
   });
 
+  // Settings live in localStorage, outside the IndexedDB transaction, so they
+  // are written AFTER the data has committed. If that write throws (quota,
+  // Safari private mode, a locked-down origin) the import must not throw with
+  // it: the caller catches, tells the user "Import failed", and the retry they
+  // are invited to make imports every project a SECOND time — colliding ids get
+  // fresh ones, so it duplicates rather than overwrites.
+  it('reports a post-commit settings-write failure instead of throwing away a committed import', async () => {
+    const printer = makePrinter();
+    await savePrinter(printer);
+    await saveProject(makeProject(printer.id));
+    saveSettings({ theme: 'dark', largeText: true, defaultMode: 'expert', mvsSafetyMargin: 0.7 });
+    const json = await exportAll(false);
+
+    await idb.clear('projects');
+    await idb.clear('printers');
+
+    const realSetItem = localStorage.setItem;
+    localStorage.setItem = () => { throw new Error('QuotaExceededError'); };
+    let res;
+    try {
+      res = await importBackup(json);
+    } finally {
+      localStorage.setItem = realSetItem;
+    }
+
+    // The data DID commit, so the result must say so — anything else invites
+    // the duplicating retry.
+    expect(res.ok).toBe(true);
+    expect(res.projectsImported).toBe(1);
+    expect(await listProjects()).toHaveLength(1);
+    // …and it must not claim the settings landed when they did not.
+    expect(res.settingsRestored).toBe(false);
+    expect(res.message).toMatch(/settings/i);
+    expect(res.message).not.toMatch(/Settings were restored/);
+  });
+
   it('leaves settings alone for a single-project file that carries none', async () => {
     saveSettings({ theme: 'light', largeText: true, defaultMode: 'expert', mvsSafetyMargin: 0.9 });
     const printer = makePrinter();

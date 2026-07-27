@@ -5,7 +5,7 @@ import { confidenceScore, confidenceLabel } from '../logic/confidence';
 import { recommendationsForProject } from '../logic/recommendations';
 import { exportProject } from '../export/backup';
 import { copyFinalsToClipboard } from './report';
-import { STEP_DEPENDENCY_WARNINGS, nozzleBadgeLabel } from '../logic/ranges';
+import { STEP_DEPENDENCY_WARNINGS, nozzleBadgeLabel, flexibleRetractionCaution } from '../logic/ranges';
 import { getMaterial } from '../data/materials';
 import { presetBackupCallout } from './presetBackupPrompt';
 import type { CalibrationProject, CalibrationId } from '../types';
@@ -316,8 +316,14 @@ function finalsSummary(p: CalibrationProject, sid: CalibrationId): string {
       return f.flowRatio !== undefined ? `Flow ratio: ${f.flowRatio}` : '';
     case 'pressure-advance':
       return f.pressureAdvance !== undefined ? `PA: ${f.pressureAdvance}` : '';
-    case 'retraction':
-      return f.retractionDistance !== undefined ? `Retraction: ${f.retractionDistance} mm${f.retractionSpeed ? ` @ ${f.retractionSpeed} mm/s` : ''}` : '';
+    case 'retraction': {
+      if (f.retractionDistance === undefined) return '';
+      // Same one cap the tower planner, the compute step, the report and the
+      // write path use — a flexible retraction this long must not be quoted
+      // back to the user as a settled result.
+      const caution = flexibleRetractionCaution(p.filament.material, f.retractionDistance);
+      return `Retraction: ${f.retractionDistance} mm${f.retractionSpeed ? ` @ ${f.retractionSpeed} mm/s` : ''}${caution ? ` — ⚠ ${caution}` : ''}`;
+    }
     case 'max-volumetric-speed':
       return f.maxVolumetricSpeed !== undefined ? `Max volumetric speed: ${f.maxVolumetricSpeed} mm³/s` : '';
     case 'shrinkage':

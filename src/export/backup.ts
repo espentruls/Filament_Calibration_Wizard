@@ -205,10 +205,25 @@ export async function importBackup(json: string, options: ImportOptions = {}): P
 
   // Settings live in localStorage, outside the transaction above, so they are
   // applied only once the data is known to be committed.
+  //
+  // That write can still fail on its own (quota, private-browsing storage,
+  // a locked-down origin) — and by then the projects and printers ARE in the
+  // database. Letting it throw would surface as "Import failed" and invite a
+  // retry that imports every project a second time (a colliding project id is
+  // given a fresh one, so the retry duplicates rather than overwrites). The
+  // failure is therefore reported as part of an otherwise successful import.
   let settingsRestored = false;
+  let settingsError: string | null = null;
   if (options.restoreSettings !== false && migrated.settings) {
     const clean = sanitizeSettings(migrated.settings);
-    if (clean) { saveSettings(clean); settingsRestored = true; }
+    if (clean) {
+      try {
+        saveSettings(clean);
+        settingsRestored = true;
+      } catch (err) {
+        settingsError = String(err);
+      }
+    }
   }
 
   const parts = [`${projectsImported} project(s)`, `${printersImported} printer(s)`];
@@ -218,6 +233,10 @@ export async function importBackup(json: string, options: ImportOptions = {}): P
   if (printersSkipped) message += ` ${printersSkipped} printer profile(s) already existed and were left unchanged — to restore those over the top (for example to repair a damaged profile), use Settings → Restore from backup.`;
   if (photosFailed) message += ` ${photosFailed} photo(s) could not be read from the file and were NOT restored.`;
   if (settingsRestored) message += ' Settings were restored.';
+  if (settingsError) {
+    message += ` Your projects and printers were restored, but the app settings in the file could NOT be written to this browser's storage`
+      + ` (${settingsError}) — they were left exactly as they are. Do NOT import the file again; set them by hand in Settings instead.`;
+  }
 
   return {
     ok: true, message,

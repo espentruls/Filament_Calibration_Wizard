@@ -2,7 +2,7 @@ import { h } from './dom';
 import { getProject, getPrinter } from '../storage/store';
 import { getMaterial } from '../data/materials';
 import { confidenceScore } from '../logic/confidence';
-import { nozzleBadgeLabel } from '../logic/ranges';
+import { nozzleBadgeLabel, flexibleRetractionCaution } from '../logic/ranges';
 import { gaugeEl, projectGauges } from './dashboard';
 import QRCode from 'qrcode';
 
@@ -43,7 +43,11 @@ export async function renderCard(root: HTMLElement, id: string): Promise<void> {
   if (f.highFlowTemp !== undefined) vals.push(['High-flow temp', `${f.highFlowTemp} °C`]);
   if (f.flowRatio !== undefined) vals.push(['Flow ratio', String(f.flowRatio)]);
   if (f.pressureAdvance !== undefined) vals.push(['Pressure advance', String(f.pressureAdvance)]);
-  if (f.retractionDistance !== undefined) vals.push(['Retraction', `${f.retractionDistance} mm${f.retractionSpeed ? ` @ ${f.retractionSpeed} mm/s` : ''}`]);
+  // This card is carried to the machine, so an over-cap flexible retraction has
+  // to carry its caution with it — the desktop installer that would refuse the
+  // value is not in the room.
+  const retractCaution = flexibleRetractionCaution(p.filament.material, f.retractionDistance);
+  if (f.retractionDistance !== undefined) vals.push(['Retraction', `${f.retractionDistance} mm${f.retractionSpeed ? ` @ ${f.retractionSpeed} mm/s` : ''}${retractCaution ? ' ⚠' : ''}`]);
   if (f.maxVolumetricSpeed !== undefined) vals.push(['Max vol. speed', `${f.maxVolumetricSpeed} mm³/s`]);
   if (f.shrinkagePercent !== undefined) vals.push(['Shrinkage (XY)', `${f.shrinkagePercent}%`]);
 
@@ -89,6 +93,10 @@ export async function renderCard(root: HTMLElement, id: string): Promise<void> {
             h('th', { style: `width:200px;${CELL}` }, k),
             h('td', { style: CELL }, h('span', { class: 'value-chip' }, v))))
           : [h('tr', {}, h('td', { colspan: '2', style: CELL }, 'No calibrated values yet — finish some tests first.'))])),
+
+      retractCaution ? h('div', { class: 'callout callout-bad', style: 'margin:.35rem 0' },
+        h('p', { class: 'co-title' }, `⚠ Retraction ${f.retractionDistance} mm is too long for ${mat.label}`),
+        h('p', {}, retractCaution)) : null,
 
       p.notes ? h('div', { class: 'panel', style: 'margin:.35rem 0' },
         h('span', { class: 'readout-label' }, 'Notes'),

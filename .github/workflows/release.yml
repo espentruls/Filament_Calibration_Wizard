@@ -62,6 +62,80 @@ jobs:
       - name: Validate printer database is up to date
         run: npm run validate:printers
 
+      # Five places state the version: package.json, src-tauri/Cargo.toml,
+      # src-tauri/tauri.conf.json, the top entry of CHANGELOG.md, and the tag
+      # being released. An installer that reports one number while its notes and
+      # changelog report another is a release nobody can reason about — and the
+      # notes below are generated from the tag for the same reason. They are
+      # checked to agree here instead of being kept in step by hand.
+      - name: Check the version agrees everywhere
+        shell: bash
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          set -euo pipefail
+          pkg=$(node -p "require('./package.json').version")
+          conf=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          cargo=$(sed -n 's/^version = "\(.*\)"$/\1/p' src-tauri/Cargo.toml | head -1)
+          chg=$(sed -n 's/^## \([0-9][0-9A-Za-z.+-]*\).*/\1/p' CHANGELOG.md | head -1)
+          tag="${REF_NAME#v}"
+          echo "package.json      $pkg"
+          echo "tauri.conf.json   $conf"
+          echo "Cargo.toml        $cargo"
+          echo "CHANGELOG.md      $chg"
+          echo "tag               $tag (ref_type=$REF_TYPE)"
+          ok=1
+          for v in "$conf" "$cargo" "$chg"; do
+            [ -n "$v" ] && [ "$v" = "$pkg" ] || ok=0
+          done
+          if [ "$REF_TYPE" = "tag" ] && [ "$tag" != "$pkg" ]; then ok=0; fi
+          if [ "$ok" -ne 1 ]; then
+            echo "::error::Version mismatch. package.json, src-tauri/Cargo.toml, src-tauri/tauri.conf.json, the top CHANGELOG.md entry and the release tag must all state the same version."
+            exit 1
+          fi
+          echo "All five agree on $pkg."
+
+      # The check above covers the five places that state the version as a
+      # version. Two docs also state it INSIDE an installer filename, in a
+      # command the reader is meant to copy: README.md's Linux/Wayland
+      # workaround (`PerfectFit X2D_<version>_amd64.AppImage`) and "Install on
+      # Mac.md"'s quarantine command (`PerfectFit X2D_<version>_universal.dmg`).
+      # Nothing generates those, so they used to rot silently on the next bump
+      # and hand a reader a command naming a file they do not have. Both now use
+      # a `<version>` placeholder; this step fails if a literal version comes
+      # back and disagrees with package.json.
+      - name: Check installer filenames in the docs have not gone stale
+        shell: bash
+        run: |
+          set -euo pipefail
+          pkg=$(node -p "require('./package.json').version")
+          ok=1
+          for f in README.md "Install on Mac.md"; do
+            while IFS= read -r v; do
+              [ -n "$v" ] || continue
+              if [ "$v" = "$pkg" ]; then
+                echo "$f names installer version $v (matches package.json)"
+              else
+                echo "::error file=$f::$f names an installer 'PerfectFit X2D_${v}_...' but package.json says $pkg. Use the <version> placeholder, or update the filename."
+                ok=0
+              fi
+            done < <(grep -oE 'PerfectFit X2D_[0-9]+\.[0-9]+\.[0-9]+' "$f" | sed 's/^.*_//' | sort -u)
+          done
+          [ "$ok" -eq 1 ]
+          echo "No stale installer filename in README.md or Install on Mac.md."
+
+      # A release attaches installers people run on their own machines, and this
+      # app writes into their slicer's real preset directory. Nothing may be
+      # packaged before both suites have passed ON THIS PLATFORM: the Rust half
+      # is where the file writing, the atomic replace and the backup live, and it
+      # is the half whose behaviour differs most per OS.
+      - name: Run the TypeScript test suite
+        run: npm test
+
+      - name: Run the Rust test suite
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
       - uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -69,7 +143,7 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: 'PerfectFit X2D ${{ github.ref_name }}'
           releaseBody: |
-            # PerfectFit X2D 2.0.0
+            # PerfectFit X2D ${{ github.ref_name }}
 
             A fork of [PerfectFit](https://github.com/tayloraaron078-tech/Filament_Calibration_Wizard)
             focused on **dual-nozzle printers** — in particular the Bambu Lab X2D, whose
@@ -102,9 +176,46 @@ jobs:
 
             ## Downloads
 
-            - **Windows: `.exe` NSIS installer** — download, run, done.
+            - **Windows: `.exe` NSIS installer.**
             - macOS: universal `.dmg` (Apple Silicon + Intel).
             - Linux: `.deb` and portable `.AppImage`.
+
+            **Read the next section before you run any of them** — none of these
+            are signed, and your operating system will say so in alarming wording.
+
+            ## ⚠ These installers are not signed
+
+            There is no paid code-signing certificate behind this project, so the
+            Windows `.exe` is **not code-signed** and the macOS `.dmg` is **not
+            notarized**. Your operating system will say so, in wording that sounds
+            like a malware detection. It is not one — it is the absence of a
+            signature, and you should treat any unsigned download, this one included,
+            as something you choose to trust rather than something vouched for.
+
+            **Windows.** SmartScreen shows "Windows protected your PC" on every
+            download. Click **More info**, then **Run anyway**. If the file is blocked
+            outright: right-click the `.exe` → **Properties** → tick **Unblock** →
+            **OK**, then run it.
+
+            **macOS.** Gatekeeper may refuse the app, or report the `.dmg` itself as
+            **"damaged and can't be opened"** — that message is what an un-notarized
+            disk image looks like, not a corrupt download. After dragging the app to
+            **Applications**: Control-click it → **Open** → **Open**. If that is
+            refused, **System Settings → Privacy & Security → Open Anyway**. If the
+            `.dmg` will not open at all, the quarantine flag has to be removed with a
+            one-line `xattr` command — that command, what it does and does not do, and
+            the full click-by-click steps with the exact dialogs are in
+            [Install on Mac.md](https://github.com/espentruls/Filament_Calibration_Wizard/blob/main/Install%20on%20Mac.md).
+
+            **Linux.** The `.AppImage` needs the execute bit: `chmod +x` it first.
+
+            **If you would rather not rely on any of that**, build from source —
+            `npm install && npm run tauri build` — and run a binary you produced
+            yourself.
+
+            Every asset here is built by the workflow in this repository, from the
+            tagged commit, with both test suites (TypeScript and Rust) passing on
+            each platform before anything is packaged.
 
             ## What this fork adds
 
@@ -133,20 +244,57 @@ jobs:
               for real caution, and the printable calibration card inverts to clean
               ink-on-white for the sheet you carry to the machine.
 
-            ## Fixes carried over from the review of upstream 1.1.3
+            ## Safety fixes
 
-            Ten verified defects, including one that blocked profile install and export for
+            Two adversarial audit rounds, aimed at "could this damage someone's property
+            or lose their data". Every defect was reproduced as broken before being
+            fixed, and proven fixed afterwards. The critical three: the preset **backup
+            system destroyed its own backups** when several files were backed up inside
+            the same second, leaving a replaced preset unrecoverable while reporting
+            success; a value calibrated for **one** nozzle was written to **every** nozzle
+            whenever the base preset did not already declare that key, invisibly — on a
+            dual-nozzle Bambu that put the bowden auxiliary's pressure advance onto the
+            direct-drive main nozzle; and first-layer nozzle temperature was never checked
+            against the printer's maximum, so 500 °C into a 240 °C printer validated
+            clean. Full list in
+            [CHANGELOG.md](https://github.com/espentruls/Filament_Calibration_Wizard/blob/main/CHANGELOG.md).
+
+            This is on top of the ten verified defects carried over from the review of
+            upstream 1.1.3 — including one that blocked profile install and export for
             every Bambu and stock base preset, per-extruder values leaking onto the wrong
             nozzle, and temperature ranges collapsing to zero width on temperature-limited
             printers.
 
+            ## Removed before release: the assisted "auto-prepare" path
+
+            The path that would have configured and sliced each calibration test for you
+            was **removed before release** — not merely switched off, and not left in the
+            binary with no way to reach it. No screen offers it, and the code that served
+            it is gone: the eight desktop commands behind it are no longer registered, and
+            the Rust and TypeScript modules implementing them are deleted rather than left
+            unreferenced. That second half matters, because a registered command is
+            callable from inside the app's webview whether or not a screen links to it —
+            and these ones assembled slicer projects and merged calibrated values into a
+            project configuration with no printer-limit and no plausibility check.
+            Deleting them removes the feature and the surface together.
+
+            It went rather than being finished because it could never have appeared on a
+            dual-nozzle printer at all, it reached one of ten steps, it drove OrcaSlicer
+            only — and it assembled the plate from the slicer's own template, so its
+            g-code described the template's machine rather than yours. The guided session
+            tells you exactly what to change and where; you make the change.
+
             ## Honest limitations
 
-            - Automated test *preparation* drives OrcaSlicer only — upstream treats Bambu
-              Studio as a manual handoff by design. For Bambu users the automation that
-              matters is preset installation, which writes calibrated values into a filament
-              preset per nozzle.
-            - The app never talks to your printer and never starts a print.
+            - The app never talks to your printer and never starts a print, and it does not
+              prepare or slice the test prints for you.
+            - Preset installation is the automation that ships: it writes calibrated values
+              into a filament preset, per nozzle, into your slicer's user preset directory —
+              backing up the affected files first, refusing to run while the slicer is open,
+              and never replacing an existing preset without explicit confirmation. It can
+              be turned off in **Settings → Experimental features**.
+            - Preset formats are version-volatile, so direct install is enabled only for
+              slicer versions verified for it.
             - Linux and macOS slicer detection are less exercised than Windows.
 
             Licensed AGPL-3.0, like the upstream project.

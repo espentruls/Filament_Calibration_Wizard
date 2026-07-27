@@ -1,18 +1,21 @@
 {
-  "name": "perfectfit-filament-calibration-wizard",
+  "name": "perfectfit-x2d-filament-calibration-wizard",
   "private": true,
   "version": "2.0.0",
-  "description": "PerfectFit — a local-first guided wizard for calibrating filament profiles for Orca Slicer and Bambu Studio.",
+  "description": "PerfectFit X2D — a local-first guided wizard for calibrating filament profiles for Orca Slicer and Bambu Studio, with dual-nozzle (Bambu Lab X2D) support.",
   "license": "AGPL-3.0-only",
-  "author": "Aaron Taylor",
+  "author": "espentruls",
+  "contributors": [
+    "Aaron Taylor (original PerfectFit, https://github.com/tayloraaron078-tech/Filament_Calibration_Wizard)"
+  ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/tayloraaron078-tech/Filament_Calibration_Wizard.git"
+    "url": "git+https://github.com/espentruls/Filament_Calibration_Wizard.git"
   },
   "bugs": {
-    "url": "https://github.com/tayloraaron078-tech/Filament_Calibration_Wizard/issues"
+    "url": "https://github.com/espentruls/Filament_Calibration_Wizard/issues"
   },
-  "homepage": "https://github.com/tayloraaron078-tech/Filament_Calibration_Wizard#readme",
+  "homepage": "https://github.com/espentruls/Filament_Calibration_Wizard#readme",
   "type": "module",
   "scripts": {
     "dev": "vite",

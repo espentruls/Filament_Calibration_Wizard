@@ -1,15 +1,180 @@
 # Changelog
 
-## 1.4.0 - Unreleased
+## 2.0.0 - 2026-07-27
 
-**Fork release.** This is a fork of PerfectFit that adds dual-nozzle (Bambu Lab
-X2D) support. It builds on upstream **1.3.2** and lists only what this fork adds
-on top of it — everything below is upstream's own history, unchanged. Fork
-releases are lateral additions to upstream's line, not a claim on upstream's
-version numbers. Research base for all X2D content:
+**First release of PerfectFit X2D — a fork.** It builds on upstream
+[PerfectFit](https://github.com/tayloraaron078-tech/Filament_Calibration_Wizard)
+**1.3.2** by Aaron Taylor and adds dual-nozzle (Bambu Lab X2D) support. Everything
+below the 1.3.2 heading is upstream's own history, unchanged and unclaimed.
+
+The version jumps to **2.0.0** rather than continuing upstream's numbering, for
+two reasons that are the same reason: this build is a *different application*
+from the one you may already have installed, and its own numbering says so.
+`package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` and the
+release workflow all carry 2.0.0.
+
+Research base for all X2D content:
 [docs/X2D_ENHANCEMENT_PLAN.md](docs/X2D_ENHANCEMENT_PLAN.md) (verified
 2026-07-20 against wiki.bambulab.com, forum.bambulab.com, and the
 BambuStudio GitHub tracker).
+
+### ⚠ Read first if you already have PerfectFit installed
+
+This build ships its own application identity — product name **PerfectFit X2D**,
+bundle identifier `io.github.espentruls.perfectfit-x2d` — instead of upstream's
+`com.redeemed3d.perfectfit`. It therefore installs **alongside** upstream rather
+than over it, and no longer shares upstream's data store. (Before this, both
+wrote to the same one, so upstream's "erase all data" erased this app's projects
+too.)
+
+**Your calibration data does not move by itself.** Nothing is deleted — the old
+data stays on disk — but this build starts empty:
+
+1. In your existing build: **Settings → Export all data + photos**; keep the JSON.
+2. Install this version.
+3. **Settings → Restore from backup**, and pick that file.
+
+Slicer preset backups are stored under the old identity too — on Windows in
+`%APPDATA%\com.redeemed3d.perfectfit\slicer-backups`. Restore anything you still
+need from the old build before uninstalling it, or copy that folder to
+`%APPDATA%\io.github.espentruls.perfectfit-x2d\slicer-backups` afterwards. The
+browser/Docker deployment is unaffected: its data is keyed to the site origin,
+not to the desktop identifier.
+
+### Added — a guided calibration session
+
+A second results-entry mode that runs **alongside** the classic step-by-step
+wizard; the wizard is untouched and reachable from every step of the session.
+
+- **One screen per test.** The exact settings to change, where to change them (from
+  the shipped per-slicer, per-version data — a gap in that data is printed as a
+  gap, never invented), then print and measure.
+- **Results carry forward.** The pressure-advance test runs at the temperature and
+  flow ratio already measured. A material default never satisfies a dependency, so
+  a test cannot quietly run on a generic value and look like a measurement.
+- **Every pre-filled number shows where it came from** — calibrated, carried, set by
+  hand, printer profile, or an unmeasured starting point — and an unmeasured value
+  reads as an unlit dial rather than a zero.
+- **A per-nozzle working profile.** The session cluster, the carried-value table and
+  the install card all resolve values for the nozzle the session is calibrating, so
+  the screen cannot show one nozzle's numbers under another's heading.
+- **Install what is calibrated so far.** A partial profile is a real deliverable:
+  temperature and flow locked into a preset are worth having before pressure advance
+  has even started.
+- **A hand-typed override is validated against the printer**, so a typo cannot hand
+  you a hotend temperature the machine is not rated for.
+
+### Removed — the assisted "auto-prepare" path
+
+The path that would have configured and sliced each calibration test for you was
+**removed before release** — not switched off behind a flag, and not left sitting
+in the binary with no way to reach it. Two separate things went:
+
+- **The user-facing path.** No screen offers it and nothing in the app can reach
+  it.
+- **The code underneath it.** The eight desktop commands it called —
+  `detect_slicing_engine`, `validate_slicing_engine`, `run_calibration_slice`,
+  `cancel_calibration_slice`, `read_project_config`,
+  `assemble_calibration_project`, `resolve_printer_preset`,
+  `list_installed_machines` — are no longer registered by the desktop shell, and
+  the modules behind them are deleted, not merely left unreferenced:
+  `src-tauri/src/slicer_integration/{engine,preset_resolver,project_assembly}.rs`
+  on the Rust side, and the unreachable engine layer under
+  `src/automatedCalibration/` (`engineBridge`, `engineRegistry`, `capabilities`,
+  `printerMapping`, `projectPreparation`, `engines/`) on the TypeScript side.
+
+The second half is not tidiness. A command registered on the desktop app's
+command surface can be invoked by anything running inside the app's webview,
+whether or not a screen links to it — and these particular ones assembled slicer
+projects and merged calibration values into a project configuration with **no
+printer-limit check and no plausibility check**. Removing the feature but keeping
+the commands would have left that reachable in a shipped installer. Deleting them
+removes the feature and the surface together.
+
+Why it went rather than being finished: it could never have appeared on a
+dual-nozzle printer at all (the capability check refused every nozzle, because the
+desktop detection reported no multi-extruder support), it reached one of ten
+steps, and it drove OrcaSlicer only. Worse, it assembled the plate from the
+*slicer's own template*, so its g-code described the template's machine rather
+than yours, and the config merge feeding it applied no value limits.
+
+The reasoning stays where a future maintainer will look for it rather than in
+shipped code: [docs/X2D_ENHANCEMENT_PLAN.md](docs/X2D_ENHANCEMENT_PLAN.md) keeps
+the full hazard write-up — both the "prove the assembled project carries the
+user's own machine, or stage only" gate and the missing limit checks on the config
+merge — as the standing precondition on anyone ever reviving automatic slicing.
+That document describes code that no longer exists; it is kept deliberately,
+because it is the reason the code does not exist.
+
+Anything that advertised the feature — the README's "Looking Ahead" section and
+the release notes — has been corrected. The session tells you what to change; you
+make the change. The app never talks to your printer and never starts a print.
+
+### Fixed — safety audit
+
+Two adversarial audit rounds, aimed squarely at "could this damage someone's
+property or lose their data", against an app that emits numbers a printer
+physically executes, writes into real slicer configuration directories, and holds
+the only copy of the user's calibration data. Every defect was reproduced as broken
+against the then-current code before being fixed, and proven fixed afterwards.
+
+Critical:
+
+- **The backup system destroyed its own backups.** Backup ids came from a Unix
+  timestamp in *seconds*, so backing up several preset locations inside one second
+  silently overwrote the earlier snapshot while reporting success — and at install
+  time it left a replaced preset unrecoverable while still handing back a
+  valid-looking backup id. The directory is now the uniqueness gate: an exclusive
+  create that retries, rather than a clock we hoped was unique. This one mattered
+  most, because it is the recovery path for exactly the damage the rest of this work
+  is about.
+- **A value calibrated for one nozzle was written to every nozzle** whenever the base
+  preset did not already declare that key — and the change list showed only the
+  target slot, so it was invisible. On a dual-nozzle Bambu, calibrating only the
+  bowden auxiliary set the direct-drive main nozzle's pressure advance to 0.72, a
+  value this app's own logic says belongs nowhere near a direct drive.
+- **First-layer nozzle temperature was never checked against the printer's maximum**,
+  at entry or at write. 500 °C into a 240 °C printer validated clean.
+
+Also fixed: a restore that failed partway discarded the record of what it had
+already reverted; there was no durability barrier, so a crash mid-install could lose
+both the original and the replacement; export could truncate a file the user never
+chose; an import that failed partway left records behind, and a retry duplicated
+them; IndexedDB writes reported success before the transaction committed;
+erase-all-data cleared every key on the origin rather than this app's; a failed step
+save was completely silent in **both** results-entry screens — the classic wizard and
+the guided session — so a finished measurement vanished while the screen advanced as
+if it had been recorded; and a calibrated value that happened to equal the base value
+skipped every limit check.
+
+### Fixed — documentation and release integrity
+
+- **The README said the app does not write slicer preset files.** Under "Known
+  limitations" it claimed there is "no slicer preset **file** export" and that the app
+  "deliberately guides manual entry instead of risking a broken preset" — while
+  generation *and* direct installation into the real preset directory both ship on by
+  default. Informed consent for the most dangerous thing this product does cannot rest
+  on a document that denies the feature exists. The README now describes what is
+  written, where, what is backed up first, and how to switch both off.
+- **The Mac install guide sent downloaders to upstream's releases page**, and
+  `package.json`'s `bugs`/`homepage` routed there too — anyone following them
+  downloaded a different application, one with no per-nozzle feed path, whose ranges
+  are wrong for an X2D auxiliary nozzle by roughly a factor of ten. Every link now
+  points at this fork, and a test holds them there.
+- **The release workflow never ran the tests.** It installed dependencies, validated
+  the printer database, and handed straight off to the packaging step. Neither the
+  TypeScript suite nor the Rust suite gated the binaries attached to a public release.
+  Both now run, on every platform, before anything is packaged.
+- **The unsigned installer is disclosed.** The Windows `.exe` is not code-signed and
+  the macOS `.dmg` is not notarized, so SmartScreen warns and macOS may report the dmg
+  as damaged. The release notes and the README now say so plainly, with the steps to
+  proceed, instead of leaving a downloader to wonder whether it is malware.
+- **One contributing guide, spelled correctly.** The root copy was `CONRIBUTING.md`,
+  which GitHub never surfaced and which had already drifted from `.github/CONTRIBUTING.md`.
+  It is deleted; the canonical guide absorbed what was only in it.
+- **Packaged metadata names this fork's maintainer** (`package.json` `author`,
+  `Cargo.toml` `authors`) while AGPL-3.0 attribution to upstream stays intact in the
+  README, this changelog, and the licence notice.
 
 ### Added — Bambu Lab X2D / dual-nozzle support
 
@@ -34,10 +199,16 @@ BambuStudio GitHub tracker).
 
 ### Internal — guided calibration session
 
-Maintainer notes on the guided session and the automated-calibration scaffolding under it. The slicing half of that pipeline stays behind the `automatedCalibration` experimental flag, which defaults to off.
+Maintainer notes, kept for the record. These describe work on the session's value
+resolution and on the automated-calibration scaffolding that sat under it. The
+scaffolding is not part of this release: the assisted auto-prepare path and the
+engine layer beneath it were removed before it (see **Removed** above), so the
+second and third notes below describe code that is no longer in the build. They
+are kept because they explain why the session's persisted fields have the shape
+they do, not to advertise anything.
 
 - **A measurement recorded against a project's own nozzle is no longer dropped.** `recordSessionResult` reported success and really did write the value into that nozzle's working profile, but the value resolver read the working profile only for *other* nozzles — so for the project's own nozzle (any single-nozzle project, and an X2D project whose own target is the aux nozzle) the number was written and then readable by neither branch: the resolver reported it as unset. The resolver now falls back to the working profile for every nozzle. A result recorded by the classic wizard, which lives in `finals`, still wins where it exists.
-- **A prepared test's input fingerprint now includes the nozzle**, so the same step on two nozzles is two different jobs rather than one shared one. Any `generatedJobs` record written before this change was hashed without the nozzle and is therefore marked `stale` the first time it is loaded afterwards. That is safe and one-time: `stale` means "prepare this test again" — no calibration result and no working-profile value is touched, and failed jobs are exempt. `AUTOMATED_SESSION_SCHEMA` is deliberately **not** bumped, because the persisted shape of the session fields is unchanged and there is no migration to run; bumping it would advertise one that does not exist. In practice nothing existing is affected, since job records are only ever written by the flagged-off pipeline.
+- **A prepared test's input fingerprint now includes the nozzle**, so the same step on two nozzles is two different jobs rather than one shared one. Any `generatedJobs` record written before this change was hashed without the nozzle and is therefore marked `stale` the first time it is loaded afterwards. That is safe and one-time: `stale` means "prepare this test again" — no calibration result and no working-profile value is touched, and failed jobs are exempt. `AUTOMATED_SESSION_SCHEMA` is deliberately **not** bumped, because the persisted shape of the session fields is unchanged and there is no migration to run; bumping it would advertise one that does not exist. In practice nothing existing is affected, since job records were only ever written by that pipeline, which no build ever shipped.
 - **"Does this project carry session data?" is now one shared predicate** (`carriesSessionData`), used by both the safe session loader and backup import. The two had drifted apart: an imported project carrying only per-nozzle `workingProfiles` — no status and no primary profile — skipped the session-field normalization the loader expected.
 
 ## 1.3.2 - 2026-07-24

@@ -10,7 +10,7 @@ import {
 } from '../logic/formulas';
 import {
   suggestTempRange, suggestPaRange, suggestRetractionRange, suggestMvsRange, suggestFlowMethodDefaults,
-  resolveNozzle
+  resolveNozzle, FLEXIBLE_RETRACTION_MAX_MM
 } from '../logic/ranges';
 import { validateNumber, validateTestRange, validateAgainstPrinter, validateFlowRatio, type ValidationIssue } from '../logic/validation';
 import { VERIFICATION_CATEGORIES } from '../data/calibrations';
@@ -689,6 +689,25 @@ const paController: TestController = {
 // Retraction
 // ---------------------------------------------------------------------------
 
+/**
+ * Entry-time caution when a retraction tower is planned past the distance
+ * PerfectFit will install for a flexible filament.
+ *
+ * A warning, not an error: an expert may still deliberately explore past the
+ * cap. But they are told the consequence BEFORE the print, instead of finding
+ * out only when the write path refuses the finished result — and the browser
+ * build has no write path at all.
+ */
+export function flexibleRetractionEntryIssues(
+  material: MaterialPreset, endMm: number
+): ValidationIssue[] {
+  if (!material.flexible || !Number.isFinite(endMm) || endMm <= FLEXIBLE_RETRACTION_MAX_MM) return [];
+  return [{
+    level: 'warning',
+    message: `Flexible filament: PerfectFit will not install a retraction above ${FLEXIBLE_RETRACTION_MAX_MM} mm. Testing past it wastes a print — and grinding ${material.label} in the extruder is how jams start.`
+  }];
+}
+
 const retractionController: TestController = {
   settingsForm(ctx, prior) {
     const sel = resolveNozzle(ctx.project, ctx.printer);
@@ -731,6 +750,7 @@ const retractionController: TestController = {
         ];
         if (speed.value !== '') issues.push(...validateNumber(speed.value, { label: 'Retraction speed', min: 5, max: 120 }));
         if (num(end.value) > 8) issues.push({ level: 'warning', message: 'Testing beyond 8 mm invites clogs — only Bowden setups with long tubes should go there.' });
+        issues.push(...flexibleRetractionEntryIssues(ctx.material, num(end.value)));
         return { data: { start: num(start.value), end: num(end.value), step: num(step.value), speed: speed.value === '' ? '' : num(speed.value) }, issues };
       }
     };
@@ -829,6 +849,15 @@ const retractionController: TestController = {
       calc = retractionFromHeight(num(settings.start), num(settings.step), num(result.bestHeight));
     }
     const warnings = [...calc.warnings];
+    // The only place that sees the final rounded number on BOTH entry paths,
+    // and the one whose output feeds the calc screen, the "values to enter"
+    // panel, the "values recorded" panel and the saved attempt record. The
+    // value itself is NOT clamped — the user's measurement stays theirs, and
+    // the write path errors rather than silently rewriting, so both layers
+    // tell the same story.
+    if (ctx.material.flexible && calc.rounded > FLEXIBLE_RETRACTION_MAX_MM) {
+      warnings.push(`${calc.rounded} mm exceeds the ${FLEXIBLE_RETRACTION_MAX_MM} mm limit PerfectFit applies to flexible filament (${ctx.material.label}). Long retractions pull soft filament into the cold zone and jam the extruder — PerfectFit will refuse to install this value. Use the lowest acceptable distance at or under ${FLEXIBLE_RETRACTION_MAX_MM} mm.`);
+    }
     if (result.stillStringyAtMax) {
       warnings.push('Stringing persisted at max retraction — dry the filament and consider a cooler temperature before trusting this value.');
     }

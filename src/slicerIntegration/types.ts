@@ -356,9 +356,12 @@ export interface ExperimentalFeatures {
   unsupportedVersionOverride: boolean;
   advancedProfileSelection: boolean;
   /**
-   * Automated Calibration Pipeline (managed/installed Orca slicing engine).
-   * DEFAULTS TO FALSE and stays off until the multi-stage feature lands — no
-   * automated session, engine, or slicing behavior may run while this is false.
+   * TOMBSTONE — reads as false and gates nothing. This flag guarded the assisted
+   * auto-prepare path (a slicing engine that configured and sliced each test);
+   * that path was deleted before release, so there is no longer any code to
+   * enable. The key is kept because `ExperimentalFeatures` is a persisted
+   * localStorage shape and because comments elsewhere still name it; it was
+   * never exposed in Settings, so no user can have turned it on.
    */
   automatedCalibration: boolean;
 }
@@ -368,7 +371,7 @@ export const DEFAULT_EXPERIMENTAL_FEATURES: ExperimentalFeatures = {
   automaticProfileInstallation: true, // still gated per-version by the registry
   unsupportedVersionOverride: false,
   advancedProfileSelection: true,
-  automatedCalibration: false // Stage 1: disabled; automated pipeline not yet implemented
+  automatedCalibration: false // tombstone: nothing reads this (see the interface)
 };
 
 // --- compatibility registry ------------------------------------------------

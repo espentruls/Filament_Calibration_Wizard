@@ -1,11 +1,27 @@
 # Automated Calibration Pipeline — Architecture
 
-> **Status: in development, disabled by default.** This document describes the
-> architecture of PerfectFit's automated calibration pipeline as it is built out
-> across multiple stages. The feature is gated behind the
-> `automatedCalibration` experimental flag, which is **off** until the pipeline
-> is complete. The existing manual calibration workflow and the slicer-profile
-> installer are unaffected.
+> **Status: REMOVED before 2.0.0. This document is upstream history, kept for
+> reference — it does not describe anything this fork ships.**
+>
+> Everything below was inherited from the upstream project and deleted from this
+> fork before its first release. The UI path never shipped; the backing Rust
+> modules (`engine.rs`, `preset_resolver.rs`, `project_assembly.rs`), their eight
+> IPC commands, and the TypeScript engine layer (`engineBridge.ts`,
+> `engineRegistry.ts`, `capabilities.ts`, `printerMapping.ts`,
+> `projectPreparation.ts`, `orcaProjectConfig.ts`, `assets.ts`, `engines/`) were
+> removed too. Any file path or command named below no longer exists here.
+>
+> **Why it went, and the hazard to meet before reviving it**, are recorded in
+> [X2D_ENHANCEMENT_PLAN.md](X2D_ENHANCEMENT_PLAN.md) under "Known hazard if
+> slicing is ever wired up" — read that first. In short: the pipeline assembled
+> its project from the slicer's own calibration template, so the g-code it
+> produced described the template's machine and not the user's, and the config
+> merge feeding it applied no value limits at all.
+>
+> It could also never have run on the printers this fork exists for: the
+> capability check refused every nozzle on a multi-nozzle machine, and it drove
+> OrcaSlicer only, while Bambu Studio is a hand-off destination by upstream's
+> own design.
 
 ## Goal
 

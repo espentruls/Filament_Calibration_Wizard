@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { getAdapter } from '../../src/slicerIntegration/adapters';
 import { buildPatchesFromProject, defaultTargetExtruder, generateProfile } from '../../src/slicerIntegration/generator';
+import { validateGeneratedProfile } from '../../src/slicerIntegration/validation';
 import type { ParsedFilamentProfile } from '../../src/slicerIntegration/types';
 import type { CalibrationProject } from '../../src/types';
 import { fixtureRaw, USER_FIXTURES } from './fixtures';
@@ -280,6 +281,49 @@ describe('clone-and-patch round trips (all slicer fixtures)', () => {
       expect(skipped!.reason).toContain('0.72');
     });
 
+    // The whole point of the withholding rule is that the reported list matches
+    // what is on disk. When the parent patch is withheld its companions are
+    // withheld too — so they have to be reported too, or the user is told one
+    // field is missing from the preset when two are.
+    it('reports the companions it withheld with the parent, not just the parent', () => {
+      const parsed = dualWithout('pressure_advance', 'enable_pressure_advance');
+      const project = makeProject({ pressureAdvance: 0.72 });
+      const generated = generateProfile({
+        slicerId: 'bambu', baseProfile: parsed.profile, newName: 'PF Aux PA Companion',
+        patches: buildPatchesFromProject(project), targetExtruderIndex: 1,
+        applyToAllExtruders: false, project
+      }, parsed);
+      const reparsed = JSON.parse(generated.serialized) as Record<string, unknown>;
+      expect(reparsed.enable_pressure_advance).toBeUndefined();
+
+      const skipped = (generated.skippedFields ?? []);
+      expect(skipped.map(s => s.presetKey)).toContain('enable_pressure_advance');
+      const comp = skipped.find(s => s.presetKey === 'enable_pressure_advance')!;
+      // It must explain that it went with pressure_advance, not invent a reason
+      // of its own — the user's fix is "set pressure advance by hand", once.
+      expect(comp.reason).toContain('pressure_advance');
+    });
+
+    it('every calibrated key is either written or reported skipped — never silently dropped', () => {
+      const parsed = dualWithout('pressure_advance', 'enable_pressure_advance');
+      const project = makeProject({ pressureAdvance: 0.72 });
+      const patches = buildPatchesFromProject(project);
+      const generated = generateProfile({
+        slicerId: 'bambu', baseProfile: parsed.profile, newName: 'PF Aux PA Ledger',
+        patches, targetExtruderIndex: 1, applyToAllExtruders: false, project
+      }, parsed);
+      const reparsed = JSON.parse(generated.serialized) as Record<string, unknown>;
+      const skippedKeys = new Set((generated.skippedFields ?? []).map(s => s.presetKey));
+
+      const owned = patches.flatMap(p => [p.presetKey, ...(p.companions ?? []).map(c => c.presetKey)]);
+      expect(owned).toContain('enable_pressure_advance');
+      for (const key of owned) {
+        const written = reparsed[key] !== undefined;
+        expect(skippedKeys.has(key), `${key}: written=${written}, reportedSkipped=${skippedKeys.has(key)}`)
+          .toBe(!written);
+      }
+    });
+
     it('fills untargeted slots with the no-override sentinel and reports every slot', () => {
       const parsed = dualWithout('filament_retraction_length');
       const project = makeProject({ retractionDistance: 3.5 });
@@ -322,6 +366,116 @@ describe('clone-and-patch round trips (all slicer fixtures)', () => {
       const reparsed = JSON.parse(generated.serialized) as Record<string, unknown>;
       expect(reparsed.pressure_advance).toEqual(['0.05']);
       expect(generated.skippedFields ?? []).toEqual([]);
+    });
+  });
+
+  // Regression: the rule above only guarded bases that already carry TWO or
+  // more slots. A SINGLE-slot base has no untargeted slot at all, so the guard
+  // never fired — and defaultTargetExtruder() clamps the calibrated nozzle to
+  // 0, so cloneAndPatch could not even see which nozzle was calibrated. The
+  // aux-nozzle values went straight into the one slot Orca-family get_at(i)
+  // hands to EVERY nozzle: a bowden K of 0.72 on the direct-drive main hotend.
+  describe('a base too narrow to address the calibrated nozzle writes nothing', () => {
+    /** Bambu X2D shape: main direct-drive nozzle + bowden auxiliary. */
+    function auxProject(finals: Partial<CalibrationProject['finals']> = {}): CalibrationProject {
+      const p = makeProject({ pressureAdvance: 0.72, retractionDistance: 3.5, ...finals });
+      p.nozzleIndex = 1; // the BOWDEN auxiliary nozzle
+      return p;
+    }
+
+    /** The real UI path: profileWizard clamps the target the same way. */
+    function generateAux(parsed: ParsedFilamentProfile, project: CalibrationProject, extra: {
+      applyToAllExtruders?: boolean; bakePressureAdvanceGcode?: boolean;
+    } = {}) {
+      return generateProfile({
+        slicerId: 'bambu', baseProfile: parsed.profile, newName: 'PF Aux Narrow Base',
+        patches: buildPatchesFromProject(project),
+        targetExtruderIndex: defaultTargetExtruder(project, parsed.extruderCount),
+        applyToAllExtruders: false, project, ...extra
+      }, parsed);
+    }
+
+    it('leaves a single-slot base byte-identical and reports every withheld key', () => {
+      const parsed = parseFixture('orca-user-delta-pla.json', 'orca');
+      expect(parsed.extruderCount).toBe(1);
+      const before = JSON.parse(JSON.stringify(parsed.profile.rawProfile)) as Record<string, unknown>;
+      const project = auxProject();
+      const generated = generateAux(parsed, project);
+      const reparsed = JSON.parse(generated.serialized) as Record<string, unknown>;
+
+      // The main nozzle's own calibration survives untouched…
+      expect(reparsed.pressure_advance).toEqual(before.pressure_advance);
+      expect(reparsed.nozzle_temperature).toEqual(before.nozzle_temperature);
+      expect(reparsed.enable_pressure_advance).toEqual(before.enable_pressure_advance);
+      // …and keys the base never had are not invented.
+      expect(reparsed.filament_retraction_length).toBeUndefined();
+
+      // Every calibrated key is either written or reported — never dropped.
+      const patches = buildPatchesFromProject(project);
+      const owned = patches.flatMap(p => [p.presetKey, ...(p.companions ?? []).map(c => c.presetKey)]);
+      const skippedKeys = new Set((generated.skippedFields ?? []).map(s => s.presetKey));
+      expect(owned.length).toBeGreaterThan(0);
+      for (const key of owned) expect(skippedKeys.has(key), key).toBe(true);
+
+      // The reported change list matches the file exactly: nothing, and nothing.
+      expect(generated.changedFields).toEqual([]);
+    });
+
+    it('names the nozzle and the value it refused to write', () => {
+      const parsed = parseFixture('orca-user-delta-pla.json', 'orca');
+      const generated = generateAux(parsed, auxProject());
+      const pa = (generated.skippedFields ?? []).find(s => s.presetKey === 'pressure_advance');
+      expect(pa).toBeDefined();
+      expect(pa!.reason).toContain('nozzle 2');
+      expect(pa!.reason).toContain('0.72');
+      expect(pa!.reason).toContain('EVERY nozzle');
+      const comp = (generated.skippedFields ?? []).find(s => s.presetKey === 'enable_pressure_advance');
+      expect(comp?.reason).toContain('pressure_advance');
+    });
+
+    it('withholds the Bambu M900 bake with the value it would have carried', () => {
+      const parsed = parseFixture('orca-user-delta-pla.json', 'bambu');
+      const generated = generateAux(parsed, auxProject(), { bakePressureAdvanceGcode: true });
+      const reparsed = JSON.parse(generated.serialized) as Record<string, unknown>;
+      // Start g-code runs on whichever nozzle prints the filament, so baking
+      // the aux K there is the same cross-nozzle write by another road.
+      expect(JSON.stringify(reparsed.filament_start_gcode ?? '')).not.toContain('M900');
+      expect((generated.skippedFields ?? []).map(s => s.presetKey)).toContain('filament_start_gcode');
+      expect(generated.changedFields.some(c => c.presetKey === 'filament_start_gcode')).toBe(false);
+    });
+
+    it('applies the same rule when a 2-slot base cannot reach nozzle 3', () => {
+      const parsed = parseFixture('bambu-user-full-pctg-dualnozzle.json', 'bambu');
+      expect(parsed.extruderCount).toBe(2);
+      const project = auxProject();
+      project.nozzleIndex = 2; // a third nozzle the base has no slot for
+      const generated = generateAux(parsed, project);
+      expect((generated.skippedFields ?? []).map(s => s.presetKey)).toContain('pressure_advance');
+      expect(generated.changedFields).toEqual([]);
+    });
+
+    it('still writes normally when the calibrated nozzle is the only nozzle', () => {
+      const parsed = parseFixture('orca-user-delta-pla.json', 'orca');
+      const project = makeProject({ pressureAdvance: 0.05 });
+      project.nozzleIndex = 0;
+      const generated = generateAux(parsed, project);
+      const reparsed = JSON.parse(generated.serialized) as Record<string, unknown>;
+      expect(reparsed.pressure_advance).toEqual(['0.05']);
+      expect(generated.skippedFields ?? []).toEqual([]);
+    });
+
+    it('honours an explicit "apply to all extruders", which validation still blocks', () => {
+      const parsed = parseFixture('orca-user-delta-pla.json', 'orca');
+      const project = auxProject();
+      const generated = generateAux(parsed, project, { applyToAllExtruders: true });
+      // The user asserted every nozzle takes these values, so the write is honest.
+      const reparsed = JSON.parse(generated.serialized) as Record<string, unknown>;
+      expect(reparsed.pressure_advance).toEqual(['0.72']);
+      expect(generated.skippedFields ?? []).toEqual([]);
+      // …but the preset still cannot address nozzle 2, so install stays blocked.
+      const result = validateGeneratedProfile(generated, { project, baseProfile: parsed.profile });
+      expect(result.errors.some(e => e.code === 'BASE_CANNOT_ADDRESS_NOZZLE')).toBe(true);
+      expect(result.valid).toBe(false);
     });
   });
 

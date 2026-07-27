@@ -1,6 +1,13 @@
-# PerfectFit — Filament Calibration Wizard
+# PerfectFit X2D — Filament Calibration Wizard
 
 Create a perfectly calibrated filament profile for Orca Slicer or Bambu Studio in one guided workflow. No tutorials, no guesswork, no spreadsheets.
+
+> **This is a fork.** PerfectFit X2D builds on
+> [PerfectFit](https://github.com/tayloraaron078-tech/Filament_Calibration_Wizard) by Aaron Taylor
+> and adds dual-nozzle (Bambu Lab X2D) support. It ships under its own product name and bundle
+> identifier, so it installs **alongside** upstream rather than over it and keeps a separate data
+> store. Every download link, issue link, and install guide in this repository refers to this fork;
+> upstream is credited, not linked as a download.
 
 <img width="1148" height="1007" alt="Hero" src="https://github.com/user-attachments/assets/f56b6877-6558-460a-9df0-097523c63046" />
 
@@ -18,14 +25,27 @@ without tutorials, wikis, or guesswork.
 - **Dual-nozzle aware** (Bambu Lab X2D): printer profiles can describe multiple nozzles, each
   project calibrates one specific nozzle, the bowden-fed auxiliary gets its own PA/retraction
   ranges, and aux projects get a dedicated ooze-control step.
-- **Privacy**: no account, no backend, no analytics/telemetry. Everything (photos included)
-  stays in your browser's local storage. External model links open third-party sites.
+- **Guided session**: one screen per test — the exact settings to change in your slicer, then print
+  and measure. Results carry forward (pressure advance runs at the temperature and flow you already
+  measured), and every pre-filled number shows where it came from. The classic step-by-step wizard
+  is untouched and reachable from every step.
+- **Slicer preset generation & installation**: builds an Orca/Bambu filament preset from your
+  measured values. The browser build downloads a `.json` for manual import; the desktop build can
+  write it directly into your slicer's user preset directory. This edits your real preset library —
+  see [Known limitations](#known-limitations) for exactly what it touches and how to switch it off.
+- **Privacy**: no account, no backend, no analytics/telemetry. Your calibration data (photos
+  included) stays in browser storage on this device. The desktop build additionally writes — only
+  when you ask it to — a filament preset into your slicer's user preset directory, plus the backup
+  it takes of the affected files first, under the app's own data folder. External model links open
+  third-party sites.
 
 <img width="1102" height="831" alt="Create Project" src="https://github.com/user-attachments/assets/36fc37fd-c053-4746-814b-48919f965853" />
 
 ## Requirements
 
-- Node.js 18+ (for development/build only — the built app is static files)
+- Node.js 18+ (for development/build only — the built web app is static files)
+- Rust (stable, ≥ 1.77.2) only if you build the desktop app — see
+  [Packaging as a desktop app](#packaging-as-a-desktop-app-tauri)
 
 ## Install & run (development)
 
@@ -37,10 +57,36 @@ npm run dev          # http://localhost:5173
 ## Tests
 
 ```bash
-npm test             # vitest: formulas, ranges, numbering, margins, import/export, migration, validation
+npm test                                          # vitest — formulas, ranges, validation,
+                                                  #   import/export, migration, slicer integration
+cargo test --manifest-path src-tauri/Cargo.toml   # Rust — preset installer, backups, path safety
 ```
 
-A human-workflow checklist lives in [docs/MANUAL_TEST_CHECKLIST.md](docs/MANUAL_TEST_CHECKLIST.md).
+Both suites gate the release: they run in CI on **every** platform that produces a binary, and
+they run **before** anything is packaged, so a change that breaks either one cannot be built into
+an installer — see [`.github/workflows/release.yml`](.github/workflows/release.yml).
+
+**What that gate does not cover.** Several Rust tests are marked `#[ignore]` and therefore never
+run in CI — and they are precisely the ones that exercise the real filesystem against a genuine
+slicer installation:
+
+- the supervised install/restore harness (`manual_install_from_env`, `manual_restore_from_env`),
+  which drives the production install and restore code against a real preset directory supplied
+  through environment variables;
+- the `probe_real_*` probes, which read an installed slicer's own configuration rather than a
+  temporary directory built by the test.
+
+So the paths that write into your slicer are covered in CI by unit tests over temporary
+directories, and against a real install only by tests a human has to run deliberately:
+
+```bash
+# needs a real slicer installed; the manual_* tests also need the env vars
+# documented in the comment above them in src-tauri/src/slicer_integration/install.rs
+cargo test --manifest-path src-tauri/Cargo.toml -- --ignored
+```
+
+Treat that as the honest boundary: CI proves the logic, a human proves the install. A
+human-workflow checklist lives in [docs/MANUAL_TEST_CHECKLIST.md](docs/MANUAL_TEST_CHECKLIST.md).
 
 <img width="1103" height="835" alt="Wizard Page" src="https://github.com/user-attachments/assets/6ed5ee39-3db5-4761-bfb9-c39a10259c3d" />
 
@@ -173,23 +219,26 @@ needs no SPA-fallback configuration.
 ## Packaging as a desktop app (Tauri)
 
 Tauri v2 wraps the static build in a small native shell (preferred over Electron: ~10 MB vs ~150 MB).
+The desktop shell **ships in this repository** — [`src-tauri/`](src-tauri/) holds the Rust side,
+including the slicer preset installer — so there is nothing to initialise. Do **not** run
+`tauri init`: it would overwrite the shipped configuration.
 
 ```bash
-# prerequisites: Rust toolchain (rustup) plus the OS-specific Tauri prerequisites for Windows, macOS, or Linux
-npm install -D @tauri-apps/cli
-npx tauri init
-#   ✔ app name: PerfectFit
-#   ✔ dev server URL: http://localhost:5173
-#   ✔ frontend dist: ../dist
-#   ✔ before dev command: npm run dev
-#   ✔ before build command: npm run build
-npx tauri dev      # develop inside the native window
-npx tauri build    # produces the native app plus configured bundles for the current OS
+# prerequisites: Rust toolchain (rustup) plus the OS-specific Tauri prerequisites
+# for Windows, macOS, or Linux
+npm install
+npm run tauri dev      # develop inside the native window
+npm run tauri build    # native app plus the bundles configured for the current OS
 ```
 
-No code changes are required — the app already avoids absolute URLs and needs no server.
-Inside Tauri, data persists in the WebView's local storage; the JSON backup/restore in
-Settings is the supported migration path between browser and desktop builds.
+`src-tauri/tauri.conf.json` carries this fork's identity — product name **PerfectFit X2D**, bundle
+identifier `io.github.espentruls.perfectfit-x2d` — which is why it installs alongside upstream
+PerfectFit instead of on top of it, and why the two do not share a data store.
+
+The frontend itself needs no changes for the desktop build: it avoids absolute URLs and needs no
+server. Inside Tauri, calibration data persists in the WebView's storage; the JSON backup/restore in
+Settings is the supported migration path between browser and desktop builds, and between upstream
+PerfectFit and this fork.
 
 ## Data storage & backups
 
@@ -198,6 +247,7 @@ Settings is the supported migration path between browser and desktop builds.
 | Projects, printer profiles, photos | IndexedDB (`perfectfit-db`) |
 | Settings, in-progress form drafts | localStorage |
 | Backups | JSON files you export (Settings → Backup) |
+| Slicer preset backups (desktop build only) | `{app data}/slicer-backups/{slicer}/{backup id}/` — e.g. `%APPDATA%\io.github.espentruls.perfectfit-x2d\slicer-backups\` on Windows. Written automatically before any preset install, restorable from Settings → *Slicer profile backups*. |
 
 - **Backup**: Settings → *Export all data* (optionally with photos, base64-embedded).
 - **Restore**: Settings → *Restore from backup*. Imports never overwrite: colliding ids
@@ -217,8 +267,8 @@ of each entry.
 ## Slicer version compatibility
 
 Instructions are **version-aware data**, not code: `src/data/slicers.ts` holds per-slicer,
-per-version content with a `verifiedOn` date (currently: Orca Slicer **2.4.x**, verified
-2026-07-18 against the official wiki; Bambu Studio **1.7+**). Updating for a new release
+per-version content with a `verifiedOn` date (currently: Orca Slicer **2.4.x** and Bambu Studio
+**1.7+**, both verified 2026-07-23 against the official wikis). Updating for a new release
 means editing/adding one data entry. Research notes with sources and verified formulas:
 [docs/RESEARCH.md](docs/RESEARCH.md).
 
@@ -248,9 +298,14 @@ src/
     validation.ts        # numeric/range/printer-limit validation
     confidence.ts        # confidence score
     recommendations.ts   # smart retest recommendations
+  session/               # guided-session reasoning (pure, DOM-free): plan, per-nozzle
+                         #   working profile, value provenance, staleness
+  slicerIntegration/     # preset generation, diffing, and the desktop install bridge
   storage/               # IndexedDB wrapper + repository, drafts, settings
   export/backup.ts       # JSON export/import with schema versioning & migration
-  ui/                    # dashboard, printers, project views, wizard, forms, report, card…
+  ui/                    # dashboard, printers, project views, wizard, guided session,
+                         #   forms, profile wizard, report, card…
+src-tauri/               # Rust desktop shell: slicer detection, backup, atomic install
 tests/                   # vitest suites
 docs/                    # research notes + manual test checklist
 ```
@@ -260,12 +315,24 @@ Adding a calibration test = new entry in `data/calibrations.ts` + a form control
 
 ## Known limitations
 
+What the app does *not* do, and the caveats on what it does. The preset entry is here because it is
+the one feature that writes outside the app's own storage — read it before you let it run.
+
 - The QR code on the calibration card links to the app URL + project id — it opens the saved
   calibration on any device pointed at the **same hosted instance & browser profile**; it does
   not embed the data itself (the printed card carries the values in plain text).
-- No slicer preset **file** export: Orca/Bambu preset JSON formats are version-volatile and
-  were not safely verifiable for round-tripping, so the app deliberately guides manual entry
-  instead of risking a broken preset. (Candidate for a future "experimental" feature.)
+- **Slicer profile generation and installation (experimental, on by default) edits your real
+  preset library.** From a project with calibrated values, PerfectFit X2D builds an Orca/Bambu
+  filament preset from your results.
+  In the browser build it downloads a `.json` preset for manual import. In the desktop (Tauri)
+  build it can install directly into your slicer's user preset directory (e.g.
+  `%APPDATA%\OrcaSlicer\user\<account>\filament\`) on slicer versions verified for direct
+  install: it backs up the affected files first, writes to a temp file, verifies, atomically
+  moves it into place, re-verifies, refuses to run while the slicer is open, and will not
+  replace an existing preset unless you explicitly confirm replacement (backups are restorable
+  from the app). Preset formats are version-volatile, so support is verified per slicer
+  version. Both behaviours can be turned off in **Settings → Experimental features**
+  (`Slicer profile generation`, `Automatic profile installation`).
 - Photos are stored and exported but not analyzed (AI photo evaluation is a designed-for,
   not-built v1 exclusion, like accounts, cloud sync, and printer control).
 - Bambu Studio Developer mode exposes retraction, Max flowrate, and VFA calibration while a Bambu printer is selected; external models remain fallback options
@@ -281,26 +348,47 @@ Adding a calibration test = new entry in `data/calibrations.ts` + a form control
 - **Linux: blank window on launch (Wayland).** If the app opens to an empty window and, when
   launched from a terminal, prints `Could not create default EGL display: EGL_BAD_PARAMETER`,
   start it with `WEBKIT_DISABLE_DMABUF_RENDERER=1` set — for example
-  `WEBKIT_DISABLE_DMABUF_RENDERER=1 ./PerfectFit_1.3.1_amd64.appimage`. WebKitGTK's DMABUF
+  `WEBKIT_DISABLE_DMABUF_RENDERER=1 './PerfectFit X2D_<version>_amd64.AppImage'`, substituting the
+  filename you actually downloaded (tab-completion will fill it in). WebKitGTK's DMABUF
   renderer fails to initialise EGL on some Wayland setups; this makes it fall back to a working
-  path. Fixed automatically in 1.3.1 and later.
+  path. The app sets the variable itself (unless you set it yourself), so this workaround should
+  not be needed on this build — it is kept here for anyone running an older one.
+- **Windows SmartScreen warns on the installer, and macOS may call the `.dmg` damaged.** The
+  release binaries are **not code-signed** and the `.dmg` is **not notarized** — this project has no
+  paid signing certificate. That is a missing signature, not a detection of anything. On Windows
+  choose *More info → Run anyway*; on macOS see
+  [Install on Mac.md](Install%20on%20Mac.md), or build from source with `npm run tauri build` if you
+  would rather not rely on either.
 
 <img width="1103" height="833" alt="Auto Results" src="https://github.com/user-attachments/assets/fa9ebd12-6d73-42b2-8d50-2e8a2825b278" />
 
-## Looking Ahead (Planned for the Next Feature Release)
+## What the guided session does and does not do
 
-Version 1.4.0 is already in active development and aims to significantly streamline the calibration workflow. The goal is a guided, session-based experience that automatically prepares each calibration test, carries results forward between steps, and reduces manual setup so you can focus on printing instead of configuring. Stay tuned over the coming weeks as this next major update takes shape.
+The session-based experience shipped in **2.0.0**: it carries results forward between steps, shows
+where every pre-filled number came from, and can install what has been measured so far as a filament
+preset — see **Guided session** and **Slicer preset generation & installation** above.
+
+It does **not** prepare the test prints for you. An earlier plan to have the app configure and slice
+each calibration test automatically was **removed before release**: it could only ever have driven
+OrcaSlicer, and a half-working path that silently produces the wrong test plate is worse than no path
+at all. The removal went all the way down — the desktop commands it called are no longer registered
+and the modules behind them are deleted, not merely left unreachable, so the unguarded project
+assembly and config merge are not present in the installed app at all. The reasoning is preserved in
+[docs/X2D_ENHANCEMENT_PLAN.md](docs/X2D_ENHANCEMENT_PLAN.md) as the condition on ever reviving it.
+The session tells you exactly what to change and where, and you make the change. The app never talks
+to your printer and never starts a print.
 
 ## Future ideas
 
 AI-assisted photo evaluation (storage schema already reserves an `analysis` field), photo
 comparison, multiple printers per filament (multiple nozzles per printer already ships — see
-**Dual-nozzle aware** above), printer API integration, experimental slicer preset export,
+**Dual-nozzle aware** above), printer API integration,
 community preset sharing, filament inventory with drying/spool tracking.
 
 ## License
 
-Copyright (C) 2026 Aaron Taylor
+Copyright (C) 2026 Aaron Taylor — original PerfectFit
+Copyright (C) 2026 espentruls — PerfectFit X2D fork
 
 PerfectFit is free software: you can redistribute it and/or modify it under the terms of the
 **GNU Affero General Public License, version 3** as published by the Free Software Foundation.

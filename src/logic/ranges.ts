@@ -14,6 +14,19 @@ export interface RangeSuggestion {
 }
 
 /**
+ * The longest retraction PerfectFit will suggest, compute, display or install
+ * for a flexible filament. Long retractions drag soft filament into the cold
+ * zone: grinding, a plugged heatbreak, and on many extruders a jam that needs
+ * the hotend taken apart.
+ *
+ * One constant, imported everywhere the number is enforced (the suggestion
+ * layer here, the retraction test form, and the profile write path in
+ * src/slicerIntegration/validation.ts) so the layers cannot drift apart and
+ * tell the user two different stories.
+ */
+export const FLEXIBLE_RETRACTION_MAX_MM = 1.5;
+
+/**
  * Resolve which physical nozzle a project calibrates. On legacy single-nozzle
  * profiles (no `nozzles` array) the effective feed falls back to the printer's
  * extruder type; without a printer it defaults to direct drive.
@@ -39,6 +52,24 @@ export function nozzleBadgeLabel(
   const nozzle = printer?.nozzles?.[project.nozzleIndex];
   if (nozzle) return nozzle.label;
   return project.nozzleIndex > 0 ? `Nozzle ${project.nozzleIndex + 1}` : null;
+}
+
+/**
+ * One-line caution for a final retraction distance that a flexible filament
+ * should never be printed with, or null when there is nothing to say.
+ *
+ * The browser build has no install path, so the report, the printable card and
+ * the clipboard copy ARE the deliverable there: the cap has to be visible on
+ * them, not only on the desktop write path.
+ */
+export function flexibleRetractionCaution(
+  materialId: string,
+  retractionMm: number | undefined
+): string | null {
+  if (retractionMm === undefined || !Number.isFinite(retractionMm)) return null;
+  if (!getMaterial(materialId).flexible) return null;
+  if (retractionMm <= FLEXIBLE_RETRACTION_MAX_MM) return null;
+  return `Above the ${FLEXIBLE_RETRACTION_MAX_MM} mm limit PerfectFit applies to flexible filament — long retractions pull soft filament into the cold zone and jam the extruder. Use the lowest acceptable distance at or under ${FLEXIBLE_RETRACTION_MAX_MM} mm.`;
 }
 
 export function suggestTempRange(materialId: string, printer?: PrinterProfile): RangeSuggestion {
@@ -83,7 +114,7 @@ export function suggestRetractionRange(extruder: ExtruderType, material: Materia
   const auxBowden = nozzle?.feed === 'bowden';
   let s: RangeSuggestion;
   if (material.flexible) {
-    s = { start: 0, end: 1.5, step: 0.1, warnings: ['Keep retraction minimal for flexible filament — long retractions jam extruders. If using Bowden with TPU, consider not calibrating past ~2 mm at all.'] };
+    s = { start: 0, end: FLEXIBLE_RETRACTION_MAX_MM, step: 0.1, warnings: [`Keep retraction minimal for flexible filament — long retractions jam extruders. PerfectFit will not install a flexible retraction above ${FLEXIBLE_RETRACTION_MAX_MM} mm.`] };
     if (auxBowden) s.warnings.push('The auxiliary nozzle is not rated for flexible filaments — calibrate TPU on the main (direct drive) nozzle instead.');
   } else if (auxBowden) {
     // Bowden-fed auxiliary nozzle (X2D-style remote extruder). The printer

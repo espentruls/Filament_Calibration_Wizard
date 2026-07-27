@@ -5,17 +5,9 @@ import {
   valuesFromSource,
   fingerprintValues,
   jobIsStale,
-  isSessionResumable,
-  emptyEngineCapabilities,
-  supported,
-  unsupported,
-  isAutomatedCalibrationEnabled
+  isSessionResumable
 } from '../../src/automatedCalibration';
 import type { GeneratedJobRecord } from '../../src/automatedCalibration';
-import {
-  DEFAULT_EXPERIMENTAL_FEATURES,
-  type ExperimentalFeatures
-} from '../../src/slicerIntegration/types';
 
 const AT = '2026-07-26T00:00:00.000Z';
 
@@ -116,33 +108,7 @@ describe('isSessionResumable', () => {
   });
 });
 
-describe('capability constructors', () => {
-  it('emptyEngineCapabilities is all-false', () => {
-    expect(emptyEngineCapabilities()).toEqual({
-      slice: false,
-      export3mf: false,
-      exportGcode: false,
-      multiPlate: false,
-      multiExtruder: false
-    });
-  });
-
-  it('supported/unsupported build consistent results', () => {
-    expect(supported()).toEqual({ supported: true, reasons: [] });
-    expect(unsupported('no engine', 'no exe')).toEqual({
-      supported: false,
-      reasons: ['no engine', 'no exe']
-    });
-  });
-});
-
-describe('automated calibration feature flag', () => {
-  it('is disabled by default', () => {
-    expect(isAutomatedCalibrationEnabled(DEFAULT_EXPERIMENTAL_FEATURES)).toBe(false);
-  });
-
-  it('is enabled only when the flag is explicitly true', () => {
-    const on: ExperimentalFeatures = { ...DEFAULT_EXPERIMENTAL_FEATURES, automatedCalibration: true };
-    expect(isAutomatedCalibrationEnabled(on)).toBe(true);
-  });
-});
+// The engine-capability constructors (`emptyEngineCapabilities`, `supported`,
+// `unsupported`) and the `automatedCalibration` feature flag that gated the
+// assisted auto-prepare path were tested here. All three are gone with that
+// path, so there is nothing left for these cases to assert.

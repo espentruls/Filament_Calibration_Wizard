@@ -122,31 +122,44 @@ app), auto-detecting the X2D from Bambu Studio configs, VFA scoring step.
 shown to apply the USER'S printer. Staging a project to open in the slicer is
 safe; producing g-code is not.**
 
-`InstalledOrcaEngine.prepareProject` (`src/automatedCalibration/`) assembles its
-project from OrcaSlicer's own shipped calibration template and merges in only the
-calibrated FILAMENT values. Everything describing the MACHINE — printer geometry,
-bed and travel limits, start/stop g-code, process settings — stays exactly as the
-template shipped it, because `resolvePrinterPreset` is still a stub that throws
-`FILAMENT_SELECTION_REQUIRED`. It has never resolved the user's own printer.
+> **Status: the code described below is gone.** The assisted auto-prepare path and
+> the whole engine layer under it were deleted before 2.0.0 — the TypeScript
+> modules (`src/automatedCalibration/` engine bridge, registry, capabilities,
+> printer mapping, project preparation, `engines/`), the Rust modules
+> (`src-tauri/src/slicer_integration/{engine,preset_resolver,project_assembly}.rs`),
+> and the eight desktop commands they exposed. Nothing in the shipped build can
+> slice. **This section is deliberately kept anyway**, in the past tense, because
+> it is the reason that code is not there: it is the design constraint on any
+> future attempt, not a description of a current component. The CHANGELOG's
+> "Removed — the assisted auto-prepare path" section is the other half of this
+> record.
 
-So g-code sliced from that project is cut for the template's machine, not the one
+`InstalledOrcaEngine.prepareProject` (formerly in `src/automatedCalibration/`)
+assembled its project from OrcaSlicer's own shipped calibration template and merged
+in only the calibrated FILAMENT values. Everything describing the MACHINE — printer
+geometry, bed and travel limits, start/stop g-code, process settings — stayed
+exactly as the template shipped it, because `resolvePrinterPreset` was never more
+than a stub that threw `FILAMENT_SELECTION_REQUIRED`. It never resolved the user's
+own printer.
+
+So g-code sliced from such a project is cut for the template's machine, not the one
 it will be printed on. Run on a different printer it can drive the toolhead
 outside its real travel, bed and temperature limits — a crash, not a bad print.
 The risk is worst on a machine like the X2D, whose geometry, dual toolheads and
 start g-code look nothing like a generic Orca template's.
 
-Staging is the safe half and is worth keeping: opened in the slicer with the
-user's own printer selected, the slicer applies the right machine and slices it
-correctly.
+Staging is the safe half and is worth reinstating if the feature is ever revisited:
+opened in the slicer with the user's own printer selected, the slicer applies the
+right machine and slices it correctly.
 
 This was briefly enforced in code by a `resolvesUserPrinter` capability flag on
 `SlicingEngineCapabilities`, which forced the runner to stage rather than slice.
-That flag was removed in July 2026 along with the assisted auto-prepare path it
-guarded (neither ever shipped — both were removed before release), since with the
-feature gone it had no consumer and no engine ever reported it true. **The hazard
-did not go away with it.** Anything that revives automatic slicing has to
-re-establish the same gate: prove the assembled project carries the user's
-machine, or stage only.
+That flag went in July 2026 along with the assisted auto-prepare path it guarded,
+and the rest of the engine layer followed before release (none of it ever shipped),
+since with the feature gone it had no consumer and no engine ever reported it true.
+**The hazard did not go away with the code.** Anything that revives automatic
+slicing has to re-establish the same gate: prove the assembled project carries the
+user's machine, or stage only.
 
 Related: the capability check for that feature hard-coded `multi_extruder: false`
 in the Rust detection layer, so it refused every nozzle on a multi-nozzle machine
@@ -154,26 +167,33 @@ anyway — automatic preparation could never have run on the X2D. And upstream's
 engine layer deliberately drives OrcaSlicer only; Bambu Studio is a hand-off
 destination by design, so it was never a candidate for this path.
 
-### The slice path has no value limits either
+### The slice path had no value limits either
 
-A second, independent reason not to revive slicing without work first. The
-config merge that feeds the slicer —
-`mergeCalibrationIntoProjectConfig` / `applyPatchesToConfig` in
-`src/automatedCalibration/orcaProjectConfig.ts`, called from
-`InstalledOrcaEngine.prepareProject` — writes calibrated values straight into
+A second, independent reason not to revive slicing without work first. The config
+merge that fed the slicer — `mergeCalibrationIntoProjectConfig` /
+`applyPatchesToConfig` (`src/automatedCalibration/orcaProjectConfig.ts`), called
+from `InstalledOrcaEngine.prepareProject` — wrote calibrated values straight into
 the project's `project_settings.config` with **no printer-limit check, no
 plausibility check, and no note recorded**. Verified against the code in July
-2026: finals of `{ nozzleTemp: 230, firstLayerTemp: 500 }` merged as
-`nozzle_temperature_initial_layer: ["500"]` with an empty notes list, and a
-9 mm retraction distance merged over a template's `["0.8"]` with no flexible
-cap applied.
+2026, before it was removed: finals of `{ nozzleTemp: 230, firstLayerTemp: 500 }`
+merged as `nozzle_temperature_initial_layer: ["500"]` with an empty notes list, and
+a 9 mm retraction distance merged over a template's `["0.8"]` with no flexible cap
+applied.
+
+This is the more concrete of the two reasons the code was deleted rather than
+parked. An unguarded merge is dangerous in proportion to how reachable it is, and
+in the desktop build it was reachable: project assembly and the merge sat behind
+registered commands on the app's command surface, callable from inside the app's
+own webview whether or not any screen linked to them. Deleting the modules removed
+the reachability along with the feature. Anything that revives this has to bring
+the guards back with it, not afterwards.
 
 The preset-install path is guarded (`src/slicerIntegration/validation.ts`
 range-checks what it writes, and the test forms range-check what is entered).
 The slice path simply never had those guards, because it never had a user.
 `project.finals` is also not range-checked on import — a hand-edited or corrupt
 backup can put any number there — so the guard cannot be assumed to have
-happened upstream of the merge.
+happened upstream of any future merge.
 
 If slicing is revived: run the same limit checks before handing a config to the
 engine, ideally by extracting the checks in `validation.ts` into one helper both

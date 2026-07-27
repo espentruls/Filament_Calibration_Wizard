@@ -4,12 +4,14 @@ import { getCalibration } from '../data/calibrations';
 import { getMaterial } from '../data/materials';
 import { getSlicerContent } from '../data/slicers';
 import { confidenceScore, confidenceLabel } from '../logic/confidence';
+import { flexibleRetractionCaution } from '../logic/ranges';
 import type { CalibrationProject, CalibrationId } from '../types';
 
 /** Copy the final calibrated values to the clipboard as readable text. */
 export async function copyFinalsToClipboard(p: CalibrationProject): Promise<void> {
   const mat = getMaterial(p.filament.material);
   const f = p.finals;
+  const retractCaution = flexibleRetractionCaution(p.filament.material, f.retractionDistance);
   const lines = [
     `${p.filament.manufacturer} ${mat.label} ${p.filament.color} — calibrated ${p.calibrationDate}`,
     f.firstLayerTemp !== undefined ? `First-layer temperature: ${f.firstLayerTemp} °C` : null,
@@ -18,6 +20,7 @@ export async function copyFinalsToClipboard(p: CalibrationProject): Promise<void
     f.flowRatio !== undefined ? `Flow ratio: ${f.flowRatio}` : null,
     f.pressureAdvance !== undefined ? `Pressure advance: ${f.pressureAdvance}` : null,
     f.retractionDistance !== undefined ? `Retraction length: ${f.retractionDistance} mm` : null,
+    retractCaution ? `  ⚠ ${retractCaution}` : null,
     f.retractionSpeed !== undefined ? `Retraction speed: ${f.retractionSpeed} mm/s` : null,
     f.maxVolumetricSpeed !== undefined ? `Max volumetric speed: ${f.maxVolumetricSpeed} mm³/s` : null,
     f.shrinkagePercent !== undefined ? `Shrinkage (XY): ${f.shrinkagePercent}%` : null
@@ -39,6 +42,10 @@ export async function renderReport(root: HTMLElement, id: string): Promise<void>
   const slicer = getSlicerContent(p.slicer.slicer, p.slicer.version);
   const conf = confidenceScore(p);
   const f = p.finals;
+  // In the browser build this report is the only output the user gets — the
+  // installer that refuses an over-cap flexible retraction is desktop-only — so
+  // the caution has to travel with the number here.
+  const retractCaution = flexibleRetractionCaution(p.filament.material, f.retractionDistance);
 
   // The instrument constellation: every value this project can land, ranked in
   // rows. A value that has not been measured stays UNLIT — it is never a zero.
@@ -74,6 +81,9 @@ export async function renderReport(root: HTMLElement, id: string): Promise<void>
       h('h2', {}, 'Final values'),
       h('p', { class: 'field-help' },
         'These are the numbers to enter in the slicer. A dark instrument is a value you have not measured yet — it is not a zero.'),
+      retractCaution ? h('div', { class: 'callout callout-bad' },
+        h('p', { class: 'co-title' }, `Retraction ${f.retractionDistance} mm is too long for this filament`),
+        h('p', {}, retractCaution)) : null,
       h('div', { class: 'readout-grid' },
         instruments.map(([label, value, unit]) => instrumentCell(label, value, unit))),
       h('div', { class: 'table-scroll' }, h('table', { class: 'data' }, h('tbody', {},
@@ -82,7 +92,9 @@ export async function renderReport(root: HTMLElement, id: string): Promise<void>
         p.finals.highFlowTemp !== undefined ? row('High-flow temperature', `${p.finals.highFlowTemp} °C`) : null,
         p.finals.flowRatio !== undefined ? row('Flow ratio', String(p.finals.flowRatio)) : null,
         p.finals.pressureAdvance !== undefined ? row('Pressure advance', String(p.finals.pressureAdvance)) : null,
-        p.finals.retractionDistance !== undefined ? row('Retraction length', `${p.finals.retractionDistance} mm`) : null,
+        p.finals.retractionDistance !== undefined
+          ? row('Retraction length', `${p.finals.retractionDistance} mm${retractCaution ? ` — ⚠ ${retractCaution}` : ''}`)
+          : null,
         p.finals.retractionSpeed !== undefined ? row('Retraction speed', `${p.finals.retractionSpeed} mm/s`) : null,
         p.finals.maxVolumetricSpeed !== undefined ? row('Max volumetric speed', `${p.finals.maxVolumetricSpeed} mm³/s`) : null,
         p.finals.shrinkagePercent !== undefined ? row('Shrinkage (XY)', `${p.finals.shrinkagePercent}%`) : null

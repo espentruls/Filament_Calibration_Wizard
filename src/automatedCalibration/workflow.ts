@@ -1,10 +1,10 @@
 // ---------------------------------------------------------------------------
-// Automated Calibration Pipeline — workflow registry & result inheritance (Stage 3).
+// Guided session — workflow registry & result inheritance.
 //
 // Turns the instructional calibration content in `src/data/calibrations.ts` into
-// a dependency-aware workflow the automated pipeline can drive: what each step
-// consumes and produces, how a result updates the working profile, and which
-// downstream generated jobs go stale when an upstream result changes.
+// a dependency-aware workflow the guided session drives: what each step consumes
+// and produces, how a result updates the working profile, and which downstream
+// records go stale when an upstream result changes.
 //
 // The dependency graph and slicer compatibility are DERIVED from calibrations.ts
 // (the single source of truth) so the two can never drift. Only the intrinsic
@@ -12,7 +12,7 @@
 // a step is sliced) are declared here. Coach Mode and all instructional content
 // stay in calibrations.ts, untouched.
 //
-// Pure module: no storage, DOM, or filesystem. Gated behind the disabled flag.
+// Pure module: no storage, DOM, or filesystem.
 // ---------------------------------------------------------------------------
 
 import type { CalibrationId, CalibrationProject } from '../types';
@@ -320,10 +320,11 @@ const NOZZLE_FINGERPRINT_KEY = '@nozzle';
  * UPGRADE NOTE — the nozzle key changed this hash. Every `generatedJobs` record
  * written before it was added carries a nozzle-free fingerprint, so the first
  * `markStaleJobs` after the upgrade marks those jobs `stale`. That is safe and
- * one-time: `stale` means "prepare this test again", no result or working-profile
- * value is touched, failed jobs are exempt, and the whole pipeline sits behind
- * the disabled `automatedCalibration` flag — so on today's builds there are no
- * such records to invalidate. No migration is needed and
+ * one-time: `stale` means "run this test again", no result or working-profile
+ * value is touched, and failed jobs are exempt. Shipped builds have never
+ * written a `generatedJobs` record — nothing in the app creates one now that the
+ * assisted auto-prepare path is gone — so there is nothing to invalidate in
+ * practice either. No migration is needed and
  * `AUTOMATED_SESSION_SCHEMA` is deliberately not bumped (the persisted SHAPE is
  * unchanged); the reasoning is recorded at that constant.
  */

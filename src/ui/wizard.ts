@@ -689,8 +689,14 @@ export async function completeStep(args: {
   return true;
 }
 
-/** Reset `target` to `snapshot` while keeping the same object identity. */
-function restoreProject(target: CalibrationProject, snapshot: CalibrationProject): void {
+/**
+ * Reset `target` to `snapshot` while keeping the same object identity.
+ *
+ * Exported because the guided session commits results through the same
+ * mutate-then-save shape and needs the identical roll-back — one implementation,
+ * so the two screens cannot drift into different failure behaviour.
+ */
+export function restoreProject(target: CalibrationProject, snapshot: CalibrationProject): void {
   for (const key of Object.keys(target)) delete (target as unknown as Record<string, unknown>)[key];
   Object.assign(target, snapshot);
 }

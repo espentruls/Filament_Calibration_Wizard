@@ -20,7 +20,7 @@
 import { h, clear, frag, field, numberInput, issueList, toast, confirmDialog } from './dom';
 import {
   getProject, getPrinter, listProjects, saveProject, addTimeline, uid,
-  saveDraft, loadDraft, clearDraft, savePhoto
+  saveDraft, loadDraft, clearDraft, savePhoto, deletePhoto
 } from '../storage/store';
 import { getCalibration } from '../data/calibrations';
 import { getMaterial } from '../data/materials';
@@ -44,6 +44,7 @@ const PRINTER_LIMIT_KEYS: Partial<Record<NormalizedProfileKey, 'nozzleTemp' | 'b
 import { CONTROLLERS, type ComputeOutput, type TestCtx } from './testForms';
 import { gaugeEl, projectGauges, type GaugeReading } from './dashboard';
 import { hasCalibratedValues } from './projectView';
+import { restoreProject } from './wizard';
 import { copyFinalsToClipboard } from './report';
 import { setLeaveGuard } from '../app';
 import {
@@ -192,7 +193,16 @@ export async function renderGuidedSession(
   // Both operations are idempotent; only a real change costs a write.
   const started = resolveGuidedSession({ project, printer }).started;
   const sync = startGuidedSession(project, { printer });
-  if (!started || sync.changedKeys.length || sync.staleJobIds.length) await saveProject(project);
+  if (!started || sync.changedKeys.length || sync.staleJobIds.length) {
+    // A refused write here costs only the session bookkeeping, so the screen
+    // still opens — but say so, rather than letting the rejection escape the
+    // route handler and leave a blank page with nothing in the UI.
+    try {
+      await saveProject(project);
+    } catch (err) {
+      toast(`Could not save this session's setup to this device (${String(err)}). You can keep working, but changes may not persist.`, 'error');
+    }
+  }
 
   let focusId: CalibrationId | null = stepId ?? null;
   const view = h('div', {});
@@ -206,7 +216,13 @@ export async function renderGuidedSession(
   }
 
   async function persistAndRedraw(): Promise<void> {
-    await saveProject(project);
+    // The value on screen changed already; if the write is refused the user has
+    // to be told, or they carry on believing an override was stored.
+    try {
+      await saveProject(project);
+    } catch (err) {
+      toast(`Could not save that change to this device — it is not stored. ${String(err)}`, 'error');
+    }
     draw();
   }
 
@@ -452,7 +468,9 @@ export async function renderGuidedSession(
       const retest = h('input', { type: 'checkbox' });
       const photoInput = h('input', { type: 'file', accept: 'image/*', multiple: true });
       const photoList = h('div', { class: 'sample-grid' });
-      const pendingPhotos: { name: string; type: string; blob: Blob }[] = [];
+      // `id` is stamped by commitStep on the first attempt so a retry after a
+      // failed save overwrites the same photo record instead of duplicating it.
+      const pendingPhotos: { id?: string; name: string; type: string; blob: Blob }[] = [];
       photoInput.addEventListener('change', () => {
         for (const f of photoInput.files ?? []) {
           pendingPhotos.push({ name: f.name, type: f.type, blob: f });
@@ -518,13 +536,16 @@ export async function renderGuidedSession(
           h('button', {
             class: 'btn btn-primary',
             onClick: async () => {
-              await commitStep({
+              // Nothing after this may run when the save was refused: the step
+              // did NOT complete, so the screen must not advance and the leave
+              // guard must stay armed over the user's unsaved entries.
+              const saved = await commitStep({
                 project, printer, stepId: id, draft, out,
                 confidence, retest: retest.checked, notes: notes.value,
-                photos: pendingPhotos, draftKey
+                photos: pendingPhotos, draftKey, label: def.shortName
               });
+              if (!saved) return;
               setLeaveGuard(null);
-              toast(`${def.shortName} saved.`, 'success');
               const next = resolveGuidedSession({ project, printer });
               focusId = next.nextActionableStepId ?? next.focusStepId ?? id;
               draw();
@@ -1078,7 +1099,7 @@ function settingsSummary(settings: Record<string, unknown>, onEdit: () => void):
 // and its provenance in step. The wizard itself is untouched.
 // ---------------------------------------------------------------------------
 
-async function commitStep(args: {
+export async function commitStep(args: {
   project: CalibrationProject;
   printer?: PrinterProfile;
   stepId: CalibrationId;
@@ -1087,59 +1108,92 @@ async function commitStep(args: {
   confidence: ConfidenceLevel;
   retest: boolean;
   notes: string;
-  photos: { name: string; type: string; blob: Blob }[];
+  /** `id` is stamped on the first attempt so a retry overwrites, not duplicates. */
+  photos: { id?: string; name: string; type: string; blob: Blob }[];
   draftKey: string;
-}): Promise<void> {
+  /** Step name used in the confirmation/failure message shown to the user. */
+  label: string;
+}): Promise<boolean> {
   const { project, stepId, draft, out } = args;
-  const st = project.steps[stepId] ?? (project.steps[stepId] = { status: 'not-started', current: null, history: [] });
 
-  // Preserve the prior result in history rather than overwriting.
-  if (st.current) st.history.unshift(st.current);
+  // Everything below mutates `project` in place, and the same object stays on
+  // screen. A save can still be refused at commit time (quota, eviction), and
+  // the storage layer reports that by rejecting. If it does, put the project
+  // back exactly as it was: the retry the user is invited to make then records
+  // the result ONCE instead of stacking a second timeline entry and pushing a
+  // phantom attempt into history. Same contract as the classic wizard's
+  // completeStep().
+  const snapshot = JSON.parse(JSON.stringify(project)) as CalibrationProject;
+  const savedPhotoIds: string[] = [];
 
-  const now = new Date().toISOString();
-  const attempt: CalibrationAttempt = {
-    id: uid(),
-    startedAt: now,
-    completedAt: now,
-    method: draft.method,
-    settings: (draft.settings ?? {}) as CalibrationAttempt['settings'],
-    result: (draft.result ?? {}) as CalibrationAttempt['result'],
-    computed: out.computed,
-    prerequisitesConfirmed: draft.prereqs,
-    notes: args.notes,
-    photoIds: [],
-    confidence: args.confidence
-  };
+  try {
+    const st = project.steps[stepId] ?? (project.steps[stepId] = { status: 'not-started', current: null, history: [] });
 
-  for (const ph of args.photos) {
-    const photo: StoredPhoto = {
-      id: uid(), projectId: project.id, stepId, attemptId: attempt.id,
-      createdAt: now, name: ph.name, type: ph.type, blob: ph.blob, analysis: null
+    // Preserve the prior result in history rather than overwriting.
+    if (st.current) st.history.unshift(st.current);
+
+    const now = new Date().toISOString();
+    const attempt: CalibrationAttempt = {
+      id: uid(),
+      startedAt: now,
+      completedAt: now,
+      method: draft.method,
+      settings: (draft.settings ?? {}) as CalibrationAttempt['settings'],
+      result: (draft.result ?? {}) as CalibrationAttempt['result'],
+      computed: out.computed,
+      prerequisitesConfirmed: draft.prereqs,
+      notes: args.notes,
+      photoIds: [],
+      confidence: args.confidence
     };
-    await savePhoto(photo);
-    attempt.photoIds.push(photo.id);
+
+    for (const ph of args.photos) {
+      // The id is stamped onto the pending photo the first time round, so a
+      // retry overwrites the same record instead of storing the picture twice.
+      ph.id = ph.id ?? uid();
+      const photo: StoredPhoto = {
+        id: ph.id, projectId: project.id, stepId, attemptId: attempt.id,
+        createdAt: now, name: ph.name, type: ph.type, blob: ph.blob, analysis: null
+      };
+      await savePhoto(photo);
+      savedPhotoIds.push(photo.id);
+      attempt.photoIds.push(photo.id);
+    }
+
+    st.current = attempt;
+    st.status = 'completed';
+    st.confidence = args.confidence;
+    st.retestRecommended = args.retest;
+    st.completedAt = attempt.completedAt;
+
+    Object.assign(project.finals, out.finalsPatch);
+
+    const summary = out.enterInSlicer.map(e => `${e.label} = ${e.value}`).join(', ')
+      || String(out.computed['verdict'] ?? 'completed');
+    addTimeline(project, {
+      stepId, kind: 'completed',
+      summary,
+      detail: args.retest ? 'User flagged for retest.' : undefined
+    });
+
+    applyRetestFlags(project);
+    // Push the new finals into this nozzle's working profile, with provenance,
+    // so the next step inherits a measurement rather than a guess.
+    syncSessionValues(project, { printer: args.printer });
+    await saveProject(project);
+  } catch (err) {
+    restoreProject(project, snapshot);
+    // Best effort: drop the photos this attempt wrote so the database looks
+    // exactly as it did before. Failing to clean them up must not mask the
+    // real error, and the ids are stable so a retry overwrites them anyway.
+    for (const id of savedPhotoIds) {
+      try { await deletePhoto(id); } catch { /* nothing more we can do */ }
+    }
+    toast(`Could not save ${args.label} — nothing was recorded. ${String(err)} Your entries are still here; press “Save this result” to try again.`, 'error');
+    return false;
   }
 
-  st.current = attempt;
-  st.status = 'completed';
-  st.confidence = args.confidence;
-  st.retestRecommended = args.retest;
-  st.completedAt = attempt.completedAt;
-
-  Object.assign(project.finals, out.finalsPatch);
-
-  const summary = out.enterInSlicer.map(e => `${e.label} = ${e.value}`).join(', ')
-    || String(out.computed['verdict'] ?? 'completed');
-  addTimeline(project, {
-    stepId, kind: 'completed',
-    summary,
-    detail: args.retest ? 'User flagged for retest.' : undefined
-  });
-
-  applyRetestFlags(project);
-  // Push the new finals into this nozzle's working profile, with provenance,
-  // so the next step inherits a measurement rather than a guess.
-  syncSessionValues(project, { printer: args.printer });
-  await saveProject(project);
   clearDraft(args.draftKey);
+  toast(`${args.label} saved.`, 'success');
+  return true;
 }

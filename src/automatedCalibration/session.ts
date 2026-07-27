@@ -11,6 +11,7 @@ import type {
   AutomatedSessionExtension,
   CalibrationSessionStatus,
   GeneratedJobRecord,
+  NozzleCountSource,
   ProvenanceSource,
   TemporaryCalibrationProfile
 } from './types';
@@ -43,6 +44,21 @@ export function createTemporaryProfile(input: {
 }
 
 // --- per-nozzle profile selection (pure) ------------------------------------
+
+/**
+ * How many physical nozzles a printer has, or 0 when that is not known. The
+ * `nozzles` array (which carries each feed path) wins over the database's
+ * `extruderCount`, because it is the profile the user actually edited. An
+ * unknown count is never rounded up to 1 — callers must distinguish "one
+ * nozzle" from "we don't know".
+ */
+export function printerNozzleCount(printer: NozzleCountSource | undefined | null): number {
+  if (!printer) return 0;
+  if (Array.isArray(printer.nozzles) && printer.nozzles.length > 0) return printer.nozzles.length;
+  const count = printer.extruderCount;
+  if (typeof count === 'number' && Number.isFinite(count) && count >= 1) return Math.floor(count);
+  return 0;
+}
 
 /** Coerce any nozzle index to a usable whole number ≥ 0. Absent/invalid = 0. */
 export function normalizeNozzleIndex(index?: number | null): number {

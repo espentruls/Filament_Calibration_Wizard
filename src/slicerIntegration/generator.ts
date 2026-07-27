@@ -118,7 +118,13 @@ export function generateProfile(
     newName: request.newName,
     patches: request.patches,
     targetExtruderIndex: request.targetExtruderIndex,
-    applyToAllExtruders: request.applyToAllExtruders
+    applyToAllExtruders: request.applyToAllExtruders,
+    // defaultTargetExtruder() clamps the target to the base preset's slot
+    // count, so targetExtruderIndex alone cannot tell cloneAndPatch which
+    // physical nozzle was calibrated. Pass it explicitly: a preset too narrow
+    // to address that nozzle must withhold the values, not write them into the
+    // slot every nozzle reads.
+    calibratedNozzleIndex: request.project.nozzleIndex ?? 0
   });
 
   // Bambu Studio only: bake pressure advance into the filament start g-code.
@@ -127,8 +133,15 @@ export function generateProfile(
   // owns PA), so an M900 in start g-code is the only path that applies the
   // calibrated K. Matches the exact command Orca itself emits for Bambu
   // printers. Requires Flow Dynamics = Off in the Send-print-job dialog.
+  //
+  // The bake is a second way the SAME number reaches the machine, so it must
+  // obey the same withholding rule: when cloneAndPatch refused to write
+  // pressure_advance (the base preset cannot address the calibrated nozzle),
+  // an M900 in start g-code would hand that K to whichever nozzle runs the
+  // preset — the exact cross-nozzle write that was just prevented.
   const paPatch = request.patches.find(p => p.presetKey === 'pressure_advance');
-  if (request.bakePressureAdvanceGcode && request.slicerId === 'bambu' && paPatch) {
+  const paWithheld = (skippedFields ?? []).some(s => s.presetKey === 'pressure_advance');
+  if (request.bakePressureAdvanceGcode && request.slicerId === 'bambu' && paPatch && !paWithheld) {
     const before = firstStartGcode(data);
     const k = formatPresetNumber(paPatch.value);
     const line = `M900 K${k} L1000 M10 ${PA_GCODE_MARKER}`;
@@ -137,6 +150,14 @@ export function generateProfile(
       presetKey: 'filament_start_gcode',
       label: 'Pressure advance (baked into start g-code for Bambu Studio)',
       before, after: firstStartGcode(data) ?? ''
+    });
+  } else if (request.bakePressureAdvanceGcode && request.slicerId === 'bambu' && paPatch && paWithheld) {
+    // The user asked for the bake and it did not happen: say so, or the review
+    // screen shows a request that quietly evaporated.
+    skippedFields.push({
+      presetKey: 'filament_start_gcode',
+      label: 'Pressure advance (baked into start g-code for Bambu Studio)',
+      reason: `The M900 K line was NOT added to the filament start g-code: pressure advance itself was withheld above, and start g-code runs on whichever nozzle prints this filament — baking nozzle ${(request.project.nozzleIndex ?? 0) + 1}'s K there would apply it to every nozzle. Fix the base preset (or set K by hand for that nozzle) and re-generate.`
     });
   }
 

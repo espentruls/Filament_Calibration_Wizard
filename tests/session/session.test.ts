@@ -21,13 +21,8 @@ import {
   startGuidedSession,
   syncSessionValues
 } from '../../src/session';
-import {
-  getWorkingProfile,
-  isAutomatedCalibrationEnabled,
-  validateSession
-} from '../../src/automatedCalibration';
+import { getWorkingProfile, validateSession } from '../../src/automatedCalibration';
 import { workingProfileNozzles } from '../../src/automatedCalibration/session';
-import { DEFAULT_EXPERIMENTAL_FEATURES } from '../../src/slicerIntegration/types';
 import {
   T,
   auxProject,
@@ -90,12 +85,15 @@ describe('opening a session over an existing project', () => {
   });
 });
 
-describe('the manual path with the automation flag off', () => {
-  it('is the default state of the app', () => {
-    expect(DEFAULT_EXPERIMENTAL_FEATURES.automatedCalibration).toBe(false);
-    expect(isAutomatedCalibrationEnabled(DEFAULT_EXPERIMENTAL_FEATURES)).toBe(false);
-    // The persisted-flag path (no localStorage in node) must not throw either.
-    expect(isAutomatedCalibrationEnabled()).toBe(false);
+describe('the manual path', () => {
+  // The assisted auto-prepare path — and the experimental flag that gated it —
+  // was deleted before release, so `manual_export` is not a default the app can
+  // be talked out of: it is the only path a session has.
+  it('is the only path a session can start on', () => {
+    const project = makeProject({}, 'orca');
+    startGuidedSession(project, { printer, now: T.t1 });
+    expect(project.slicerMode).toBe('manual_export');
+    expect(project.selectedEngineId).toBeUndefined();
   });
 
   it('runs a whole calibration through, carrying every result forward', () => {

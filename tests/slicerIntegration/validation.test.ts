@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { getAdapter } from '../../src/slicerIntegration/adapters';
-import { buildPatchesFromProject, generateProfile } from '../../src/slicerIntegration/generator';
+import { buildPatchesFromProject, defaultTargetExtruder, generateProfile } from '../../src/slicerIntegration/generator';
 import { summarizeDiff, formatChange, fullJsonDiff } from '../../src/slicerIntegration/diff';
 import { unacknowledgedWarnings, validateGeneratedProfile } from '../../src/slicerIntegration/validation';
 import type { GeneratedFilamentProfile, ParsedFilamentProfile } from '../../src/slicerIntegration/types';
@@ -336,6 +336,132 @@ describe('validation', () => {
       const e = result.errors.find(x => x.code === 'TEMP_OVER_PRINTER_MAX');
       expect(e?.message).toContain('slot 2');
       expect(e?.message).toContain('500');
+    });
+  });
+
+  // Orca-family get_at(i) falls back to element 0 when the array is shorter
+  // than the extruder index, so a preset with fewer value slots than the
+  // machine has nozzles applies its ONE value to EVERY nozzle. Calibrating the
+  // bowden auxiliary nozzle against such a base would hand the direct-drive
+  // main hotend the aux nozzle's pressure advance and retraction distance.
+  describe('base preset slot width vs. the calibrated nozzle', () => {
+    const x2dPrinter: PrinterProfile = {
+      ...printer,
+      extruderType: 'direct',
+      nozzles: [
+        { label: 'Main (direct drive)', feed: 'direct' },
+        { label: 'Auxiliary (bowden)', feed: 'bowden' }
+      ]
+    };
+
+    function auxProject(): CalibrationProject {
+      const p = makeProject({
+        nozzleTemp: 255, firstLayerTemp: 260, flowRatio: 0.94,
+        pressureAdvance: 0.72, retractionDistance: 3.5
+      });
+      p.nozzleIndex = 1; // the bowden auxiliary nozzle
+      return p;
+    }
+
+    it('blocks a single-slot base that cannot hold a value for the calibrated nozzle', () => {
+      const project = auxProject();
+      const parsed = parseFixture('orca-user-delta-pla.json');
+      expect(parsed.extruderCount).toBe(1);
+      const target = defaultTargetExtruder(project, parsed.extruderCount);
+      expect(target).toBe(0); // clamped onto the MAIN nozzle's slot
+      const generated = generateProfile({
+        slicerId: 'orca', baseProfile: parsed.profile, newName: 'PF Aux On Narrow Base',
+        patches: buildPatchesFromProject(project), targetExtruderIndex: target,
+        applyToAllExtruders: false, project
+      }, parsed);
+      // The clamp is exactly why nothing may be written: the only slot there is
+      // is the one EVERY nozzle reads, so the base's own main-nozzle values
+      // stay untouched and the aux calibration is withheld and reported.
+      expect(generated.data.pressure_advance).toEqual(['0.042']);
+      expect(generated.data.filament_retraction_length).toBeUndefined();
+      expect((generated.skippedFields ?? []).map(s => s.presetKey).sort()).toEqual([
+        'enable_pressure_advance', 'filament_flow_ratio', 'filament_max_volumetric_speed',
+        'filament_retraction_length', 'nozzle_temperature',
+        'nozzle_temperature_initial_layer', 'pressure_advance'
+      ]);
+      // The reported change list must match the file exactly: nothing written,
+      // nothing reported.
+      expect(generated.changedFields).toEqual([]);
+
+      const result = validateGeneratedProfile(generated, { project, printer: x2dPrinter, baseProfile: parsed.profile });
+      const e = result.errors.find(x => x.code === 'BASE_CANNOT_ADDRESS_NOZZLE');
+      expect(e?.message).toContain('nozzle 2');
+      expect(result.valid).toBe(false);
+    });
+
+    it('lets the same project through on a base that carries a slot per nozzle', () => {
+      const project = auxProject();
+      const parsed = parseFixture('bambu-user-full-pctg-dualnozzle.json', 'bambu');
+      expect(parsed.extruderCount).toBe(2);
+      const generated = generateProfile({
+        slicerId: 'bambu', baseProfile: parsed.profile, newName: 'PF Aux On Wide Base',
+        patches: buildPatchesFromProject(project), targetExtruderIndex: defaultTargetExtruder(project, parsed.extruderCount),
+        applyToAllExtruders: false, project
+      }, parsed);
+      expect((generated.data.pressure_advance as string[])[1]).toBe('0.72');
+      const result = validateGeneratedProfile(generated, { project, printer: x2dPrinter, baseProfile: parsed.profile });
+      expect(result.errors.some(x => x.code === 'BASE_CANNOT_ADDRESS_NOZZLE')).toBe(false);
+    });
+
+    it('warns when the base is narrower than the printer even if the target slot exists', () => {
+      const project = makeProject(); // calibrates nozzle 1 (index 0)
+      const parsed = parseFixture('orca-user-delta-pla.json');
+      const generated = generateProfile({
+        slicerId: 'orca', baseProfile: parsed.profile, newName: 'PF Narrow Base Main',
+        patches: buildPatchesFromProject(project), targetExtruderIndex: 0,
+        applyToAllExtruders: false, project
+      }, parsed);
+      const result = validateGeneratedProfile(generated, { project, printer: x2dPrinter, baseProfile: parsed.profile });
+      expect(result.errors.some(x => x.code === 'BASE_CANNOT_ADDRESS_NOZZLE')).toBe(false);
+      const w = result.warnings.find(x => x.code === 'BASE_NARROWER_THAN_PRINTER');
+      expect(w?.requiresAcknowledgement).toBe(true);
+      expect(unacknowledgedWarnings(result, []).some(x => x.code === 'BASE_NARROWER_THAN_PRINTER')).toBe(true);
+    });
+
+    it('stays silent on a single-nozzle printer with a single-slot base', () => {
+      const project = makeProject();
+      const { generated, parsed } = generate(project);
+      const result = validateGeneratedProfile(generated, { project, printer, baseProfile: parsed.profile });
+      expect(result.errors).toEqual([]);
+      expect(result.warnings.some(x => x.code === 'BASE_NARROWER_THAN_PRINTER')).toBe(false);
+    });
+  });
+
+  // Every machine-limit check is guarded by `printer &&`, so with no resolvable
+  // printer profile they all evaluate to nothing. Silence there used to render
+  // as "All checks passed — nothing conflicts with this printer".
+  describe('no resolvable printer profile', () => {
+    it('says the machine limits were skipped instead of passing silently', () => {
+      const project = makeProject({ firstLayerTemp: 400 });
+      const parsed = parseFixture('bambu-user-full-pctg-dualnozzle.json', 'bambu');
+      const generated = generateProfile({
+        slicerId: 'bambu', baseProfile: parsed.profile, newName: 'PF No Printer',
+        patches: buildPatchesFromProject(project), targetExtruderIndex: 0,
+        applyToAllExtruders: false, project
+      }, parsed);
+      // 400 °C really is written into the preset.
+      expect((generated.data.nozzle_temperature_initial_layer as string[])[0]).toBe('400');
+
+      const withPrinter = validateGeneratedProfile(generated, { project, printer, baseProfile: parsed.profile });
+      expect(withPrinter.errors.some(e => e.code === 'TEMP_OVER_PRINTER_MAX')).toBe(true);
+
+      const noPrinter = validateGeneratedProfile(generated, { project, printer: undefined, baseProfile: parsed.profile });
+      const w = noPrinter.warnings.find(x => x.code === 'PRINTER_UNRESOLVED');
+      expect(w?.requiresAcknowledgement).toBe(true);
+      expect(w?.message).toContain('maximum nozzle temperature');
+      expect(unacknowledgedWarnings(noPrinter, []).some(x => x.code === 'PRINTER_UNRESOLVED')).toBe(true);
+    });
+
+    it('does not raise it when a printer profile is present', () => {
+      const project = makeProject();
+      const { generated, parsed } = generate(project);
+      const result = validateGeneratedProfile(generated, { project, printer, baseProfile: parsed.profile });
+      expect(result.warnings.some(x => x.code === 'PRINTER_UNRESOLVED')).toBe(false);
     });
   });
 

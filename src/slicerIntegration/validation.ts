@@ -12,6 +12,7 @@ import { extruderCountOf, normalizeMaterial, sameMaterialFamily } from './orcaFa
 import { summarizeDiff } from './diff';
 import { projectMaterialLabel } from './recommendations';
 import { getMaterial } from '../data/materials';
+import { FLEXIBLE_RETRACTION_MAX_MM } from '../logic/ranges';
 
 export interface ValidationContext {
   project: CalibrationProject;
@@ -90,8 +91,11 @@ const CHAMBER_TEMP_KEYS: { key: string; label: string }[] = [
   { key: 'chamber_temperatures', label: 'Chamber temperature' }
 ];
 
-/** Same cap suggestRetractionRange() applies to flexibles (src/logic/ranges.ts). */
-const FLEXIBLE_RETRACTION_MAX_MM = 1.5;
+/**
+ * Re-exported so importers of the write path see the same identity the
+ * suggestion layer and the retraction test form use. One number, one owner.
+ */
+export { FLEXIBLE_RETRACTION_MAX_MM };
 /** Same window the retraction test form accepts at entry time (src/ui/testForms.ts). */
 const RETRACTION_SPEED_MIN_MMS = 5;
 const RETRACTION_SPEED_MAX_MMS = 120;
@@ -209,6 +213,14 @@ export function validateGeneratedProfile(
   // Read from the preset that will be written, so a calibrated value equal to
   // the base value is checked exactly like a changed one.
   const printer = ctx.printer;
+  // Every limit below is guarded by `printer &&`. With no printer profile they
+  // all evaluate to nothing, and an empty result reads as "all checks passed"
+  // in the wizard. Say plainly that nothing was checked instead, and make it an
+  // acknowledged warning so installing becomes a conscious decision.
+  if (!printer) {
+    warnings.push(warn('PRINTER_UNRESOLVED',
+      'No printer profile could be loaded for this project (the profile it referenced was deleted, or was not included in the backup that was restored), so NONE of the machine limits were checked: maximum nozzle temperature, maximum bed temperature, chamber temperature and maximum flow were all skipped. Only absolute plausibility bands were applied. Re-link this project to a printer profile before installing, or confirm by hand that every value below is inside your machine’s ratings.', true));
+  }
   const written = reparsed ?? (generated.data as Record<string, unknown>);
   const each = (key: string, fn: (v: number, where: string) => void): void => {
     for (const { n, where } of writtenValues(written, key)) fn(n, where);
@@ -303,6 +315,27 @@ export function validateGeneratedProfile(
       errors.push(err('SHRINK_IMPLAUSIBLE', `Shrinkage${where} ${shrink}% is outside the plausible range (90–102%).`));
     }
   });
+
+  // --- can this base preset even address the calibrated nozzle? -------------
+  // Orca-family `get_at(i)` falls back to element 0 when a per-extruder array
+  // is shorter than the extruder index, so a preset with fewer value slots than
+  // the machine has nozzles applies its single value to EVERY nozzle — the same
+  // premise the padding rule in cloneAndPatch() rests on. Generating against
+  // such a base silently clamps the target slot to 0 (defaultTargetExtruder),
+  // so an auxiliary bowden nozzle's calibration lands on the main direct-drive
+  // hotend with nothing withheld and nothing reported.
+  {
+    const baseSlots = extruderCountOf(baseRaw);
+    const calibratedNozzle = ctx.project.nozzleIndex ?? 0;
+    const physicalNozzles = ctx.printer?.nozzles?.length ?? 0;
+    if (baseSlots <= calibratedNozzle) {
+      errors.push(err('BASE_CANNOT_ADDRESS_NOZZLE',
+        `This base preset carries only ${baseSlots} value slot(s), so it cannot hold a value for nozzle ${calibratedNozzle + 1} — the nozzle this project calibrated. Orca-family slicers apply a single-slot value to EVERY nozzle, so installing this would give every nozzle (including the main one) nozzle ${calibratedNozzle + 1}'s calibration. Pick a base preset for this machine that carries ${calibratedNozzle + 1} value slots.`));
+    } else if (physicalNozzles > baseSlots) {
+      warnings.push(warn('BASE_NARROWER_THAN_PRINTER',
+        `This base preset carries ${baseSlots} value slot(s) but the printer profile declares ${physicalNozzles} physical nozzles. The slicer will apply slot 1's values to every nozzle, including ones this project did not calibrate.`, true));
+    }
+  }
 
   // --- calibrated values that were deliberately not written -----------------
   for (const s of generated.skippedFields ?? []) {

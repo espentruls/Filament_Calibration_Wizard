@@ -1,8 +1,13 @@
 // ---------------------------------------------------------------------------
-// Automated Calibration Pipeline — public surface (Stage 1).
+// Session / working-profile helpers — public surface.
 //
-// Contracts + pure helpers only. No engine, session persistence, slicing, or UI
-// is exported yet; those arrive in later stages behind the disabled flag.
+// This directory once also held the assisted auto-prepare path: a slicing-engine
+// abstraction, an Orca preset resolver, a 3mf project assembler and an unbounded
+// project-config merge. That path was deleted before release, together with the
+// native commands behind it (see CHANGELOG.md and docs/X2D_ENHANCEMENT_PLAN.md).
+// What remains is what the guided session in `src/session` actually uses: pure,
+// storage-only helpers for per-nozzle working profiles and the step workflow.
+// Nothing here slices, writes a project file, or edits a slicer preset.
 // ---------------------------------------------------------------------------
 
 export type * from './types';
@@ -17,6 +22,7 @@ export {
   normalizeNozzleIndex,
   profileNozzleIndex,
   primaryNozzleIndex,
+  printerNozzleCount,
   getWorkingProfile,
   listWorkingProfiles
 } from './session';
@@ -25,17 +31,6 @@ export {
 // the printer profile rather than one per stored working profile. Import it from
 // './session' directly if a caller ever genuinely needs it.
 export type { WorkingProfileHolder } from './session';
-
-export {
-  emptyEngineCapabilities,
-  supported,
-  unsupported,
-  printerNozzleCount,
-  isMultiNozzlePrinter,
-  multiExtruderSupport
-} from './capabilities';
-
-export { isAutomatedCalibrationEnabled } from './featureFlag';
 
 export {
   AUTOMATED_SESSION_SCHEMA,
@@ -69,75 +64,3 @@ export {
   markStaleJobs
 } from './workflow';
 export type { NormalizedProfileKey, StepResultValues, StepReadiness } from './workflow';
-
-export {
-  CALIBRATION_ASSETS,
-  getAsset,
-  resolveAsset,
-  joinResourcePath
-} from './assets';
-export type { AssetSourceKind, AssetResolutionContext, AssetResolution } from './assets';
-
-export {
-  JOB_MANIFEST_SCHEMA,
-  WORKSPACE_PREFIX,
-  workspaceDirName,
-  isPerfectFitWorkspaceName,
-  prepareJob
-} from './projectPreparation';
-// `resolveJobNozzleIndex` stays module-local: it is `prepareJob`'s own input
-// precedence rule, and every caller reads the nozzle back off the returned plan.
-export type {
-  StagedFileDescriptor,
-  JobManifest,
-  PreparedJobPlan,
-  PrepareJobInput
-} from './projectPreparation';
-
-// --- engine layer (Stage 5) ------------------------------------------------
-
-export { nativeEngineBridge, fromRawCapabilities } from './engineBridge';
-export type {
-  EngineNativeBridge,
-  RawEngineDetection,
-  RawEngineCapabilities,
-  RawSliceRun,
-  RunSliceArgs,
-  RawAssembledProject,
-  AssembleProjectArgs,
-  RawResolvedPreset,
-  ResolvePresetArgs,
-  RawMachinePreset
-} from './engineBridge';
-
-export {
-  mapPrinterToOrca,
-  formatNozzle,
-  presetExtruderCount,
-  projectPresetForNozzle,
-  PER_EXTRUDER_MACHINE_KEYS
-} from './printerMapping';
-export type { OrcaMachineMapping, PerExtruderProjection } from './printerMapping';
-
-export { InstalledOrcaEngine } from './engines/installedOrcaEngine';
-export { ManualExportEngine } from './engines/manualExportEngine';
-export {
-  baseName,
-  dirName,
-  resourcesRootFromExe,
-  inspectSlicedJob,
-  notSlicedJob,
-  splitRawDetection,
-  applyNozzleToPreset
-} from './engines/engineSupport';
-
-export {
-  parseProjectConfig,
-  applyPatchesToConfig,
-  serializeProjectConfig,
-  mergeCalibrationIntoProjectConfig
-} from './orcaProjectConfig';
-export type { ConfigMergeResult } from './orcaProjectConfig';
-
-export { createEngines, discoverEngines } from './engineRegistry';
-export type { EngineStatus, EngineDiagnostics, EngineDiscoveryContext } from './engineRegistry';

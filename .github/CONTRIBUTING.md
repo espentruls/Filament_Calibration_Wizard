@@ -1,8 +1,22 @@
-# Contributing to PerfectFit Filament Calibration Wizard
+# Contributing to PerfectFit X2D Filament Calibration Wizard
 
-Thank you for helping improve PerfectFit Filament Calibration Wizard.
+Thank you for helping improve PerfectFit X2D Filament Calibration Wizard.
 
-PerfectFit is a guided desktop application that helps users calibrate filament for Orca Slicer and Bambu Studio. Contributions may include bug reports, feature suggestions, documentation improvements, testing, and code changes.
+PerfectFit X2D is a guided desktop application that helps users calibrate filament for Orca Slicer and Bambu Studio. Contributions may include bug reports, feature suggestions, documentation improvements, testing, and code changes.
+
+There are several ways you can contribute.
+
+- Report bugs
+- Suggest features
+- Improve documentation
+- Submit code improvements
+- Test beta releases
+
+Before creating a new Issue, please search existing issues to avoid duplicates.
+
+> This file is the only contributing guide. A misspelled root-level copy
+> (`CONRIBUTING.md`) existed until 2.0.0 and drifted out of step with this one;
+> it has been removed rather than maintained twice.
 
 ## Choosing the right contribution type
 
@@ -75,8 +89,8 @@ PerfectFit uses Tauri with a web frontend and Rust backend.
 ### Clone and run the project
 
 ```bash
-git clone (https://github.com/tayloraaron078-tech/Filament_Calibration_Wizard.git)
-cd REPOSITORY
+git clone https://github.com/espentruls/Filament_Calibration_Wizard.git
+cd Filament_Calibration_Wizard
 npm install
 npm run tauri dev
 ```
