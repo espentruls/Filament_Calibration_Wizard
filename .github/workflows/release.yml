@@ -296,6 +296,11 @@ jobs:
             - Preset formats are version-volatile, so direct install is enabled only for
               slicer versions verified for it.
             - Linux and macOS slicer detection are less exercised than Windows.
+            - This release adds a Content-Security-Policy to the desktop window. It was
+              verified on Windows (WebView2) by launching the packaged build; the macOS
+              and Linux packages ship it unverified on WebKit. If the window opens blank
+              or the navigation icons are missing on those platforms, that is the likely
+              cause and it is worth an issue.
 
             Licensed AGPL-3.0, like the upstream project.
           # Stays a DRAFT until every platform has built and the Windows
