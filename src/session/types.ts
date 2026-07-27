@@ -5,8 +5,8 @@
 // entity competing with it. The project already records the plan (`stepOrder`),
 // the results (`steps`, `finals`), the nozzle (`nozzleIndex`) and the timeline;
 // the session adds only what a project cannot express on its own — where the
-// user is, what each value's PROVENANCE is, what to change in the slicer right
-// now, and whether an engine could prepare the next test automatically.
+// user is, what each value's PROVENANCE is, and what to change in the slicer
+// right now.
 //
 // The persisted half of that (session status, per-nozzle working profiles,
 // generated jobs) reuses the optional session fields upstream already added to
@@ -25,12 +25,7 @@ import type {
   SlicerId,
   StepStatus
 } from '../types';
-import type {
-  CalibrationSessionStatus,
-  CapabilityResult,
-  EngineId,
-  ProvenanceSource
-} from '../automatedCalibration';
+import type { CalibrationSessionStatus, ProvenanceSource } from '../automatedCalibration';
 import type { NormalizedProfileKey } from '../automatedCalibration';
 
 // --- values & provenance ----------------------------------------------------
@@ -237,126 +232,6 @@ export interface SessionActionPlan {
    * inventing a menu path — is forbidden.
    */
   gaps: string[];
-}
-
-// --- engine capability (progressive enhancement) ----------------------------
-
-export type SessionPathMode = 'manual' | 'assisted';
-
-/**
- * Why auto-preparation is, or is not, available. Codes are stable so the UI can
- * branch — offer "turn on automated slicing", "locate OrcaSlicer…", or, for a
- * permanent answer, simply state it once and move on.
- */
-export type CapabilityCode =
-  | 'available'
-  /**
-   * PerfectFit's engine layer does not drive this slicer at all. This is
-   * architecture, not a missing piece: the automated pipeline slices through
-   * OrcaSlicer, and Bambu Studio is a hand-off destination by design. Nothing
-   * the user installs or switches on changes it, so the UI must not word it as
-   * a setup problem.
-   */
-  | 'slicer-not-driven'
-  /** The experimental `automatedCalibration` flag is off — the default. */
-  | 'flag-off'
-  /** Running in a browser build, with no Tauri desktop shell. */
-  | 'not-desktop'
-  /** Nothing that can slice was found on this machine. */
-  | 'no-engine'
-  /** An installation was found but did not validate. */
-  | 'engine-unusable'
-  /** The engine cannot target the nozzle this session calibrates. */
-  | 'nozzle-unsupported'
-  /** A checklist step: there is no test print to prepare. */
-  | 'step-not-sliced'
-  /** The step needs something the detected engine cannot do. */
-  | 'step-unsupported'
-  /** The step's test model cannot be sourced from an allowed location. */
-  | 'asset-unavailable'
-  /** The probe itself failed. Reported, never thrown. */
-  | 'probe-failed';
-
-export interface CapabilityReason {
-  code: CapabilityCode;
-  /**
-   * Sentence-case, user-readable, safe to render verbatim. These describe
-   * PerfectFit's own state (flags, engines, nozzles) and use slicer NAMES from
-   * `src/data/slicers.ts` — never slicer facts, which only ever come from the
-   * shipped content by way of `SessionAction`.
-   */
-  message: string;
-  /**
-   * 'info' for an expected state (the flag is off, this is a browser, this
-   * slicer is not one we drive). 'caution' only when something actually looks
-   * wrong — a broken install, a failed probe. Never 'alert': not being able to
-   * automate is not an alarm.
-   */
-  severity: ActionSeverity;
-  /**
-   * True when nothing the user can install, enable or configure will change
-   * this answer. The UI states a permanent reason once, quietly, and offers no
-   * remedy — an "install OrcaSlicer" nudge under a permanent no is a lie.
-   */
-  permanent: boolean;
-}
-
-/**
- * What PerfectFit automates INSTEAD, when it cannot prepare the test itself.
- * For a slicer the engine layer does not drive, the real win is still there:
- * generating the filament preset and installing it, per nozzle.
- */
-export interface CapabilityAlternative {
-  kind: 'install-preset';
-  /** Sentence-case, e.g. "Install a calibrated Bambu Studio preset". */
-  title: string;
-  /** One sentence saying what that does. */
-  detail: string;
-}
-
-/**
- * The typed hand-off the UI passes to the automated pipeline when (and only
- * when) auto-preparation is genuinely available. No slicing happens here.
- */
-export interface AutoPrepareHandoff {
-  engineId: EngineId;
-  projectId: string;
-  stepId: CalibrationId;
-  nozzleIndex: number;
-  /** Upstream's fingerprint of the inputs this job would consume. */
-  inputFingerprint: string;
-}
-
-export interface SessionCapability {
-  stepId: CalibrationId;
-  nozzleIndex: number;
-  mode: SessionPathMode;
-  /** The manual path is always available — that is the whole point. */
-  manualPathAvailable: true;
-  canAutoPrepare: boolean;
-  engineId: EngineId | null;
-  /** Whether the experimental automatedCalibration flag is on. */
-  flagEnabled: boolean;
-  /** Whether a desktop bridge exists at all. */
-  desktop: boolean;
-  /**
-   * False when PerfectFit's engine layer does not drive this session's slicer
-   * at all — a permanent architectural answer, not a setup problem. The UI can
-   * branch on this alone, without reading the flag: for a Bambu Studio session
-   * there is one honest sentence to show and no remedy to offer.
-   */
-  automatable: boolean;
-  /** The engine's honest answer about this nozzle, when one was probed. */
-  nozzleSupport?: CapabilityResult;
-  /** User-readable reasons for the answer, positive or negative. */
-  reasons: string[];
-  /** The same reasons with their codes and severity, for a UI that branches. */
-  reasonDetails: CapabilityReason[];
-  /** The single line to show when there is room for one — `reasons[0]`. */
-  headline: string;
-  /** What PerfectFit automates instead, when the answer is a permanent no. */
-  alternative?: CapabilityAlternative;
-  handoff: AutoPrepareHandoff | null;
 }
 
 // --- partial profile --------------------------------------------------------

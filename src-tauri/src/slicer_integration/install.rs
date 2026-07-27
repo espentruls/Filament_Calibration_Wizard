@@ -32,6 +32,16 @@ fn fail(code: &str, detail: String) -> RawInstallOutcome {
     }
 }
 
+/// Combine the install failure with what a rollback managed to revert. A
+/// rollback that stopped part-way leaves the preset dir mixed, so its record of
+/// what it did change travels into the reported error instead of being lost.
+fn rollback_detail(install_error: String, rollback_error: Option<backup::RestoreFailure>) -> String {
+    match rollback_error {
+        None => install_error,
+        Some(f) => format!("{install_error}\nRollback did not complete: {f}"),
+    }
+}
+
 /// Best-effort removal of temp files; errors are ignored (temp files in the
 /// preset dir are invisible to the slicer because they end in .tmp).
 fn cleanup(paths: &[PathBuf]) {
@@ -41,7 +51,15 @@ fn cleanup(paths: &[PathBuf]) {
 }
 
 fn write_and_verify_temp(path: &Path, content: &str) -> Result<(), String> {
-    std::fs::write(path, content).map_err(|e| format!("Temp write failed: {e}"))?;
+    use std::io::Write;
+    let mut f = std::fs::File::create(path).map_err(|e| format!("Temp write failed: {e}"))?;
+    f.write_all(content.as_bytes())
+        .map_err(|e| format!("Temp write failed: {e}"))?;
+    // Flush the replacement's bytes to stable storage here, while the
+    // destination is still untouched (see move_into_place).
+    f.sync_all()
+        .map_err(|e| format!("Temp write failed to flush to disk: {e}"))?;
+    drop(f);
     let reread = std::fs::read_to_string(path).map_err(|e| format!("Temp re-read failed: {e}"))?;
     if reread != content {
         return Err("Temp file content mismatch after write".into());
@@ -50,13 +68,31 @@ fn write_and_verify_temp(path: &Path, content: &str) -> Result<(), String> {
 }
 
 /// Move temp into place. Windows rename fails when the destination exists, so
-/// replacement removes the destination first — safe because a verified backup
-/// of it already exists.
+/// replacement removes the destination first.
+///
+/// Ordering guarantee this relies on: the destination is only unlinked once
+/// two durable copies of the data already exist on disk — (a) the backup of
+/// the destination, which `backup::create_backup` fsyncs (copy, then manifest,
+/// then the backup directories) before install proceeds, and (b) the
+/// replacement in the temp file, whose bytes are fsynced here and whose
+/// directory entry is fsynced right after. Only then is the destructive step
+/// taken. So at every instant of the swap at least one complete copy of the
+/// preset is on stable storage: before the rename the backup plus the temp
+/// file, after the rename the destination itself. A failure to establish that
+/// barrier aborts *before* anything is removed, leaving the destination intact.
 fn move_into_place(temp: &Path, dest: &Path) -> Result<(), String> {
+    let dir = dest
+        .parent()
+        .ok_or_else(|| format!("Destination {} has no parent directory", dest.display()))?;
+    backup::sync_file(temp)?;
+    backup::sync_dir(dir)?;
     if dest.exists() {
         std::fs::remove_file(dest).map_err(|e| format!("Could not replace {}: {e}", dest.display()))?;
     }
-    std::fs::rename(temp, dest).map_err(|e| format!("Atomic move failed: {e}"))
+    std::fs::rename(temp, dest).map_err(|e| format!("Atomic move failed: {e}"))?;
+    // Make the swap itself durable, so a crash cannot resurrect the old entry
+    // while the new content is already the only copy left.
+    backup::sync_dir(dir)
 }
 
 /// The whole install transaction, with every directory injected.
@@ -147,11 +183,12 @@ pub fn install_core(
     if let Err(e) = move_into_place(&temp_json, &dest_json)
         .and_then(|_| move_into_place(&temp_info, &dest_info))
     {
-        let rolled_back = backup::restore_backup_inner(&manifest, allowed_restore_root).is_ok();
+        let rollback = backup::restore_backup_inner(&manifest, allowed_restore_root);
+        let rolled_back = rollback.is_ok();
         cleanup(&temps);
         let mut out = fail(
             if rolled_back { "ATOMIC_WRITE_FAILED" } else { "ROLLBACK_FAILED" },
-            e,
+            rollback_detail(e, rollback.err()),
         );
         out.backup_id = Some(backup_id);
         out.rolled_back = rolled_back;
@@ -181,10 +218,11 @@ pub fn install_core(
         });
 
     if let Err(e) = verification {
-        let rolled_back = backup::restore_backup_inner(&manifest, allowed_restore_root).is_ok();
+        let rollback = backup::restore_backup_inner(&manifest, allowed_restore_root);
+        let rolled_back = rollback.is_ok();
         let mut out = fail(
             if rolled_back { "INSTALL_VERIFICATION_FAILED" } else { "ROLLBACK_FAILED" },
-            e,
+            rollback_detail(e, rollback.err()),
         );
         out.backup_id = Some(backup_id);
         out.rolled_back = rolled_back;
@@ -315,6 +353,34 @@ pub fn verify_generated_profile(path: String, expected_json: String) -> Result<V
     }
 }
 
+/// Decide which file an export actually writes, given the path the user picked
+/// in the save dialog.
+///
+/// The dialog's overwrite confirmation covers exactly the path the user picked
+/// and nothing else, so that path is what gets written — the extension is
+/// never rewritten. `set_extension` used to retarget a *different* file here:
+/// "Saved PLA.txt" became "Saved PLA.json" and a dotted profile name like
+/// "PF PLA v1.2" became "PF PLA v1.json", either of which can already exist and
+/// would then be truncated with no prompt at all. The one adjustment left is
+/// appending ".json" to a pick with no extension whatsoever, and only when
+/// nothing is there to clobber; otherwise the export is refused and reported.
+pub fn resolve_export_path(picked: &Path) -> Result<PathBuf, String> {
+    if picked.extension().is_some() {
+        return Ok(picked.to_path_buf());
+    }
+    let mut with_json = picked.as_os_str().to_os_string();
+    with_json.push(".json");
+    let candidate = PathBuf::from(with_json);
+    if candidate.exists() {
+        return Err(format!(
+            "{} has no file extension and {} already exists. PerfectFit will not overwrite a file you did not pick — save again with a name ending in .json.",
+            picked.display(),
+            candidate.display()
+        ));
+    }
+    Ok(candidate)
+}
+
 /// Export via a native save dialog. The user picks the destination, which is
 /// the authorization for that single write. Content is written, re-read, and
 /// verified before reporting the saved path.
@@ -337,17 +403,10 @@ pub async fn save_exported_profile(
     let Some(file_path) = picked else {
         return Ok(None); // user cancelled
     };
-    let mut path = file_path
+    let picked = file_path
         .into_path()
         .map_err(|e| format!("Unsupported save location: {e}"))?;
-    if path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| !e.eq_ignore_ascii_case("json"))
-        .unwrap_or(true)
-    {
-        path.set_extension("json");
-    }
+    let path = resolve_export_path(&picked)?;
     std::fs::write(&path, &preset_json).map_err(|e| format!("Save failed: {e}"))?;
     let reread = std::fs::read_to_string(&path).map_err(|e| format!("Verification read failed: {e}"))?;
     if reread != preset_json {
@@ -549,6 +608,73 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_replacement_never_destroys_the_existing_file() {
+        let t = TempRoot::new("durability");
+        let dest = t.filament().join("PF Test Preset.json");
+        let original = "{\"name\": \"PF Test Preset\", \"origin\": \"old\"}";
+        std::fs::write(&dest, original).unwrap();
+        // Stand-in for a crash between "destination removed" and "replacement
+        // on disk": the replacement is not there when the move runs. The
+        // destructive step must not have happened yet.
+        let missing_temp = t.filament().join(".perfectfit-never-written.json.tmp");
+        let err = move_into_place(&missing_temp, &dest)
+            .expect_err("move with no replacement present must fail");
+        assert!(
+            dest.is_file(),
+            "destination was destroyed before the replacement was durable ({err})"
+        );
+        assert_eq!(std::fs::read_to_string(&dest).unwrap(), original);
+    }
+
+    #[test]
+    fn export_never_retargets_a_file_the_user_did_not_pick() {
+        let t = TempRoot::new("export");
+        let dir = t.filament();
+        // An unrelated preset the user already has.
+        let unrelated = dir.join("Saved PLA.json");
+        std::fs::write(&unrelated, "{\"other\":\"preset\"}").unwrap();
+
+        // The user picked a *different* file name in the save dialog.
+        for picked_name in ["Saved PLA.txt", "Saved PLA.bak"] {
+            let picked = dir.join(picked_name);
+            let resolved = resolve_export_path(&picked).unwrap();
+            assert_eq!(resolved, picked, "export rewrote the chosen path {picked_name}");
+        }
+
+        // A dotted profile name: "PF PLA v1.2" would become "PF PLA v1.json".
+        let dotted = dir.join("PF PLA v1.2");
+        std::fs::write(dir.join("PF PLA v1.json"), "{\"other\":\"preset\"}").unwrap();
+        let resolved = resolve_export_path(&dotted).unwrap();
+        assert_eq!(resolved, dotted, "export rewrote a dotted profile name");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("PF PLA v1.json")).unwrap(),
+            "{\"other\":\"preset\"}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&unrelated).unwrap(),
+            "{\"other\":\"preset\"}"
+        );
+    }
+
+    #[test]
+    fn export_appends_json_only_when_nothing_is_there_to_clobber() {
+        let t = TempRoot::new("exportext");
+        let dir = t.filament();
+        // No extension at all and the .json slot is free → append is safe.
+        let free = dir.join("PF Export");
+        assert_eq!(resolve_export_path(&free).unwrap(), dir.join("PF Export.json"));
+        // …but never when that would truncate an existing, unpicked file.
+        let taken = dir.join("PF Taken");
+        std::fs::write(dir.join("PF Taken.json"), "{\"other\":\"preset\"}").unwrap();
+        let err = resolve_export_path(&taken).expect_err("must refuse to clobber PF Taken.json");
+        assert!(err.contains("PF Taken.json"), "{err}");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("PF Taken.json")).unwrap(),
+            "{\"other\":\"preset\"}"
+        );
+    }
+
+    #[test]
     fn backup_checksum_guards_corrupted_restores() {
         let t = TempRoot::new("corrupt");
         let original = "{\"name\": \"PF Test Preset\"}";
@@ -563,8 +689,8 @@ mod tests {
         // corrupt the backed-up copy
         let backed = manifest.files[0].backup_path.clone().unwrap();
         std::fs::write(&backed, "corrupted").unwrap();
-        let err = backup::restore_backup_inner(&manifest, &t.0).unwrap_err();
-        assert!(err.contains("checksum mismatch"));
+        let err = backup::restore_backup_inner(&manifest, &t.0).unwrap_err().to_string();
+        assert!(err.contains("checksum mismatch"), "{err}");
         // the live file was not overwritten with corrupted data
         assert_eq!(
             std::fs::read_to_string(t.filament().join("PF Test Preset.json")).unwrap(),

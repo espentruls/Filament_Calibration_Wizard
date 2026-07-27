@@ -13,8 +13,11 @@ use slicer_integration::{
 #[cfg(target_os = "windows")]
 fn purge_stale_webview_caches() {
   let Ok(local) = std::env::var("LOCALAPPDATA") else { return };
+  // Must stay in step with `identifier` in tauri.conf.json: WebView2 keeps its
+  // profile in %LOCALAPPDATA%\<identifier>\EBWebView, so a stale value here
+  // silently purges a folder belonging to some other build.
   let profile = std::path::Path::new(&local)
-    .join("com.redeemed3d.perfectfit")
+    .join("io.github.espentruls.perfectfit-x2d")
     .join("EBWebView")
     .join("Default");
   for dir in ["Service Worker", "Cache", "Code Cache"] {

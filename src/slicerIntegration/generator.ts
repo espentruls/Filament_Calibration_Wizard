@@ -113,7 +113,7 @@ export function generateProfile(
   request: ProfileGenerationRequest,
   parsedBase: ParsedFilamentProfile
 ): GeneratedFilamentProfile {
-  const { data, changedFields, preservedFieldCount } = cloneAndPatch({
+  const { data, changedFields, skippedFields, preservedFieldCount } = cloneAndPatch({
     base: parsedBase,
     newName: request.newName,
     patches: request.patches,
@@ -165,6 +165,7 @@ export function generateProfile(
     baseProfileName: parsedBase.profile.name,
     baseProfileFingerprint: fingerprintProfile(parsedBase.profile.rawProfile),
     changedFields,
+    skippedFields,
     preservedFieldCount,
     generatedAt: new Date().toISOString()
   };

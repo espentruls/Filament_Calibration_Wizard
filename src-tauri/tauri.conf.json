@@ -1,9 +1,9 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "PerfectFit",
-  "mainBinaryName": "PerfectFit",
-  "version": "1.3.2",
-  "identifier": "com.redeemed3d.perfectfit",
+  "productName": "PerfectFit X2D",
+  "mainBinaryName": "PerfectFitX2D",
+  "version": "2.0.0",
+  "identifier": "io.github.espentruls.perfectfit-x2d",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5173",
@@ -14,7 +14,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "PerfectFit — Filament Calibration Wizard",
+        "title": "PerfectFit X2D — Filament Calibration Wizard",
         "width": 1100,
         "height": 800,
         "minWidth": 700,
@@ -30,6 +30,9 @@
   },
   "bundle": {
     "active": true,
+    "publisher": "espentruls",
+    "copyright": "AGPL-3.0-only. A fork of PerfectFit by Aaron Taylor.",
+    "shortDescription": "Filament calibration wizard for dual-nozzle printers",
     "targets": [
       "nsis"
     ],

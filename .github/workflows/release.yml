@@ -25,12 +25,17 @@ jobs:
             args: '--bundles nsis'
     runs-on: ${{ matrix.platform }}
     steps:
-      - uses: actions/checkout@v5
+      # Every action below is pinned to a commit SHA, not a moving tag: a tag
+      # can be repointed at any time, and these actions run with write access
+      # to the release and produce the binaries users install.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Setup Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
-          node-version: lts/*
+          # Pinned rather than lts/*, so the toolchain that builds a release is
+          # the one it was tested with instead of whatever is LTS that week.
+          node-version: '22'
           cache: npm
 
       - name: Install Linux build dependencies
@@ -39,15 +44,17 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
 
+      # The action is pinned; the toolchain it installs is still the current
+      # stable release, which is what Cargo.toml's rust-version floor expects.
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
-      - name: Cache Rust build artifacts
-        uses: swatinem/rust-cache@v2
-        with:
-          workspaces: './src-tauri -> target'
+      # No Rust build cache here on purpose. A release binary is something
+      # people run on their own machines; it is built from source every time
+      # rather than linked against object files restored from a mutable,
+      # branch-writable cache whose contents nothing in this workflow verifies.
 
       - name: Install frontend dependencies
         run: npm ci
@@ -55,51 +62,123 @@ jobs:
       - name: Validate printer database is up to date
         run: npm run validate:printers
 
-      - uses: tauri-apps/tauri-action@v1
+      - uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: 'PerfectFit ${{ github.ref_name }}'
+          releaseName: 'PerfectFit X2D ${{ github.ref_name }}'
           releaseBody: |
-            # PerfectFit 1.3.2
+            # PerfectFit X2D 2.0.0
 
-            A correctness patch, driven almost entirely by one very thorough community report. Thanks to **Guntram** on the Discord, who ran the full procedure against OrcaSlicer 2.4.2 and documented every place our instructions did not match what is actually on screen — and to **RThomasHyde** for the Linux AppImage report.
+            A fork of [PerfectFit](https://github.com/tayloraaron078-tech/Filament_Calibration_Wizard)
+            focused on **dual-nozzle printers** — in particular the Bambu Lab X2D, whose
+            auxiliary nozzle is bowden-fed and receives no automatic flow-dynamics
+            calibration from the printer.
 
-            ## ⚖️ PerfectFit is now licensed under AGPL-3.0
+            ## ⚠ Read first if you already have PerfectFit installed
 
-            Starting with this release, PerfectFit moves from its old custom non-commercial license (R3D-NC v1.0) to the **GNU Affero General Public License v3** — the same license as OrcaSlicer, PrusaSlicer, and Slic3r.
+            This build carries its own application identity — `PerfectFit X2D`,
+            identifier `io.github.espentruls.perfectfit-x2d` — instead of upstream's
+            `com.redeemed3d.perfectfit`. It therefore installs **alongside** upstream
+            PerfectFit rather than on top of it, and no longer shares upstream's data
+            store (previously both wrote to the same one, so upstream's "erase all data"
+            erased this app's projects too).
 
-            **For most people this is a loosening, not a restriction.** The old license banned commercial use entirely; AGPL-3.0 permits it. You may now use, modify, sell, or host PerfectFit freely. The one obligation: if you distribute a modified version — or run one as a network service — you must make your source available under the same license.
+            **Your calibration data does not move by itself.** Nothing is deleted — the
+            old data stays on disk — but this build starts empty. Before you install it:
 
-            The reason is compatibility. PerfectFit is built around the Orca-family slicers, and upcoming releases will integrate with them far more directly. AGPL section 7 forbids adding restrictions like "non-commercial" to a work that combines AGPL code, so the old license was a dead end for that roadmap.
+            1. In your existing build: **Settings → ⭳ Export all data + photos**, keep the JSON file.
+            2. Install this version.
+            3. **Settings → 📥 Restore from backup** and pick that file.
 
-            Releases up to and including 1.3.0 remain available under their original terms.
-
-            ## Highlights
-
-            - **⚠️ Printer database was corrupted for 374 of 379 printers — now fixed. Please refresh your saved printers.** A bug in the spreadsheet parser meant every blank cell stole the next cell's value, and 250 printers ended up with a max nozzle temperature of 27 °C or 69 °C. Because the app clamps the suggested temperature range to that limit and rejects anything above it, the temperature calibration step was effectively unusable for two-thirds of the printer database.
-
-              Specs are copied into your printer profile when you add it, so fixing the database alone does not repair a printer you already saved. **The app now offers to do it for you:** open **Printers** and any affected profile shows a "↻ Updated specs available" callout. Reviewing it lists every change — `Max nozzle temp: 27 °C → 300 °C` — before anything is written, and refreshing keeps your printer name, notes, retraction range, and the profile itself, so projects using that printer stay linked.
-
-              **Don't delete and re-add the printer.** Re-adding creates a new profile, and any project that referenced the old one loses its printer limits, range suggestions, and safety caps. (Your projects and calibration results live separately and are never deleted with a printer — but the link isn't restored by re-adding.) If you hand-tuned specs for modified hardware, cancel the refresh and edit the fields directly instead.
-            - **The generator now rejects physically impossible values.** `validate:printers` only checked that the JSON matched the workbook — which it faithfully did, which is why a 27 °C maximum nozzle temperature sailed through. Numeric specs are now range-checked when the database is generated, and anything implausible is stored as "not specified" and reported with its row number. It flagged 23 genuine data problems on first run, including a printer listed at 300 mm³/s of volumetric flow — all corrected in this release.
-            - **Slicer menu paths corrected in both directions.** Orca and Bambu Studio name the same tests differently, and several paths had drifted onto the wrong slicer's wording. Orca is `Calibration → Flow ratio`, `Calibration → Retraction`, and `Calibration → Max flowrate` at the top level; Bambu Studio is `Calibration → Flow rate → Coarse/Fine`, `Retraction test`, and `More... → Max flowrate`. The Bambu pressure advance path pointed at a menu entry that does not exist and now distinguishes the manual `Pressure advance` test from the machine's automatic Flow Dynamics wizard.
-            - **Temperature values are handed over in the slicer's own field order** — first layer, then other layers — matching how both slicers lay out the Nozzle line.
-            - **The "Resonance avoidance" dialog is explained.** Orca disables the setting for every calibration test by design; only one stock profile in Orca's catalog ships it enabled, so a small number of users saw an unexplained dialog. Transfer or Discard makes no difference, and the app now says why.
-            - **Multi-filament printers get a warning about slot assignment.** Orca's tests always target filament slot 1 and expose no extruder or slot picker anywhere, so the test can silently run with the wrong filament. This covers both toolchangers (Snapmaker U1, Prusa XL) and AMS/MMU machines (X1 Carbon, P1S, A1, MK4S) — an AMS bay and a separate toolhead are the same thing as far as the slicer is concerned. Both workarounds are spelled out.
-            - **New prerequisite:** confirm the selected printer preset matches the nozzle actually installed — the tests scale the model and layer height to the preset's nozzle diameter, so the wrong variant invalidates the result silently.
-            - **Blank window on Linux/Wayland (AppImage) fixed** — the app now disables WebKitGTK's DMABUF renderer, whose EGL initialisation fails on some Wayland setups.
-
-            Saved projects, printers, and backups all keep working — the only change to existing data is the opt-in spec refresh described above, which you review before it applies.
-
-            *(1.3.1 was tagged but superseded before publication; 1.3.2 contains everything from it, so upgrading from 1.3.0 gets the lot.)*
+            Slicer preset backups (Settings → "Slicer profile backups") are stored under
+            the old identity too — on Windows in
+            `%APPDATA%\com.redeemed3d.perfectfit\slicer-backups`. Restore anything you
+            still need from the old build before uninstalling it, or copy that folder to
+            `%APPDATA%\io.github.espentruls.perfectfit-x2d\slicer-backups` afterwards.
+            The browser/Docker deployment is unaffected: its data is keyed to the site
+            origin, not to the desktop identifier.
 
             ## Downloads
 
-            - Windows: NSIS installer (`.exe`).
-            - macOS: universal Apple Silicon + Intel disk image (`.dmg`).
-            - Linux: Debian package (`.deb`) plus portable AppImage (`.AppImage`).
+            - **Windows: `.exe` NSIS installer** — download, run, done.
+            - macOS: universal `.dmg` (Apple Silicon + Intel).
+            - Linux: `.deb` and portable `.AppImage`.
+
+            ## What this fork adds
+
+            - **Dual-nozzle printer profiles.** A printer has nozzles, each with its own
+              feed path. A Bambu Lab X2D quick-fill sets up both: main direct-drive, and
+              auxiliary bowden with its real speed and acceleration limits.
+            - **Per-nozzle calibration projects.** A project states which nozzle it
+              calibrates, and suggested ranges follow the feed path — a bowden auxiliary
+              nozzle gets a pressure-advance range roughly ten times a direct-drive
+              nozzle's, and retraction suggestions to match.
+            - **A guided calibration session.** One screen per test: the exact settings to
+              change, then print and measure. Results carry forward, so the pressure-advance
+              test runs at the temperature and flow ratio already measured. A material
+              default never satisfies a dependency, so a test cannot quietly run on a
+              generic value. Every pre-filled number shows where it came from.
+            - **An ooze-control step** for the idle-nozzle drool that only dual-nozzle
+              machines have, covering prime tower, ramming and pre-cool, and the
+              standby-temperature cycle behind it.
+            - **Bambu-specific guidance, per nozzle.** The Setting Overrides column, the
+              BambuStudio #10404 trap where an unset bowden override silently falls back to
+              the main nozzle's retraction, and the fact that pressure-advance K is stored
+              on the printer keyed to filament and nozzle — and only applies with the
+              pre-print calibration setting off.
+            - **A rebuilt interface** in a night instrument-panel language: an unmeasured
+              value shows an unlit dial rather than a fake zero, amber and red are reserved
+              for real caution, and the printable calibration card inverts to clean
+              ink-on-white for the sheet you carry to the machine.
+
+            ## Fixes carried over from the review of upstream 1.1.3
+
+            Ten verified defects, including one that blocked profile install and export for
+            every Bambu and stock base preset, per-extruder values leaking onto the wrong
+            nozzle, and temperature ranges collapsing to zero width on temperature-limited
+            printers.
+
+            ## Honest limitations
+
+            - Automated test *preparation* drives OrcaSlicer only — upstream treats Bambu
+              Studio as a manual handoff by design. For Bambu users the automation that
+              matters is preset installation, which writes calibrated values into a filament
+              preset per nozzle.
+            - The app never talks to your printer and never starts a print.
+            - Linux and macOS slicer detection are less exercised than Windows.
+
+            Licensed AGPL-3.0, like the upstream project.
+          # Stays a DRAFT until every platform has built and the Windows
+          # installer is actually attached (see the `publish` job). A public
+          # release that appears the moment the first runner finishes offers
+          # downloads that do not exist yet, and stays public advertising them
+          # if a later build fails.
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
+
+  publish:
+    # `needs` requires EVERY matrix job to have succeeded, which fail-fast:false
+    # does not change — it only stops one failure from cancelling the others.
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Publish the draft only once the Windows installer is attached
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          assets=$(gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets[].name')
+          echo "Assets attached to $TAG:"
+          echo "$assets"
+          if ! printf '%s\n' "$assets" | grep -qiE '\.exe$'; then
+            echo "::error::No Windows .exe installer is attached to $TAG. Leaving the release as a draft."
+            exit 1
+          fi
+          gh release edit "$TAG" --repo "$REPO" --draft=false --latest
+          echo "Published $TAG."

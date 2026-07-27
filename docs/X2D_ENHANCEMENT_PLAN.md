@@ -115,3 +115,66 @@ reports):
 
 Out of scope (for now): talking to the printer (K cannot be pushed via API by this
 app), auto-detecting the X2D from Bambu Studio configs, VFA scoring step.
+
+## Known hazard if slicing is ever wired up
+
+**Do not let PerfectFit slice a calibration test to g-code until an engine can be
+shown to apply the USER'S printer. Staging a project to open in the slicer is
+safe; producing g-code is not.**
+
+`InstalledOrcaEngine.prepareProject` (`src/automatedCalibration/`) assembles its
+project from OrcaSlicer's own shipped calibration template and merges in only the
+calibrated FILAMENT values. Everything describing the MACHINE — printer geometry,
+bed and travel limits, start/stop g-code, process settings — stays exactly as the
+template shipped it, because `resolvePrinterPreset` is still a stub that throws
+`FILAMENT_SELECTION_REQUIRED`. It has never resolved the user's own printer.
+
+So g-code sliced from that project is cut for the template's machine, not the one
+it will be printed on. Run on a different printer it can drive the toolhead
+outside its real travel, bed and temperature limits — a crash, not a bad print.
+The risk is worst on a machine like the X2D, whose geometry, dual toolheads and
+start g-code look nothing like a generic Orca template's.
+
+Staging is the safe half and is worth keeping: opened in the slicer with the
+user's own printer selected, the slicer applies the right machine and slices it
+correctly.
+
+This was briefly enforced in code by a `resolvesUserPrinter` capability flag on
+`SlicingEngineCapabilities`, which forced the runner to stage rather than slice.
+That flag was removed in July 2026 along with the assisted auto-prepare path it
+guarded (neither ever shipped — both were removed before release), since with the
+feature gone it had no consumer and no engine ever reported it true. **The hazard
+did not go away with it.** Anything that revives automatic slicing has to
+re-establish the same gate: prove the assembled project carries the user's
+machine, or stage only.
+
+Related: the capability check for that feature hard-coded `multi_extruder: false`
+in the Rust detection layer, so it refused every nozzle on a multi-nozzle machine
+anyway — automatic preparation could never have run on the X2D. And upstream's
+engine layer deliberately drives OrcaSlicer only; Bambu Studio is a hand-off
+destination by design, so it was never a candidate for this path.
+
+### The slice path has no value limits either
+
+A second, independent reason not to revive slicing without work first. The
+config merge that feeds the slicer —
+`mergeCalibrationIntoProjectConfig` / `applyPatchesToConfig` in
+`src/automatedCalibration/orcaProjectConfig.ts`, called from
+`InstalledOrcaEngine.prepareProject` — writes calibrated values straight into
+the project's `project_settings.config` with **no printer-limit check, no
+plausibility check, and no note recorded**. Verified against the code in July
+2026: finals of `{ nozzleTemp: 230, firstLayerTemp: 500 }` merged as
+`nozzle_temperature_initial_layer: ["500"]` with an empty notes list, and a
+9 mm retraction distance merged over a template's `["0.8"]` with no flexible
+cap applied.
+
+The preset-install path is guarded (`src/slicerIntegration/validation.ts`
+range-checks what it writes, and the test forms range-check what is entered).
+The slice path simply never had those guards, because it never had a user.
+`project.finals` is also not range-checked on import — a hand-edited or corrupt
+backup can put any number there — so the guard cannot be assumed to have
+happened upstream of the merge.
+
+If slicing is revived: run the same limit checks before handing a config to the
+engine, ideally by extracting the checks in `validation.ts` into one helper both
+paths call, so the two can never drift again.

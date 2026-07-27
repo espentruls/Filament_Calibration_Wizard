@@ -8,9 +8,10 @@ import type { CalibrationProject, PrinterProfile } from '../types';
 import type {
   DetectedFilamentProfile, GeneratedFilamentProfile, ProfileValidationResult, ValidationMessage
 } from './types';
-import { extruderCountOf, sameMaterialFamily } from './orcaFamily';
+import { extruderCountOf, normalizeMaterial, sameMaterialFamily } from './orcaFamily';
 import { summarizeDiff } from './diff';
 import { projectMaterialLabel } from './recommendations';
+import { getMaterial } from '../data/materials';
 
 export interface ValidationContext {
   project: CalibrationProject;
@@ -25,6 +26,86 @@ export interface ValidationContext {
 const err = (code: string, message: string): ValidationMessage => ({ code, message });
 const warn = (code: string, message: string, ack = false): ValidationMessage =>
   ({ code, message, requiresAcknowledgement: ack });
+
+// --- what the preset will actually make the printer do ----------------------
+// Limits are read from the generated preset, NOT from the changed-field list:
+// the printer executes the file. A calibrated value that happens to equal the
+// value already in the base produces no change entry, and a base value we are
+// re-writing unchanged is still a value this app puts in front of a heater.
+
+/** One value found in a preset key, with a slot suffix for multi-nozzle presets. */
+interface WrittenValue {
+  n: number;
+  /** " (slot 2)" on per-extruder arrays, "" on single-slot keys. */
+  where: string;
+}
+
+/**
+ * Numeric values a preset key will carry on disk. Skips "nil" and empty slots
+ * (the no-filament-override sentinel — those impose nothing on the printer) and
+ * anything that is not a number, which the NON_FINITE check already covers.
+ */
+function writtenValues(data: Record<string, unknown>, key: string): WrittenValue[] {
+  const v = data[key];
+  const slots: unknown[] = Array.isArray(v) ? v : (v === undefined || v === null ? [] : [v]);
+  const out: WrittenValue[] = [];
+  slots.forEach((slot, i) => {
+    if (typeof slot !== 'string' && typeof slot !== 'number') return;
+    const s = String(slot).trim();
+    if (s === '' || s.toLowerCase() === 'nil') return;
+    const n = Number(s.replace(/%$/, ''));
+    if (!Number.isFinite(n)) return;
+    out.push({ n, where: slots.length > 1 ? ` (slot ${i + 1})` : '' });
+  });
+  return out;
+}
+
+/** Nozzle-commanding temperature keys (NOT the *_range_* advisory fields). */
+const NOZZLE_TEMP_KEYS: { key: string; label: string }[] = [
+  { key: 'nozzle_temperature', label: 'Nozzle temperature' },
+  { key: 'nozzle_temperature_initial_layer', label: 'First layer nozzle temperature' }
+];
+
+/**
+ * Bed-commanding keys. Orca-family presets carry one pair per build plate type
+ * plus the PrusaSlicer-style generic pair; any of them can drive the bed.
+ */
+const BED_TEMP_KEYS: { key: string; label: string }[] = [
+  { key: 'hot_plate_temp', label: 'Hot plate temperature' },
+  { key: 'hot_plate_temp_initial_layer', label: 'Hot plate temperature (first layer)' },
+  { key: 'cool_plate_temp', label: 'Cool plate temperature' },
+  { key: 'cool_plate_temp_initial_layer', label: 'Cool plate temperature (first layer)' },
+  { key: 'eng_plate_temp', label: 'Engineering plate temperature' },
+  { key: 'eng_plate_temp_initial_layer', label: 'Engineering plate temperature (first layer)' },
+  { key: 'textured_plate_temp', label: 'Textured plate temperature' },
+  { key: 'textured_plate_temp_initial_layer', label: 'Textured plate temperature (first layer)' },
+  { key: 'supertack_plate_temp', label: 'Supertack plate temperature' },
+  { key: 'supertack_plate_temp_initial_layer', label: 'Supertack plate temperature (first layer)' },
+  { key: 'bed_temperature', label: 'Bed temperature' },
+  { key: 'bed_temperature_initial_layer', label: 'Bed temperature (first layer)' }
+];
+
+const CHAMBER_TEMP_KEYS: { key: string; label: string }[] = [
+  { key: 'chamber_temperature', label: 'Chamber temperature' },
+  { key: 'chamber_temperatures', label: 'Chamber temperature' }
+];
+
+/** Same cap suggestRetractionRange() applies to flexibles (src/logic/ranges.ts). */
+const FLEXIBLE_RETRACTION_MAX_MM = 1.5;
+/** Same window the retraction test form accepts at entry time (src/ui/testForms.ts). */
+const RETRACTION_SPEED_MIN_MMS = 5;
+const RETRACTION_SPEED_MAX_MMS = 120;
+
+/**
+ * Whether the calibrated filament is a flexible. Uses the wizard's own material
+ * preset first, then the free-text label for "Other / specialty" projects.
+ */
+function isFlexibleProject(project: CalibrationProject): boolean {
+  if (getMaterial(project.filament.material).flexible) return true;
+  const label = projectMaterialLabel(project);
+  if (normalizeMaterial(label)?.family === 'TPU') return true;
+  return /\bTP[UEC]\b/i.test(label);
+}
 
 export function validateGeneratedProfile(
   generated: GeneratedFilamentProfile,
@@ -125,47 +206,107 @@ export function validateGeneratedProfile(
   }
 
   // --- numeric limits (never clamped — reported with both values) -----------
+  // Read from the preset that will be written, so a calibrated value equal to
+  // the base value is checked exactly like a changed one.
   const printer = ctx.printer;
-  const get = (key: string): number | undefined => {
-    const c = generated.changedFields.find(f => f.presetKey === key);
-    return c ? Number(String(c.after).replace(/%$/, '')) : undefined;
+  const written = reparsed ?? (generated.data as Record<string, unknown>);
+  const each = (key: string, fn: (v: number, where: string) => void): void => {
+    for (const { n, where } of writtenValues(written, key)) fn(n, where);
   };
-  const nozzleTemp = get('nozzle_temperature');
-  if (nozzleTemp !== undefined) {
-    if (printer && nozzleTemp > printer.maxNozzleTemp) {
-      errors.push(err('TEMP_OVER_PRINTER_MAX',
-        `Nozzle temperature ${nozzleTemp} °C exceeds this printer's maximum of ${printer.maxNozzleTemp} °C. Correct the value or the printer limit before installing.`));
+
+  for (const { key, label } of NOZZLE_TEMP_KEYS) {
+    each(key, (t, where) => {
+      if (printer && t > printer.maxNozzleTemp) {
+        errors.push(err('TEMP_OVER_PRINTER_MAX',
+          `${label}${where} ${t} °C exceeds this printer's maximum of ${printer.maxNozzleTemp} °C. Correct the value or the printer limit before installing.`));
+      }
+      if (t < 140 || t > 450) {
+        errors.push(err('TEMP_IMPLAUSIBLE', `${label}${where} ${t} °C is outside the plausible printing range (140–450 °C).`));
+      }
+    });
+  }
+
+  for (const { key, label } of BED_TEMP_KEYS) {
+    each(key, (t, where) => {
+      if (printer && t > printer.maxBedTemp) {
+        errors.push(err('BED_TEMP_OVER_PRINTER_MAX',
+          `${label}${where} ${t} °C exceeds this printer's maximum bed temperature of ${printer.maxBedTemp} °C. Correct the value or the printer limit before installing.`));
+      }
+      if (t < 0 || t > 200) {
+        errors.push(err('BED_TEMP_IMPLAUSIBLE', `${label}${where} ${t} °C is outside the plausible bed range (0–200 °C).`));
+      }
+    });
+  }
+
+  for (const { key, label } of CHAMBER_TEMP_KEYS) {
+    each(key, (t, where) => {
+      if (t <= 0) return; // 0 = no chamber temperature requested
+      if (printer?.maxChamberTemp !== undefined && t > printer.maxChamberTemp) {
+        errors.push(err('CHAMBER_TEMP_OVER_PRINTER_MAX',
+          `${label}${where} ${t} °C exceeds this printer's maximum chamber temperature of ${printer.maxChamberTemp} °C.`));
+      }
+      if (t > 120) {
+        errors.push(err('CHAMBER_TEMP_IMPLAUSIBLE', `${label}${where} ${t} °C is outside the plausible chamber range (0–120 °C).`));
+      }
+      if (printer?.heatedChamber === false) {
+        warnings.push(warn('CHAMBER_NOT_HEATED',
+          `${label}${where} asks for ${t} °C, but this printer profile says it has no heated chamber. The slicer may wait for a temperature the machine can never reach.`));
+      }
+    });
+  }
+
+  each('filament_flow_ratio', (flow, where) => {
+    if (flow < 0.5 || flow > 1.5) {
+      errors.push(err('FLOW_IMPLAUSIBLE', `Flow ratio${where} ${flow} is outside the plausible range (0.5–1.5).`));
     }
-    if (nozzleTemp < 140 || nozzleTemp > 450) {
-      errors.push(err('TEMP_IMPLAUSIBLE', `Nozzle temperature ${nozzleTemp} °C is outside the plausible printing range (140–450 °C).`));
+  });
+
+  each('pressure_advance', (pa, where) => {
+    if (pa < 0 || pa > 2) {
+      errors.push(err('PA_IMPLAUSIBLE', `Pressure advance${where} ${pa} is outside the plausible range (0–2).`));
     }
-  }
-  const flow = get('filament_flow_ratio');
-  if (flow !== undefined && (flow < 0.5 || flow > 1.5)) {
-    errors.push(err('FLOW_IMPLAUSIBLE', `Flow ratio ${flow} is outside the plausible range (0.5–1.5).`));
-  }
-  const pa = get('pressure_advance');
-  if (pa !== undefined && (pa < 0 || pa > 2)) {
-    errors.push(err('PA_IMPLAUSIBLE', `Pressure advance ${pa} is outside the plausible range (0–2).`));
-  }
-  const retract = get('filament_retraction_length');
-  if (retract !== undefined && (retract < 0 || retract > 15)) {
-    errors.push(err('RETRACT_IMPLAUSIBLE', `Retraction length ${retract} mm is outside the plausible range (0–15 mm).`));
-  }
-  const mvs = get('filament_max_volumetric_speed');
-  if (mvs !== undefined) {
+  });
+
+  // Retraction: the suggestion layer caps flexibles at 1.5 mm because long
+  // retractions drag soft filament into the cold zone and jam the extruder.
+  // The write path has to enforce the same cap, or a value typed in by hand
+  // (or carried over from a rigid-filament base) reaches the printer anyway.
+  const flexible = isFlexibleProject(ctx.project);
+  const materialLabel = projectMaterialLabel(ctx.project);
+  each('filament_retraction_length', (retract, where) => {
+    if (retract < 0 || retract > 15) {
+      errors.push(err('RETRACT_IMPLAUSIBLE', `Retraction length${where} ${retract} mm is outside the plausible range (0–15 mm).`));
+    } else if (flexible && retract > FLEXIBLE_RETRACTION_MAX_MM) {
+      errors.push(err('RETRACT_OVER_FLEXIBLE_CAP',
+        `Retraction length${where} ${retract} mm exceeds the ${FLEXIBLE_RETRACTION_MAX_MM} mm limit PerfectFit applies to flexible filament (${materialLabel}). Long retractions pull soft filament into the cold zone and jam the extruder — lower it, or calibrate this filament as a rigid material only if you know the extruder tolerates it.`));
+    }
+  });
+  each('filament_retraction_speed', (speed, where) => {
+    if (speed < RETRACTION_SPEED_MIN_MMS || speed > RETRACTION_SPEED_MAX_MMS) {
+      errors.push(err('RETRACT_SPEED_IMPLAUSIBLE',
+        `Retraction speed${where} ${speed} mm/s is outside the range PerfectFit calibrates (${RETRACTION_SPEED_MIN_MMS}–${RETRACTION_SPEED_MAX_MMS} mm/s).`));
+    }
+  });
+
+  each('filament_max_volumetric_speed', (mvs, where) => {
     if (mvs <= 0 || mvs > 100) {
-      errors.push(err('MVS_IMPLAUSIBLE', `Maximum volumetric speed ${mvs} mm³/s is outside the plausible range (0–100).`));
+      errors.push(err('MVS_IMPLAUSIBLE', `Maximum volumetric speed${where} ${mvs} mm³/s is outside the plausible range (0–100).`));
     }
     if (printer?.maxVolumetricFlow && mvs > printer.maxVolumetricFlow) {
       warnings.push(warn('MVS_OVER_PRINTER',
-        `Calibrated max volumetric speed (${mvs} mm³/s) exceeds the printer profile's stated capability (${printer.maxVolumetricFlow} mm³/s). Install only if you trust the calibration result.`, true));
+        `Calibrated max volumetric speed${where} (${mvs} mm³/s) exceeds the printer profile's stated capability (${printer.maxVolumetricFlow} mm³/s). Install only if you trust the calibration result.`, true));
     }
-  }
+  });
 
-  const shrink = get('filament_shrink');
-  if (shrink !== undefined && (shrink < 90 || shrink > 102)) {
-    errors.push(err('SHRINK_IMPLAUSIBLE', `Shrinkage ${shrink}% is outside the plausible range (90–102%).`));
+  each('filament_shrink', (shrink, where) => {
+    if (shrink < 90 || shrink > 102) {
+      errors.push(err('SHRINK_IMPLAUSIBLE', `Shrinkage${where} ${shrink}% is outside the plausible range (90–102%).`));
+    }
+  });
+
+  // --- calibrated values that were deliberately not written -----------------
+  for (const s of generated.skippedFields ?? []) {
+    warnings.push(warn(`FIELD_NOT_WRITTEN:${s.presetKey}`, s.reason, true));
   }
 
   // --- material match ---------------------------------------------------------

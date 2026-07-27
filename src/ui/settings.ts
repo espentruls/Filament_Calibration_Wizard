@@ -1,7 +1,6 @@
 import { h, clear, field, numberInput, toast, confirmDialog, download } from './dom';
 import { loadSettings, saveSettings } from '../storage/store';
 import { exportAll, importBackup } from '../export/backup';
-import { importFilePicker } from './importExport';
 import { applyTheme } from '../app';
 import { idb } from '../storage/db';
 import { loadExperimentalFeatures, saveExperimentalFeatures } from '../slicerIntegration/featureFlags';
@@ -75,7 +74,7 @@ export function renderSettings(root: HTMLElement): void {
             download(`perfectfit-backup-full-${new Date().toISOString().slice(0, 10)}.json`, await exportAll(true));
           }
         }, '⭳ Export all data + photos'),
-        h('button', { class: 'btn', onClick: () => importFilePicker(() => { clear(root); renderSettings(root); toast('Restored.', 'success'); }) }, '📥 Restore from backup')
+        h('button', { class: 'btn', onClick: () => restoreBackupPicker(() => { clear(root); renderSettings(root); }) }, '📥 Restore from backup')
       )
     ),
     experimentalCard(),
@@ -90,6 +89,75 @@ export function renderSettings(root: HTMLElement): void {
     ),
     dangerZoneCard()
   );
+}
+
+/**
+ * Restore flow for the app's own backup file.
+ *
+ * Unlike the generic import picker this one offers to REPLACE printer profiles
+ * whose ids already exist — a backup is otherwise powerless to repair a
+ * damaged profile, because a colliding id is left untouched. The choice is put
+ * to the user before anything is written, so the import still happens in one
+ * pass and nothing is duplicated whichever way they answer.
+ */
+function restoreBackupPicker(onDone: () => void): void {
+  const input = h('input', {
+    type: 'file', accept: 'application/json,.json',
+    class: 'sr-only', tabindex: '-1', 'aria-hidden': 'true'
+  });
+  input.addEventListener('change', async () => {
+    const file = input.files?.[0];
+    input.remove();
+    if (!file) return;
+    try {
+      const res = await importBackup(await file.text(), {
+        onPrinterCollision: printers => confirmDialog({
+          title: `Replace ${printers.length} printer profile(s) you already have?`,
+          body: `This backup carries printer profile(s) that already exist on this device:\n\n${printers.map(p => `• ${p.name}`).join('\n')}\n\n`
+            + 'Replace them with the versions in the backup — do this to repair a profile that has been damaged — or cancel to keep the profiles you have. '
+            + 'Your calibration projects are imported either way.',
+          confirmLabel: 'Replace with the backup'
+        })
+      });
+      toast(res.message, res.ok ? 'success' : 'error');
+      if (res.ok) onDone();
+    } catch (err) {
+      toast(`Import failed: ${String(err)}`, 'error');
+    }
+  });
+  document.body.append(input);
+  input.click();
+}
+
+/**
+ * Every localStorage key this app writes is namespaced with this prefix:
+ * `perfectfit.settings`, `perfectfit.autosave`, `perfectfit.experimentalFeatures`
+ * and `perfectfit.presetBackupFirstRunPrompt`.
+ */
+const APP_STORAGE_PREFIX = 'perfectfit.';
+
+/**
+ * Remove this app's own localStorage keys — and nothing else.
+ *
+ * `localStorage.clear()` empties the whole ORIGIN. The browser build can be
+ * served next to anything else on the same host, so clearing the origin would
+ * destroy data that isn't ours to delete. Walking the keys keeps the erase
+ * confined to PerfectFit. Returns how many keys were removed.
+ */
+export function clearAppLocalStorage(): number {
+  const ours: string[] = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (k && k.startsWith(APP_STORAGE_PREFIX)) ours.push(k);
+  }
+  for (const k of ours) localStorage.removeItem(k);
+  return ours.length;
+}
+
+/** Delete every trace of this app's own data from this device. */
+export async function eraseAllLocalData(): Promise<void> {
+  await idb.clear('projects'); await idb.clear('printers'); await idb.clear('photos');
+  clearAppLocalStorage();
 }
 
 /**
@@ -114,8 +182,14 @@ function dangerZoneCard(): HTMLElement {
         confirmLabel: 'Yes, erase', danger: true
       });
       if (!really) return;
-      await idb.clear('projects'); await idb.clear('printers'); await idb.clear('photos');
-      localStorage.clear();
+      try {
+        await eraseAllLocalData();
+      } catch (err) {
+        // Storage can refuse the clear. Say so rather than reloading into what
+        // looks like a wiped app while some of the data is still there.
+        toast(`Erase failed — some data may still be here. ${String(err)}`, 'error');
+        return;
+      }
       toast('All local data erased.', 'info');
       location.hash = '#/'; location.reload();
     }

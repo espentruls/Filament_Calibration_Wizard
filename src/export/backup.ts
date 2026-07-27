@@ -1,6 +1,9 @@
-﻿import type { BackupFile, CalibrationProject, PrinterProfile, StoredPhoto } from '../types';
-import { SCHEMA_VERSION, ensureProjectSteps, listPrinters, listProjects, loadSettings, saveProject, savePrinter, uid } from '../storage/store';
-import { idb } from '../storage/db';
+﻿import type { AppSettings, BackupFile, CalibrationProject, PrinterProfile, StoredPhoto } from '../types';
+import {
+  DEFAULT_SETTINGS, SCHEMA_VERSION, ensureProjectSteps, listPrinters, listProjects,
+  loadSettings, saveSettings, uid
+} from '../storage/store';
+import { idb, putAllAtomic } from '../storage/db';
 // Imported from the module rather than the automatedCalibration barrel on
 // purpose: import/export must not drag the engine layer in behind it.
 import { carriesSessionData } from '../automatedCalibration/sessionManager';
@@ -40,27 +43,97 @@ export interface ImportResult {
   ok: boolean;
   message: string;
   projectsImported: number;
+  /** Printers actually written — new profiles plus any replaced ones. */
   printersImported: number;
+  /** How many of `printersImported` overwrote an existing profile. */
+  printersReplaced: number;
+  /** Printers whose id already existed and were deliberately left untouched. */
+  printersSkipped: number;
   photosImported: number;
+  /** Photo entries in the file that could not be decoded and were NOT restored. */
+  photosFailed: number;
+  /** Whether app settings carried by the file were applied. */
+  settingsRestored: boolean;
+}
+
+export interface ImportOptions {
+  /**
+   * Overwrite an existing printer profile when the file carries one with the
+   * same id. Off by default (the existing profile wins, and the result says
+   * so); on when the user has explicitly asked to repair a damaged profile
+   * from a backup.
+   */
+  replaceExistingPrinters?: boolean;
+  /**
+   * Asked once, BEFORE anything is written, when the file carries printer
+   * profiles whose ids already exist here. Returning true replaces them.
+   * Ignored when `replaceExistingPrinters` is set explicitly. Lets the UI put
+   * the choice to the user without a second import pass (which would duplicate
+   * the projects the first pass had already written).
+   */
+  onPrinterCollision?: (collidingPrinters: PrinterProfile[]) => boolean | Promise<boolean>;
+  /** Apply the app settings a full backup carries. Defaults to true. */
+  restoreSettings?: boolean;
+}
+
+function emptyResult(ok: boolean, message: string): ImportResult {
+  return {
+    ok, message,
+    projectsImported: 0, printersImported: 0, printersReplaced: 0,
+    printersSkipped: 0, photosImported: 0, photosFailed: 0, settingsRestored: false
+  };
 }
 
 /**
- * Import a backup or single-project file. Never overwrites existing records:
- * colliding ids get fresh ids (a copy is imported alongside the original).
+ * Validate the settings block of a backup before letting it near the app.
+ *
+ * `mvsSafetyMargin` scales the max volumetric flow the app recommends, so a
+ * corrupt or hand-edited value is a print-safety problem, not a cosmetic one:
+ * anything outside the range the Settings screen can produce (0–50 % headroom)
+ * is discarded in favour of the default rather than trusted.
  */
-export async function importBackup(json: string): Promise<ImportResult> {
+function sanitizeSettings(raw: unknown): AppSettings | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const s = raw as Partial<AppSettings>;
+  const out: AppSettings = { ...DEFAULT_SETTINGS };
+  if (s.theme === 'auto' || s.theme === 'light' || s.theme === 'dark') out.theme = s.theme;
+  if (typeof s.largeText === 'boolean') out.largeText = s.largeText;
+  if (s.defaultMode === 'coach' || s.defaultMode === 'expert') out.defaultMode = s.defaultMode;
+  if (typeof s.mvsSafetyMargin === 'number' && Number.isFinite(s.mvsSafetyMargin)
+      && s.mvsSafetyMargin >= 0.5 && s.mvsSafetyMargin <= 1) {
+    out.mvsSafetyMargin = s.mvsSafetyMargin;
+  }
+  return out;
+}
+
+/**
+ * Import a backup or single-project file.
+ *
+ * All-or-nothing: every record is prepared in memory first and then written in
+ * ONE IndexedDB transaction, so a failure partway leaves the database exactly
+ * as it was. That matters because the previous per-record loop left everything
+ * written up to the failure in place while telling the user the import had
+ * failed — and the retry they were invited to make duplicated all of it.
+ *
+ * Existing projects are never overwritten: a colliding id gets a fresh id (a
+ * copy is imported alongside the original). Printers are keyed to the projects
+ * that reference them, so a colliding printer id is left alone by default and
+ * reported as skipped; pass `replaceExistingPrinters` to restore it over the
+ * top (the only way a backup can repair a damaged profile).
+ */
+export async function importBackup(json: string, options: ImportOptions = {}): Promise<ImportResult> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(json);
   } catch {
-    return { ok: false, message: 'That file is not valid JSON.', projectsImported: 0, printersImported: 0, photosImported: 0 };
+    return emptyResult(false, 'That file is not valid JSON.');
   }
   const file = parsed as Partial<BackupFile>;
   if (file.app !== 'perfectfit-filament-calibration-wizard' || !Array.isArray(file.projects)) {
-    return { ok: false, message: 'That file doesn\'t look like a PerfectFit export (missing app marker or projects).', projectsImported: 0, printersImported: 0, photosImported: 0 };
+    return emptyResult(false, 'That file doesn\'t look like a PerfectFit export (missing app marker or projects).');
   }
   if ((file.schemaVersion ?? 0) > SCHEMA_VERSION) {
-    return { ok: false, message: `This file was made by a newer app version (schema ${file.schemaVersion} > ${SCHEMA_VERSION}). Update the app first.`, projectsImported: 0, printersImported: 0, photosImported: 0 };
+    return emptyResult(false, `This file was made by a newer app version (schema ${file.schemaVersion} > ${SCHEMA_VERSION}). Update the app first.`);
   }
 
   const migrated = migrate(file as BackupFile);
@@ -68,18 +141,31 @@ export async function importBackup(json: string): Promise<ImportResult> {
   const existingPrinters = new Set((await listPrinters()).map(p => p.id));
   const existingProjects = new Set((await listProjects()).map(p => p.id));
   const printerIdMap = new Map<string, string>();
-  let printersImported = 0, projectsImported = 0, photosImported = 0;
+  let printersImported = 0, printersReplaced = 0, printersSkipped = 0;
+  let projectsImported = 0, photosImported = 0, photosFailed = 0;
 
-  for (const printer of migrated.printers ?? []) {
-    if (!printer?.id || !printer.name) continue;
-    let id = printer.id;
-    if (existingPrinters.has(id)) {
-      // Same id already present — assume it's the same profile; reference it, don't duplicate.
-      printerIdMap.set(printer.id, id);
+  // Everything is staged here and committed as a single transaction below.
+  const batch: { store: string; value: object }[] = [];
+  const now = new Date().toISOString();
+
+  const printersInFile = (migrated.printers ?? []).filter(p => !!p?.id && !!p.name);
+  const colliding = printersInFile.filter(p => existingPrinters.has(p.id));
+  let replaceExisting = options.replaceExistingPrinters ?? false;
+  if (colliding.length && options.replaceExistingPrinters === undefined && options.onPrinterCollision) {
+    replaceExisting = await options.onPrinterCollision(colliding);
+  }
+
+  for (const printer of printersInFile) {
+    const id = printer.id;
+    // Either way the id is the same, so projects in this file keep pointing at
+    // the right profile whether it was replaced or left as it was.
+    printerIdMap.set(printer.id, id);
+    if (existingPrinters.has(id) && !replaceExisting) {
+      printersSkipped++;
       continue;
     }
-    printerIdMap.set(printer.id, id);
-    await savePrinter({ ...printer, id });
+    if (existingPrinters.has(id)) printersReplaced++;
+    batch.push({ store: 'printers', value: { ...printer, id, updatedAt: now } });
     printersImported++;
   }
 
@@ -93,7 +179,7 @@ export async function importBackup(json: string): Promise<ImportResult> {
     }
     projectIdMap.set(project.id, id);
     const mappedPrinter = printerIdMap.get(project.printerProfileId) ?? project.printerProfileId;
-    await saveProject({ ...project, id, printerProfileId: mappedPrinter });
+    batch.push({ store: 'projects', value: { ...project, id, printerProfileId: mappedPrinter, updatedAt: now } });
     projectsImported++;
   }
 
@@ -101,15 +187,42 @@ export async function importBackup(json: string): Promise<ImportResult> {
     try {
       const blob = dataUrlToBlob(ph.dataUrl);
       const projectId = projectIdMap.get(ph.meta.projectId) ?? ph.meta.projectId;
-      await idb.put('photos', { ...ph.meta, id: uid(), projectId, blob });
+      batch.push({ store: 'photos', value: { ...ph.meta, id: uid(), projectId, blob } });
       photosImported++;
-    } catch { /* skip broken photo entries */ }
+    } catch {
+      // A photo that cannot be decoded is NOT restored — say so rather than
+      // letting a restore quietly drop every picture and still report success.
+      photosFailed++;
+    }
   }
 
+  try {
+    await putAllAtomic(batch);
+  } catch (err) {
+    return emptyResult(false,
+      `Import failed — nothing was changed, so your existing data is untouched and you can safely try again. (${String(err)})`);
+  }
+
+  // Settings live in localStorage, outside the transaction above, so they are
+  // applied only once the data is known to be committed.
+  let settingsRestored = false;
+  if (options.restoreSettings !== false && migrated.settings) {
+    const clean = sanitizeSettings(migrated.settings);
+    if (clean) { saveSettings(clean); settingsRestored = true; }
+  }
+
+  const parts = [`${projectsImported} project(s)`, `${printersImported} printer(s)`];
+  if (photosImported) parts.push(`${photosImported} photo(s)`);
+  let message = `Imported ${parts.join(', ')}.`;
+  if (printersReplaced) message += ` ${printersReplaced} existing printer profile(s) were replaced.`;
+  if (printersSkipped) message += ` ${printersSkipped} printer profile(s) already existed and were left unchanged — to restore those over the top (for example to repair a damaged profile), use Settings → Restore from backup.`;
+  if (photosFailed) message += ` ${photosFailed} photo(s) could not be read from the file and were NOT restored.`;
+  if (settingsRestored) message += ' Settings were restored.';
+
   return {
-    ok: true,
-    message: `Imported ${projectsImported} project(s), ${printersImported} printer(s)${photosImported ? `, ${photosImported} photo(s)` : ''}.`,
-    projectsImported, printersImported, photosImported
+    ok: true, message,
+    projectsImported, printersImported, printersReplaced, printersSkipped,
+    photosImported, photosFailed, settingsRestored
   };
 }
 

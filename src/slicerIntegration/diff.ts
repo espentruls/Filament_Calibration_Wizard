@@ -81,5 +81,8 @@ export function formatChange(c: ProfileFieldChange): string {
   const unit = c.unit ? ` ${c.unit}` : '';
   const tool = c.extruderIndex !== undefined ? ` (slot ${c.extruderIndex + 1})` : '';
   const before = c.before === null || c.before === 'nil' ? '(printer default)' : `${c.before}${unit}`;
-  return `${c.label}${tool}: ${before} → ${c.after}${unit}`;
+  // A slot written as "nil" carries no filament-level override — printing the
+  // raw sentinel (or worse, "nil mm") would read as a value it is not.
+  const after = c.after === 'nil' ? '(no filament override)' : `${c.after}${unit}`;
+  return `${c.label}${tool}: ${before} → ${after}`;
 }

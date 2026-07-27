@@ -26,6 +26,21 @@ import { getCalibration } from '../data/calibrations';
 import { getMaterial } from '../data/materials';
 import { applyRetestFlags } from '../logic/recommendations';
 import { nozzleBadgeLabel } from '../logic/ranges';
+import { validateAgainstPrinter } from '../logic/validation';
+import type { NormalizedProfileKey } from '../automatedCalibration';
+
+/**
+ * Overridable values that a printer profile puts a hard limit on, mapped to the
+ * limit `validateAgainstPrinter` checks. Every temperature that reaches a hotend
+ * is here; a key absent from this map has no machine limit to check against.
+ */
+const PRINTER_LIMIT_KEYS: Partial<Record<NormalizedProfileKey, 'nozzleTemp' | 'bedTemp' | 'mvs'>> = {
+  nozzleTemp: 'nozzleTemp',
+  firstLayerTemp: 'nozzleTemp',
+  highFlowTemp: 'nozzleTemp',
+  bedTemp: 'bedTemp',
+  maxVolumetricSpeed: 'mvs'
+};
 import { CONTROLLERS, type ComputeOutput, type TestCtx } from './testForms';
 import { gaugeEl, projectGauges, type GaugeReading } from './dashboard';
 import { hasCalibratedValues } from './projectView';
@@ -34,22 +49,17 @@ import { setLeaveGuard } from '../app';
 import {
   CANONICAL_KEYS,
   clearSessionOverride,
-  peekSessionCapability,
   resolveGuidedSession,
-  sessionCapabilityFor,
-  sessionContext,
   sessionPartialProfile,
   sessionStepView,
   sessionValues,
   setSessionOverride,
   startGuidedSession,
   syncSessionValues,
-  type AutoPrepareHandoff,
   type GuidedSession,
   type ResolvedValue,
   type SessionAction,
   type SessionActionPlan,
-  type SessionCapability,
   type SessionNozzle,
   type SessionStep,
   type StepWorkingValues,
@@ -59,35 +69,6 @@ import type {
   CalibrationAttempt, CalibrationId, CalibrationProject, ConfidenceLevel,
   FinalValues, PrinterProfile, StoredPhoto
 } from '../types';
-
-// ---------------------------------------------------------------------------
-// Auto-prepare hand-off (progressive enhancement)
-//
-// The session engine can say "this step could be prepared automatically" and
-// hands back a typed `AutoPrepareHandoff`. Nothing in this build consumes one —
-// slicing lives behind the experimental flag and is not wired to any UI action
-// yet. Rather than draw a button that would do nothing, the affordance appears
-// only once a runner is registered here. When the automated pipeline lands it
-// calls `registerAutoPrepareRunner` and the button turns up on every step the
-// engine can genuinely serve; until then the manual path is the only path shown,
-// which is the honest picture.
-//
-// It will never turn up for a Bambu Studio session, and that is deliberate
-// upstream architecture rather than a gap: the engine layer drives Orca Slicer
-// and treats Bambu Studio as a hand-off destination. The screen says that once,
-// calmly, from `SessionCapability` — and points at the thing PerfectFit really
-// does automate for Bambu Studio, which is generating and installing the
-// filament preset for this nozzle (`installCard`, the existing profile wizard).
-// ---------------------------------------------------------------------------
-
-export type AutoPrepareRunner = (handoff: AutoPrepareHandoff) => Promise<void>;
-
-let autoPrepareRunner: AutoPrepareRunner | null = null;
-
-/** Wire the automated pipeline into the guided screen. Pass null to unwire. */
-export function registerAutoPrepareRunner(fn: AutoPrepareRunner | null): void {
-  autoPrepareRunner = fn;
-}
 
 // ---------------------------------------------------------------------------
 // Per-step working draft (auto-saved, separate from the classic wizard's draft)
@@ -241,24 +222,13 @@ export async function renderGuidedSession(
     const want = resolved ? `#/session/${project.id}/${resolved}` : `#/session/${project.id}`;
     if (location.hash !== want) history.replaceState(null, '', want);
 
-    // The automation answer, taken synchronously where it can be. The gate
-    // short-circuits — with no probe, no bridge and no filesystem — for the two
-    // states that cover nearly every user: a slicer PerfectFit's engine layer
-    // does not drive, and the experimental flag being off. So a Bambu Studio
-    // session has its honest sentence and its preset route on screen at FIRST
-    // paint. A null answer means a real engine probe is pending; the manual path
-    // draws now and `stepCard` fills the panel in when the probe returns.
-    const cap = resolved
-      ? peekSessionCapability(sessionContext(session), session.nozzle, resolved)
-      : null;
-
     clear(view);
     view.append(
       sessionHeader(session, allProjects),
       clusterCard(session, printer, resolved, select),
-      installCard(session, cap),
+      installCard(session),
       resolved
-        ? stepCard(session, resolved, cap)
+        ? stepCard(session, resolved)
         : h('div', { class: 'card' },
           h('h2', {}, 'No steps in this plan'),
           h('p', {}, 'This project has no calibration steps yet. Add them from the project page.'),
@@ -268,11 +238,7 @@ export async function renderGuidedSession(
 
   // --- the current step ----------------------------------------------------
 
-  function stepCard(
-    session: GuidedSession,
-    id: CalibrationId,
-    peeked: SessionCapability | null
-  ): HTMLElement {
+  function stepCard(session: GuidedSession, id: CalibrationId): HTMLElement {
     const stepView = sessionStepView(session, id);
     if (!stepView) {
       return h('div', { class: 'card' }, h('p', {}, 'That step is not part of this plan.'));
@@ -339,22 +305,6 @@ export async function renderGuidedSession(
 
     // --- 1. what to change in the slicer ------------------------------------
     card.append(h('h3', {}, 'Set these in your slicer'), slicerSection(actions, session.nozzle));
-
-    // Where the screen answers "could this have been automatic?". The peeked
-    // answer paints immediately when the gate could give one without probing;
-    // the awaited one replaces it if an engine actually had to be looked for.
-    const capHost = h('div', {});
-    card.append(capHost);
-    const showCapability = (cap: SessionCapability): void => {
-      clear(capHost);
-      const panel = capabilityPanel(cap, session.nozzle, project.id, () => draw());
-      if (panel) capHost.append(panel);
-    };
-    if (peeked) showCapability(peeked);
-    void sessionCapabilityFor(session, id).then(cap => {
-      if (focusId !== id) return;   // the user moved on while we were probing
-      showCapability(cap);
-    }).catch(() => { /* a probe failure never blocks the manual path */ });
 
     // --- 2. what this test inherits, with provenance ------------------------
     card.append(h('h3', {}, 'Carried into this test'), inheritedSection(values, () => persistAndRedraw()));
@@ -649,6 +599,16 @@ export async function renderGuidedSession(
             onClick: async () => {
               const n = Number(input.value);
               if (!Number.isFinite(n)) { toast('Enter a number first.', 'error'); return; }
+              // A hand-typed override is shown back to the user as "set this in
+              // your slicer", so it has to meet the same machine limits the test
+              // forms enforce. Without this, a typo can hand someone a hotend
+              // temperature their printer is not rated for.
+              const limitKind = PRINTER_LIMIT_KEYS[v.key];
+              if (limitKind) {
+                const blocking = validateAgainstPrinter(limitKind, n, printer)
+                  .filter((i) => i.level === 'error');
+                if (blocking.length) { toast(blocking[0].message, 'error'); return; }
+              }
               setSessionOverride(project, { key: v.key, value: n });
               await onChange();
               toast(`${v.label} set by hand.`, 'success');
@@ -688,30 +648,22 @@ export async function renderGuidedSession(
   // --- install the preset ---------------------------------------------------
 
   /**
-   * The preset-install affordance — and, for the slicer this product is built
-   * around, the whole of what "automation" means here.
-   *
-   * PerfectFit's engine layer slices through Orca Slicer only, so a Bambu Studio
-   * session never gets an auto-prepared test print. What it DOES get is the
-   * thing that removes the actual typing: the app generates a filament preset
-   * from the measured values — per extruder on a dual-nozzle machine — and
-   * installs it. That is worth having after the first completed test, not only
-   * at the end, so this sits directly under the cluster and is present on every
-   * step rather than waiting below the whole step form.
+   * The preset-install affordance — the thing that removes the actual typing:
+   * the app generates a filament preset from the measured values, per extruder
+   * on a dual-nozzle machine, and installs it. That is worth having after the
+   * first completed test, not only at the end, so this sits directly under the
+   * cluster and is present on every step rather than waiting below the whole
+   * step form.
    *
    * There is no second install path: the button opens the existing profile
    * wizard. The values table folds away so the step's own work stays the next
    * thing on screen.
    */
-  function installCard(session: GuidedSession, cap: SessionCapability | null): HTMLElement {
+  function installCard(session: GuidedSession): HTMLElement {
     const report = sessionPartialProfile(session);
     // The profile wizard generates from the project's own `finals`, so it can
     // only install for the nozzle the project itself records.
     const canInstall = report.installable && hasCalibratedValues(project);
-    // Present only when the gate says this slicer is a hand-off destination.
-    // Its wording is the gate's own, and the slicer NAME in it comes from
-    // src/data/slicers.ts — nothing about the slicer is written here.
-    const alternative = cap && !cap.automatable ? cap.alternative : undefined;
     const count = report.values.length;
 
     const card = h('div', { class: 'card' },
@@ -719,13 +671,10 @@ export async function renderGuidedSession(
         canInstall
           ? `${count} measured value${count === 1 ? '' : 's'} ready`
           : 'Nothing to install yet'),
-      h('h2', { style: 'margin-top:var(--s-3)' },
-        alternative ? alternative.title : 'Install what is calibrated so far'),
+      h('h2', { style: 'margin-top:var(--s-3)' }, 'Install what is calibrated so far'),
       h('p', {}, report.summary),
       h('p', { class: 'field-help' },
-        alternative
-          ? alternative.detail
-          : 'A partial profile is a real deliverable: temperature and flow locked into a preset are worth having before pressure advance is even started.'),
+        'A partial profile is a real deliverable: temperature and flow locked into a preset are worth having before pressure advance is even started.'),
       h('div', { class: 'btn-row' },
         canInstall
           ? h('a', { class: 'btn btn-primary', href: `#/profile/${project.id}` },
@@ -1102,94 +1051,6 @@ function actionItem(a: SessionAction): HTMLElement {
           h('span', { class: 'value-chip' }, a.value))
         : null,
       h('p', { class: 'eval-meaning' }, a.detail)));
-}
-
-// ---------------------------------------------------------------------------
-// The assisted path (shown only when it genuinely exists)
-//
-// Three states, and the difference between them is whether the user can do
-// anything about the answer:
-//
-//   1. yes — an engine can serve this nozzle, so offer it;
-//   2. a PERMANENT no — PerfectFit's engine layer does not drive this slicer at
-//      all. Nothing installed or switched on changes that, so it is stated once
-//      in the unlit-placard treatment, with no remedy and no amber, alongside
-//      what the app automates instead;
-//   3. a temporary no — a switch, an install, a probe that failed. Worded by
-//      the gate, and a caution wears a lamp rather than a coloured border.
-//
-// `reasonDetails[0].permanent` is the line between 2 and 3, and a disabled
-// "prepare automatically" button is never drawn in either.
-// ---------------------------------------------------------------------------
-
-function capabilityPanel(
-  cap: SessionCapability,
-  nozzle: SessionNozzle,
-  projectId: string,
-  redraw: () => void
-): HTMLElement | null {
-  if (cap.canAutoPrepare && cap.handoff && autoPrepareRunner) {
-    const runner = autoPrepareRunner;
-    const handoff = cap.handoff;
-    return h('div', { class: 'panel' },
-      h('span', { class: 'placard placard-lit' }, 'Automatic preparation available'),
-      h('p', {}, `A detected slicing engine can prepare this test for ${nozzle.label}. The manual steps above still work, and nothing here replaces them.`),
-      cap.reasons.length ? h('ul', {}, cap.reasons.map(r => h('li', { class: 'field-help' }, r))) : null,
-      h('div', { class: 'btn-row' },
-        h('button', {
-          class: 'btn',
-          onClick: async (e: Event) => {
-            const btn = e.currentTarget as HTMLButtonElement;
-            btn.setAttribute('aria-disabled', 'true');
-            try {
-              await runner(handoff);
-              redraw();
-            } catch (err) {
-              toast(`Automatic preparation failed: ${err instanceof Error ? err.message : String(err)}`, 'error');
-              btn.removeAttribute('aria-disabled');
-            }
-          }
-        }, 'Prepare this test automatically')));
-  }
-
-  // PerfectFit's engine layer does not drive this session's slicer at all. That
-  // is upstream's architecture — it slices through Orca Slicer and treats Bambu
-  // Studio as a hand-off destination — so there is no setup problem to report,
-  // nothing to fix, and no reason for this to read as a caution. It is stated
-  // once, quietly, and followed by the route to what IS automated here: writing
-  // the measured values into a filament preset for this nozzle and installing
-  // it. Branching on `automatable` rather than on the experimental flag matters:
-  // the flag is irrelevant to this answer, and gating on it would hide the
-  // sentence from exactly the users it is written for.
-  if (!cap.automatable) {
-    return h('div', { class: 'panel' },
-      h('span', { class: 'placard placard-unlit' }, 'Automatic test preparation'),
-      h('p', { class: 'field-help', style: 'margin-top:var(--s-3)' }, cap.headline),
-      cap.alternative
-        ? h('p', { class: 'field-help', style: 'margin:var(--s-3) 0 0' },
-          h('a', { href: `#/profile/${projectId}` }, `${cap.alternative.title} →`))
-        : null);
-  }
-
-  // The flag is on but nothing can serve this nozzle — say why, once, quietly.
-  // With the flag off (the default) this area stays silent for a slicer the
-  // engine layer could otherwise drive: an experimental switch the user has not
-  // touched is not news on every step.
-  const first = cap.reasonDetails[0];
-  if (cap.flagEnabled && !cap.canAutoPrepare && first) {
-    return h('p', { class: 'field-help' },
-      first.severity === 'caution'
-        ? frag(
-          h('span', { class: 'sr-only' }, 'Caution: '),
-          h('span', {
-            class: 'lamp lamp-caution', 'aria-hidden': 'true', style: 'margin-right:.45rem'
-          }))
-        : null,
-      h('span', { class: 'placard placard-unlit', style: 'margin-right:.45rem' }, 'Automated slicing'),
-      first.message);
-  }
-
-  return null;
 }
 
 // ---------------------------------------------------------------------------

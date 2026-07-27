@@ -221,6 +221,142 @@ describe('validation', () => {
     expect(result.warnings.some(w => w.code === 'DUPLICATE_NAME')).toBe(true);
   });
 
+  // Every limit below is checked against the value that will actually be
+  // WRITTEN into the preset file — the printer executes the file, not the diff.
+  describe('write-path limit checks', () => {
+    function baseWith(patch: Record<string, unknown>, file = 'orca-user-delta-pla.json'): ParsedFilamentProfile {
+      const raw = JSON.parse(fixtureRaw(file).json) as Record<string, unknown>;
+      Object.assign(raw, patch);
+      return parseFixture(file, 'orca', { json: JSON.stringify(raw) });
+    }
+
+    function generateFrom(parsed: ParsedFilamentProfile, project: CalibrationProject) {
+      return generateProfile({
+        slicerId: 'orca', baseProfile: parsed.profile, newName: 'PF Limit Test',
+        patches: buildPatchesFromProject(project), targetExtruderIndex: 0,
+        applyToAllExtruders: false, project
+      }, parsed);
+    }
+
+    it('blocks a first-layer nozzle temperature above the printer maximum', () => {
+      const project = makeProject({ firstLayerTemp: 500 });
+      const { generated, parsed } = generate(project);
+      expect((generated.data.nozzle_temperature_initial_layer as string[])[0]).toBe('500');
+      const result = validateGeneratedProfile(generated, { project, printer, baseProfile: parsed.profile });
+      const over = result.errors.find(e => e.code === 'TEMP_OVER_PRINTER_MAX');
+      expect(over?.message).toContain('500');
+      expect(over?.message).toContain('300');
+      expect(result.errors.some(e => e.code === 'TEMP_IMPLAUSIBLE')).toBe(true);
+      expect(result.valid).toBe(false);
+    });
+
+    it('checks a calibrated value even when it equals the base value', () => {
+      // 500 °C in the base AND calibrated to 500 → no changed field at all.
+      const parsed = baseWith({ nozzle_temperature: ['500'] });
+      const project = makeProject({ nozzleTemp: 500 });
+      const generated = generateFrom(parsed, project);
+      expect(generated.changedFields.some(c => c.presetKey === 'nozzle_temperature')).toBe(false);
+      const result = validateGeneratedProfile(generated, { project, printer, baseProfile: parsed.profile });
+      expect(result.errors.some(e => e.code === 'TEMP_OVER_PRINTER_MAX')).toBe(true);
+      expect(result.errors.some(e => e.code === 'TEMP_IMPLAUSIBLE')).toBe(true);
+      expect(result.valid).toBe(false);
+    });
+
+    it('blocks a bed temperature above the printer maximum', () => {
+      const parsed = baseWith({ hot_plate_temp: ['150'], hot_plate_temp_initial_layer: ['150'] });
+      const project = makeProject();
+      const generated = generateFrom(parsed, project);
+      const result = validateGeneratedProfile(generated, { project, printer, baseProfile: parsed.profile });
+      const e = result.errors.find(x => x.code === 'BED_TEMP_OVER_PRINTER_MAX');
+      expect(e?.message).toContain('150');
+      expect(e?.message).toContain('100');
+      expect(result.valid).toBe(false);
+    });
+
+    it('blocks a chamber temperature above the printer maximum', () => {
+      const parsed = baseWith({ chamber_temperature: ['90'] });
+      const project = makeProject();
+      const generated = generateFrom(parsed, project);
+      const chamberPrinter: PrinterProfile = { ...printer, maxChamberTemp: 60 };
+      const result = validateGeneratedProfile(generated, { project, printer: chamberPrinter, baseProfile: parsed.profile });
+      const e = result.errors.find(x => x.code === 'CHAMBER_TEMP_OVER_PRINTER_MAX');
+      expect(e?.message).toContain('90');
+      expect(e?.message).toContain('60');
+      expect(result.valid).toBe(false);
+    });
+
+    it('caps retraction length for flexible filament, naming the material and the cap', () => {
+      const project = makeProject({ retractionDistance: 14 });
+      project.filament.material = 'TPU';
+      const { generated, parsed } = generate(project);
+      expect((generated.data.filament_retraction_length as string[])[0]).toBe('14');
+      const result = validateGeneratedProfile(generated, { project, printer, baseProfile: parsed.profile });
+      const e = result.errors.find(x => x.code === 'RETRACT_OVER_FLEXIBLE_CAP');
+      expect(e?.message).toContain('TPU');
+      expect(e?.message).toContain('1.5');
+      expect(e?.message).toContain('14');
+      expect(result.valid).toBe(false);
+    });
+
+    it('keeps the ordinary retraction range for rigid filament', () => {
+      const project = makeProject({ retractionDistance: 6 });
+      const { generated, parsed } = generate(project);
+      const result = validateGeneratedProfile(generated, { project, printer, baseProfile: parsed.profile });
+      expect(result.errors.some(x => x.code.startsWith('RETRACT'))).toBe(false);
+    });
+
+    it('blocks a retraction speed outside the range the wizard will calibrate', () => {
+      const project = makeProject({ retractionSpeed: 400 });
+      const { generated, parsed } = generate(project);
+      expect((generated.data.filament_retraction_speed as string[])[0]).toBe('400');
+      const result = validateGeneratedProfile(generated, { project, printer, baseProfile: parsed.profile });
+      const e = result.errors.find(x => x.code === 'RETRACT_SPEED_IMPLAUSIBLE');
+      expect(e?.message).toContain('400');
+      expect(result.valid).toBe(false);
+    });
+
+    it('ignores "nil" slots (no filament-level override) instead of reading them as 0', () => {
+      const parsed = baseWith({ filament_retraction_speed: ['nil'] });
+      const project = makeProject();
+      const generated = generateFrom(parsed, project);
+      const result = validateGeneratedProfile(generated, { project, printer, baseProfile: parsed.profile });
+      expect(result.errors.some(x => x.code === 'RETRACT_SPEED_IMPLAUSIBLE')).toBe(false);
+    });
+
+    it('names the slot when a multi-nozzle preset carries the offending value', () => {
+      const parsed = parseFixture('bambu-user-full-pctg-dualnozzle.json', 'bambu');
+      (parsed.profile.rawProfile as Record<string, unknown>).nozzle_temperature = ['260', '500'];
+      const project = makeProject();
+      const generated = generateProfile({
+        slicerId: 'bambu', baseProfile: parsed.profile, newName: 'PF Slot Test',
+        patches: buildPatchesFromProject(project), targetExtruderIndex: 0,
+        applyToAllExtruders: false, project
+      }, parsed);
+      const result = validateGeneratedProfile(generated, { project, printer, baseProfile: parsed.profile });
+      const e = result.errors.find(x => x.code === 'TEMP_OVER_PRINTER_MAX');
+      expect(e?.message).toContain('slot 2');
+      expect(e?.message).toContain('500');
+    });
+  });
+
+  it('requires acknowledgement for a calibrated value that could not be written', () => {
+    const parsed = parseFixture('bambu-user-full-pctg-dualnozzle.json', 'bambu');
+    const raw = parsed.profile.rawProfile as Record<string, unknown>;
+    delete raw.pressure_advance;
+    delete raw.enable_pressure_advance;
+    const project = makeProject({ pressureAdvance: 0.72 });
+    const generated = generateProfile({
+      slicerId: 'bambu', baseProfile: parsed.profile, newName: 'PF Skipped',
+      patches: buildPatchesFromProject(project), targetExtruderIndex: 1,
+      applyToAllExtruders: false, project
+    }, parsed);
+    const result = validateGeneratedProfile(generated, { project, printer, baseProfile: parsed.profile });
+    const w = result.warnings.find(x => x.code.startsWith('FIELD_NOT_WRITTEN'));
+    expect(w?.requiresAcknowledgement).toBe(true);
+    expect(w?.message).toContain('pressure_advance');
+    expect(unacknowledgedWarnings(result, []).some(x => x.code === w!.code)).toBe(true);
+  });
+
   it('requires acknowledgement for cross-family base profiles', () => {
     const project = makeProject();
     const { generated, parsed } = generate(project);
@@ -248,6 +384,9 @@ describe('diff', () => {
       .toBe('Retraction length: (printer default) → 0.9 mm');
     expect(formatChange({ presetKey: 'nozzle_temperature', label: 'Nozzle temperature', before: '220', after: '215', unit: '°C', extruderIndex: 1 }))
       .toBe('Nozzle temperature (slot 2): 220 °C → 215 °C');
+    // A slot left as "nil" must not read as a value ("→ nil mm").
+    expect(formatChange({ presetKey: 'filament_retraction_length', label: 'Retraction length', before: null, after: 'nil', unit: 'mm', extruderIndex: 0 }))
+      .toBe('Retraction length (slot 1): (printer default) → (no filament override)');
   });
 
   it('fullJsonDiff reports added/removed/changed only', () => {

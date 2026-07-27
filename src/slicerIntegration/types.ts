@@ -183,6 +183,17 @@ export interface ProfileFieldChange {
   extruderIndex?: number;
 }
 
+/**
+ * A calibrated value that was deliberately NOT written, with the reason.
+ * Generated when writing the key would require inventing a value for a nozzle
+ * the project did not calibrate (see cloneAndPatch).
+ */
+export interface SkippedFieldNote {
+  presetKey: string;
+  label: string;
+  reason: string;
+}
+
 export interface GeneratedFilamentProfile {
   slicerId: IntegrationSlicerId;
   name: string;
@@ -196,6 +207,12 @@ export interface GeneratedFilamentProfile {
   baseProfileName: string;
   baseProfileFingerprint: string;
   changedFields: ProfileFieldChange[];
+  /**
+   * Calibrated values left out of the preset because writing them would have
+   * required guessing a value for an untargeted nozzle. Surfaced as warnings
+   * that must be acknowledged before install.
+   */
+  skippedFields?: SkippedFieldNote[];
   preservedFieldCount: number;
   generatedAt: string;
 }

@@ -10,8 +10,11 @@ vi.stubGlobal('localStorage', {
   clear: () => mem.clear()
 });
 
-import { exportProject, importBackup, migrate, dataUrlToBlob } from '../src/export/backup';
-import { createProject, savePrinter, listProjects, listPrinters, saveProject, uid, SCHEMA_VERSION } from '../src/storage/store';
+import { exportAll, exportProject, importBackup, migrate, dataUrlToBlob } from '../src/export/backup';
+import {
+  createProject, savePrinter, listProjects, listPrinters, saveProject, uid,
+  loadSettings, saveSettings, DEFAULT_SETTINGS, SCHEMA_VERSION
+} from '../src/storage/store';
 import { DEFAULT_ORDER } from '../src/data/calibrations';
 import type { BackupFile, PrinterProfile } from '../src/types';
 import { idb } from '../src/storage/db';
@@ -34,6 +37,25 @@ function makeProject(printerId: string) {
     printerProfileId: printerId, nozzleType: 'brass',
     slicer: { slicer: 'orca', version: '2.4.x' }, notes: '', mode: 'coach'
   });
+}
+
+/**
+ * Make the nth IndexedDB write fail the way a real one does at commit time:
+ * the request itself succeeds, then the transaction aborts (quota exceeded,
+ * eviction). Returns a restore function.
+ */
+function failNthPut(n: number): () => void {
+  const orig = IDBObjectStore.prototype.put;
+  let seen = 0;
+  IDBObjectStore.prototype.put = function (this: IDBObjectStore, ...args: unknown[]) {
+    const req = (orig as (...a: unknown[]) => IDBRequest).apply(this, args);
+    if (++seen === n) {
+      const t = this.transaction;
+      req.addEventListener('success', () => { t.abort(); });
+    }
+    return req;
+  } as typeof IDBObjectStore.prototype.put;
+  return () => { IDBObjectStore.prototype.put = orig; };
 }
 
 beforeEach(async () => {
@@ -111,6 +133,187 @@ describe('export / import round-trip', () => {
     const res = await importBackup(JSON.stringify(file));
     expect(res.ok).toBe(true);
     expect(res.photosImported).toBe(1);
+  });
+});
+
+describe('import is all-or-nothing', () => {
+  function twoProjectBackup() {
+    const printer = makePrinter();
+    const a = makeProject(printer.id);
+    const b = makeProject(printer.id);
+    return JSON.stringify({
+      app: 'perfectfit-filament-calibration-wizard',
+      schemaVersion: SCHEMA_VERSION,
+      exportedAt: new Date().toISOString(),
+      projects: [a, b],
+      printers: [printer]
+    } satisfies BackupFile);
+  }
+
+  it('writes nothing when a write fails partway, and never reports success', async () => {
+    const json = twoProjectBackup();
+    const restore = failNthPut(3); // printer + first project already written
+    let res;
+    try {
+      // Must resolve with a failure result, not throw: a thrown error tells the
+      // caller nothing about what landed in the database.
+      res = await importBackup(json);
+    } finally {
+      restore();
+    }
+
+    expect(res.ok).toBe(false);
+    expect(res.projectsImported).toBe(0);
+    expect(res.printersImported).toBe(0);
+    // Nothing may be left behind — otherwise the retry below duplicates it.
+    expect(await listProjects()).toHaveLength(0);
+    expect(await listPrinters()).toHaveLength(0);
+  });
+
+  it('a retry after a failed import imports exactly once', async () => {
+    const json = twoProjectBackup();
+    const restore = failNthPut(3);
+    try { await importBackup(json); } catch { /* the buggy version threw here */ }
+    restore();
+
+    const res = await importBackup(json);
+    expect(res.ok).toBe(true);
+    expect(res.projectsImported).toBe(2);
+    expect(await listProjects()).toHaveLength(2);
+    expect(await listPrinters()).toHaveLength(1);
+  });
+});
+
+describe('photo import failures are reported', () => {
+  function backupWithPhotos(dataUrls: string[]) {
+    const printer = makePrinter();
+    const project = makeProject(printer.id);
+    return JSON.stringify({
+      app: 'perfectfit-filament-calibration-wizard',
+      schemaVersion: SCHEMA_VERSION,
+      exportedAt: new Date().toISOString(),
+      projects: [project],
+      printers: [printer],
+      photos: dataUrls.map(dataUrl => ({
+        meta: {
+          id: uid(), projectId: project.id, stepId: 'temperature', attemptId: 'a1',
+          createdAt: new Date().toISOString(), name: 'p.png', type: 'image/png'
+        },
+        dataUrl
+      }))
+    } satisfies BackupFile);
+  }
+
+  it('counts undecodable photos and says so instead of claiming a clean restore', async () => {
+    const good = 'data:image/png;base64,' + Buffer.from('ok').toString('base64');
+    const res = await importBackup(backupWithPhotos([good, 'not-a-data-url', '']));
+    expect(res.photosImported).toBe(1);
+    expect(res.photosFailed).toBe(2);
+    expect(res.message).toMatch(/2 photo/);
+  });
+
+  it('does not claim success for photos when every photo is broken', async () => {
+    const res = await importBackup(backupWithPhotos(['broken', 'also-broken']));
+    expect(res.photosImported).toBe(0);
+    expect(res.photosFailed).toBe(2);
+    expect(res.message).toMatch(/2 photo/);
+  });
+});
+
+describe('printer id collisions', () => {
+  it('reports the printers it left untouched rather than pretending they were restored', async () => {
+    const printer = makePrinter();
+    await savePrinter({ ...printer, name: 'Damaged profile' });
+    const project = makeProject(printer.id);
+
+    const res = await importBackup(await exportProject(project, printer));
+    expect(res.ok).toBe(true);
+    expect(res.printersImported).toBe(0);
+    expect(res.printersSkipped).toBe(1);
+    expect(res.message).toMatch(/already/i);
+    // Default stays non-destructive.
+    expect((await listPrinters())[0].name).toBe('Damaged profile');
+  });
+
+  it('repairs a damaged printer profile when the caller opts into replacing', async () => {
+    const printer = makePrinter();
+    await savePrinter({ ...printer, name: 'Damaged profile', maxNozzleTemp: 0 });
+    const project = makeProject(printer.id);
+
+    const res = await importBackup(await exportProject(project, printer), { replaceExistingPrinters: true });
+    expect(res.ok).toBe(true);
+    expect(res.printersReplaced).toBe(1);
+    expect(res.printersSkipped).toBe(0);
+
+    const printers = await listPrinters();
+    expect(printers).toHaveLength(1);
+    expect(printers[0].name).toBe('Bench Printer');
+    expect(printers[0].maxNozzleTemp).toBe(300);
+  });
+
+  it('asks the caller before replacing, and still imports in a single pass', async () => {
+    const printer = makePrinter();
+    await savePrinter({ ...printer, name: 'Damaged profile' });
+    const project = makeProject(printer.id);
+
+    const asked: string[] = [];
+    const res = await importBackup(await exportProject(project, printer), {
+      onPrinterCollision: printers => { asked.push(...printers.map(p => p.name)); return true; }
+    });
+
+    expect(asked).toEqual(['Bench Printer']);
+    expect(res.printersReplaced).toBe(1);
+    // One pass: the projects are not imported twice by asking.
+    expect(await listProjects()).toHaveLength(1);
+    expect(await listPrinters()).toHaveLength(1);
+  });
+
+  it('keeps the existing profile when the caller declines', async () => {
+    const printer = makePrinter();
+    await savePrinter({ ...printer, name: 'Mine' });
+    const res = await importBackup(await exportProject(makeProject(printer.id), printer), {
+      onPrinterCollision: () => false
+    });
+    expect(res.printersSkipped).toBe(1);
+    expect((await listPrinters())[0].name).toBe('Mine');
+  });
+});
+
+describe('settings in a full backup', () => {
+  it('restores the settings exportAll() promised', async () => {
+    saveSettings({ theme: 'dark', largeText: true, defaultMode: 'expert', mvsSafetyMargin: 0.7 });
+    const json = await exportAll(false);
+
+    saveSettings({ ...DEFAULT_SETTINGS });
+    const res = await importBackup(json);
+    expect(res.ok).toBe(true);
+    expect(res.settingsRestored).toBe(true);
+    expect(loadSettings()).toEqual({ theme: 'dark', largeText: true, defaultMode: 'expert', mvsSafetyMargin: 0.7 });
+  });
+
+  it('discards an out-of-range safety margin instead of trusting the file', async () => {
+    const file = {
+      app: 'perfectfit-filament-calibration-wizard',
+      schemaVersion: SCHEMA_VERSION,
+      exportedAt: '',
+      projects: [],
+      printers: [],
+      // 5 would recommend FIVE TIMES the measured max flow.
+      settings: { theme: 'dark', largeText: false, defaultMode: 'coach', mvsSafetyMargin: 5 }
+    } as unknown as BackupFile;
+
+    const res = await importBackup(JSON.stringify(file));
+    expect(res.ok).toBe(true);
+    expect(loadSettings().mvsSafetyMargin).toBe(DEFAULT_SETTINGS.mvsSafetyMargin);
+    expect(loadSettings().theme).toBe('dark');
+  });
+
+  it('leaves settings alone for a single-project file that carries none', async () => {
+    saveSettings({ theme: 'light', largeText: true, defaultMode: 'expert', mvsSafetyMargin: 0.9 });
+    const printer = makePrinter();
+    const res = await importBackup(await exportProject(makeProject(printer.id), printer));
+    expect(res.settingsRestored).toBe(false);
+    expect(loadSettings().theme).toBe('light');
   });
 });
 

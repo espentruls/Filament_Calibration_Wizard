@@ -7,6 +7,64 @@ import {
 } from '../data/printerDatabase';
 import type { PrinterProfile, ExtruderType, NozzleProfile, PrinterSpecification } from '../types';
 
+// --- machine-limit provenance ----------------------------------------------
+// The shipped database does not publish a max nozzle temperature for most of
+// its records (the corrupted rows were replaced with null rather than guesses),
+// and the same is true of max bed temperature. The editor still has to put SOME
+// number in those required fields, so it uses the conservative values below —
+// which are NOT specifications and must never be presented as database data.
+// Every downstream clamp trusts PrinterProfile.maxNozzleTemp, so a fabricated
+// limit wearing a database badge is worse than an obviously absent one.
+
+/** Conservative stand-in when nothing publishes a nozzle limit. Not a spec. */
+export const FALLBACK_MAX_NOZZLE_TEMP = 260;
+/** Conservative stand-in when nothing publishes a bed limit. Not a spec. */
+export const FALLBACK_MAX_BED_TEMP = 100;
+
+export interface LimitProvenance {
+  key: 'maxNozzleTemp' | 'maxBedTemp' | 'maxVolumetricFlow';
+  label: string;
+  unit: string;
+  /** True when this database record genuinely carries the limit. */
+  fromDatabase: boolean;
+  /** What the form falls back to when it does not (undefined = left empty). */
+  fallback?: number;
+}
+
+const LIMIT_FIELDS: { key: LimitProvenance['key']; label: string; unit: string; fallback?: number }[] = [
+  { key: 'maxNozzleTemp', label: 'Max nozzle temp', unit: '°C', fallback: FALLBACK_MAX_NOZZLE_TEMP },
+  { key: 'maxBedTemp', label: 'Max bed temp', unit: '°C', fallback: FALLBACK_MAX_BED_TEMP },
+  { key: 'maxVolumetricFlow', label: 'Max volumetric flow', unit: 'mm³/s' }
+];
+
+/** Which machine limits a database record actually publishes. */
+export function limitProvenance(spec: PrinterSpecification | null | undefined): LimitProvenance[] {
+  const values = spec ? profileValuesFromSpec(spec) : {};
+  return LIMIT_FIELDS.map(f => ({ ...f, fromDatabase: spec ? f.key in values : false }));
+}
+
+/**
+ * Sentence naming the limits this record does NOT publish, and what the form
+ * put there instead. Null when the record carries every limit that has a
+ * fallback (max volumetric flow is simply left empty, which reads as unknown).
+ */
+export function unpublishedLimitsNote(spec: PrinterSpecification | null | undefined): string | null {
+  const missing = limitProvenance(spec).filter(l => !l.fromDatabase && l.fallback !== undefined);
+  if (!missing.length) return null;
+  const parts = missing.map(l => `${l.label} (${l.fallback} ${l.unit})`).join(' and ');
+  return `This database record does not publish ${missing.length === 1 ? 'one limit' : 'these limits'}: ${parts}. `
+    + 'Those figures are PerfectFit\'s conservative fallback — NOT FROM THE DATABASE and not a specification for this machine. '
+    + 'Check the value against your own hotend/bed rating and correct it: PTFE-lined hotends are often rated 240–250 °C, and every temperature suggestion in the app is capped by whatever is in this field.';
+}
+
+/** Text for the "filled from database" badge — never claims limits it lacks. */
+export function specFillBadgeText(spec: PrinterSpecification): string {
+  const missing = limitProvenance(spec).filter(l => !l.fromDatabase && l.fallback !== undefined);
+  const base = `✓ Filled from database: ${specLabel(spec)}. Review and change any value for modified or custom hardware.`;
+  if (!missing.length) return base;
+  return `${base} Note: ${missing.map(l => l.label).join(' and ')} ${missing.length === 1 ? 'is' : 'are'} NOT PUBLISHED for this record — see the warning below the field.`;
+}
+
 export async function renderPrinters(root: HTMLElement): Promise<void> {
   const printers = await listPrinters();
 
@@ -30,8 +88,16 @@ export async function renderPrinters(root: HTMLElement): Promise<void> {
     return;
   }
 
-  root.append(h('div', { class: 'grid grid-cards' }, printers.map(p =>
-    h('div', { class: 'card' },
+  root.append(h('div', { class: 'grid grid-cards' }, printers.map(p => {
+    // Which of this card's limits the linked database record actually carries.
+    // A profile can be database-linked and still hold fallback numbers.
+    const backed = new Set(
+      limitProvenance(p.databasePrinterId ? getPrinterSpec(p.databasePrinterId) : null)
+        .filter(l => l.fromDatabase).map(l => l.key));
+    const unbackedLimits = p.databasePrinterId
+      ? limitProvenance(getPrinterSpec(p.databasePrinterId)).filter(l => !l.fromDatabase && l.fallback !== undefined)
+      : [];
+    return h('div', { class: 'card' },
       h('h3', {}, p.name),
       h('p', { class: 'proj-vals', style: 'gap:var(--s-2)' },
         p.manufacturer ? h('span', { class: 'placard' }, p.manufacturer) : null,
@@ -45,13 +111,18 @@ export async function renderPrinters(root: HTMLElement): Promise<void> {
           ? null
           : h('span', { class: 'placard' }, p.extruderType === 'direct' ? 'Direct drive' : 'Bowden'),
         p.databasePrinterId
-          ? h('span', { class: 'badge badge-ok' }, '✓ Database specs')
+          ? h('span', { class: `badge ${unbackedLimits.length ? 'badge-info' : 'badge-ok'}` },
+              unbackedLimits.length ? '✓ Database specs (some limits unpublished)' : '✓ Database specs')
           : h('span', { class: 'badge badge-info' }, '✎ Manually configured')),
       h('div', { class: 'panel', style: 'padding:0 var(--s-3)' },
         h('table', { class: 'data' }, h('tbody', {},
-          specRow('Max nozzle', p.maxNozzleTemp, '°C'),
-          specRow('Max bed', p.maxBedTemp, '°C'),
+          specRow('Max nozzle', p.maxNozzleTemp, '°C', !!p.databasePrinterId && !backed.has('maxNozzleTemp')),
+          specRow('Max bed', p.maxBedTemp, '°C', !!p.databasePrinterId && !backed.has('maxBedTemp')),
           specRow('Max flow', p.maxVolumetricFlow, 'mm³/s')))),
+      unbackedLimits.length
+        ? h('p', { class: 'field-help', style: 'color:var(--warn)' },
+            `⚠ ${unbackedLimits.map(l => l.label).join(' and ')} ${unbackedLimits.length === 1 ? 'is' : 'are'} not published in the database for this printer — the value shown is PerfectFit's conservative fallback, not a spec. Edit the profile and set your hardware's own rating.`)
+        : null,
       p.nozzles?.length ? nozzlePanels(p.nozzles) : null,
       p.notes ? h('p', { class: 'field-help' }, p.notes) : null,
       refreshCallout(root, p),
@@ -74,8 +145,8 @@ export async function renderPrinters(root: HTMLElement): Promise<void> {
           }
         }, '🗑 Delete')
       )
-    )
-  )));
+    );
+  })));
 }
 
 // --- equipment placards ------------------------------------------------------
@@ -83,11 +154,15 @@ export async function renderPrinters(root: HTMLElement): Promise<void> {
 /**
  * One machine limit as a labelled readout. An unpublished limit reads UNLIT —
  * the app genuinely does not know it, and a dash says so where a zero would lie.
+ * `unbacked` marks a value the database never supplied, so a database-linked
+ * card cannot pass a fallback off as a published specification.
  */
-function specRow(label: string, value: number | undefined, unit: string): HTMLElement {
+function specRow(label: string, value: number | undefined, unit: string, unbacked = false): HTMLElement {
   const known = value !== undefined && Number.isFinite(value);
   return h('tr', {},
-    h('th', { scope: 'row' }, h('span', { class: 'readout-label' }, label)),
+    h('th', { scope: 'row' },
+      h('span', { class: 'readout-label' }, label),
+      unbacked ? h('span', { class: 'readout-label', style: 'color:var(--warn)' }, ' · fallback, not from database') : null),
     h('td', { style: 'text-align:right' },
       h('span', { class: `readout${known ? '' : ' is-unlit'}` },
         h('b', { class: 'readout-value', style: 'font-size:1.05rem' }, known ? String(value) : '—'),
@@ -226,7 +301,10 @@ function openEditor(root: HTMLElement, existing: PrinterProfile | null): void {
     }
     : {
       id: uid(), name: '', manufacturer: '', nozzleDiameter: 0.4,
-      maxNozzleTemp: 260, maxBedTemp: 100, maxVolumetricFlow: undefined,
+      // Conservative fallbacks, not specifications — flagged as such in the
+      // editor (see limitNotes below) so no clamp inherits a false provenance.
+      maxNozzleTemp: FALLBACK_MAX_NOZZLE_TEMP, maxBedTemp: FALLBACK_MAX_BED_TEMP,
+      maxVolumetricFlow: undefined,
       extruderType: 'direct', retractionRange: { start: 0, end: 2 },
       notes: '', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
       isManual: true
@@ -263,11 +341,51 @@ function openEditor(root: HTMLElement, existing: PrinterProfile | null): void {
 
   const issuesHost = h('div', {});
   const dbBadge = h('p', { class: 'field-help', style: 'display:none;color:var(--radio-green)' });
+
+  // Per-field provenance warnings. The database publishes no nozzle limit for
+  // most of its records and no bed limit for nearly as many; the form still has
+  // to show a number, so it shows a conservative fallback AND says so. Without
+  // this the green "filled from database" line would vouch for a figure the
+  // database never contained — and every clamp downstream trusts that figure.
+  const limitNotes: Record<'maxNozzleTemp' | 'maxBedTemp', HTMLElement> = {
+    maxNozzleTemp: h('p', { class: 'field-help', style: 'display:none;color:var(--warn)' }),
+    maxBedTemp: h('p', { class: 'field-help', style: 'display:none;color:var(--warn)' })
+  };
+  const limitInputs: Record<'maxNozzleTemp' | 'maxBedTemp', HTMLInputElement> = {
+    maxNozzleTemp, maxBedTemp
+  };
+  const setLimitNote = (key: 'maxNozzleTemp' | 'maxBedTemp', unbacked: boolean): void => {
+    const el = limitNotes[key];
+    const f = LIMIT_FIELDS.find(l => l.key === key)!;
+    // Only warn while the field still literally holds the invented fallback:
+    // once it holds the user's own figure the warning would misdescribe it.
+    if (!unbacked || Number(limitInputs[key].value) !== f.fallback) {
+      el.style.display = 'none'; el.textContent = ''; return;
+    }
+    el.textContent = `⚠ Not from the database — ${f.fallback} ${f.unit} is PerfectFit's conservative fallback for this field, not a published spec for this printer. `
+      + 'Every temperature the app suggests is capped by this number, so check it against your hardware\'s own rating and correct it.';
+    el.style.display = '';
+  };
+  const applyLimitNotes = (spec: PrinterSpecification | null): void => {
+    for (const l of limitProvenance(spec)) {
+      if (l.key === 'maxVolumetricFlow') continue; // left empty when unknown, which already reads as unknown
+      setLimitNote(l.key, !l.fromDatabase);
+    }
+  };
   const setBadge = (spec: PrinterSpecification | null) => {
-    if (spec) { dbBadge.textContent = `✓ Filled from database: ${specLabel(spec)}. Review and change any value for modified or custom hardware.`; dbBadge.style.display = ''; }
+    if (spec) { dbBadge.textContent = specFillBadgeText(spec); dbBadge.style.display = ''; }
     else { dbBadge.style.display = 'none'; }
+    applyLimitNotes(spec);
   };
   if (existing?.databasePrinterId) setBadge(getPrinterSpec(existing.databasePrinterId) ?? null);
+  // A brand-new profile opens on the same invented 260/100 defaults, with no
+  // database record behind them at all.
+  else if (!existing) applyLimitNotes(null);
+
+  // Typing a limit by hand replaces the fallback with the user's own figure —
+  // the provenance warning has done its job and would only be noise afterwards.
+  maxNozzleTemp.addEventListener('input', () => setLimitNote('maxNozzleTemp', false));
+  maxBedTemp.addEventListener('input', () => setLimitNote('maxBedTemp', false));
 
   // Track edits so we can warn before a new selection discards them.
   let dirtySinceSelect = false;
@@ -392,6 +510,7 @@ function openEditor(root: HTMLElement, existing: PrinterProfile | null): void {
     if (!name.value.trim()) name.value = 'Bambu Lab X2D';
     manufacturer.value = 'Bambu Lab';
     maxNozzleTemp.value = '300'; // official X2D spec sheet: 300 °C max nozzle temp (bambulab.com/en-us/x2d/specs)
+    setLimitNote('maxNozzleTemp', false); // a cited spec, not a fallback
     extruder.value = 'direct'; // the main (left) nozzle is direct drive on the toolhead
     retrStart.value = '0';
     retrEnd.value = '2'; // main/direct path; the bowden aux gets its own 2–6 mm suggestion
@@ -454,8 +573,12 @@ function openEditor(root: HTMLElement, existing: PrinterProfile | null): void {
         field('Nozzle diameter (mm)', nozzle, 'The nozzle you will calibrate with. Different nozzle sizes need separate calibrations.')
       ),
       h('div', { class: 'field-row' },
-        field('Max nozzle temp (°C)', maxNozzleTemp, 'From the printer/hotend spec. The app blocks suggestions above this.'),
-        field('Max bed temp (°C)', maxBedTemp),
+        h('div', {},
+          field('Max nozzle temp (°C)', maxNozzleTemp, 'From the printer/hotend spec. The app blocks suggestions above this.'),
+          limitNotes.maxNozzleTemp),
+        h('div', {},
+          field('Max bed temp (°C)', maxBedTemp),
+          limitNotes.maxBedTemp),
         field('Max volumetric flow (mm³/s)', maxFlow, 'If the maker publishes one (e.g. ~32 for a P1S stock hotend). Used to cap max-flow recommendations.')
       ),
       h('div', { class: 'field-row' },

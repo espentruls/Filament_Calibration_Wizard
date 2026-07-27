@@ -1,7 +1,7 @@
 import { h, clear, frag, field, issueList, toast, confirmDialog } from './dom';
 import {
   getProject, getPrinter, saveProject, addTimeline, uid,
-  saveDraft, loadDraft, clearDraft, savePhoto
+  saveDraft, loadDraft, clearDraft, savePhoto, deletePhoto
 } from '../storage/store';
 import { getCalibration } from '../data/calibrations';
 import { getSlicerContent } from '../data/slicers';
@@ -444,12 +444,25 @@ export async function renderWizard(root: HTMLElement, projectId: string, stepId:
           h('div', { class: 'btn-row' },
             h('button', { class: 'btn', onClick: () => { state.stage = stages[idx - 1]; persist(); renderStage(); } }, '← Back'),
             h('button', {
-              class: 'btn btn-primary', onClick: async () => {
-                await completeStep({
-                  project, stepId, state, out, confidence,
-                  retest: retest.checked, notes: notes.value, pendingPhotos, draftKey
-                });
-                toast(`${def.shortName} saved.`, 'success');
+              class: 'btn btn-primary', onClick: async (e: Event) => {
+                const btn = e.currentTarget as HTMLButtonElement;
+                btn.disabled = true;
+                btn.textContent = 'Saving…';
+                let saved = false;
+                try {
+                  saved = await completeStep({
+                    project, stepId, state, out, confidence,
+                    retest: retest.checked, notes: notes.value, pendingPhotos, draftKey,
+                    label: def.shortName
+                  });
+                } finally {
+                  btn.disabled = false;
+                  btn.textContent = '✓ Save & continue';
+                }
+                // A failed save keeps the user on this screen with the leave
+                // guard still armed: the measurement is NOT recorded, and
+                // pressing the button again retries it.
+                if (!saved) return;
                 setLeaveGuard(null);
                 const next = project.stepOrder[project.stepOrder.indexOf(stepId) + 1];
                 navigate(next ? `#/wizard/${project.id}/${next}` : `#/project/${project.id}`);
@@ -586,7 +599,7 @@ function presetName(p: CalibrationProject, printer?: PrinterProfile): string {
   ].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
 }
 
-async function completeStep(args: {
+export async function completeStep(args: {
   project: CalibrationProject;
   stepId: CalibrationId;
   state: WizardState;
@@ -594,55 +607,90 @@ async function completeStep(args: {
   confidence: ConfidenceLevel;
   retest: boolean;
   notes: string;
-  pendingPhotos: { name: string; type: string; blob: Blob }[];
+  pendingPhotos: { id?: string; name: string; type: string; blob: Blob }[];
   draftKey: string;
-}): Promise<void> {
-  const { project, stepId, state, out, confidence, retest, notes, pendingPhotos, draftKey } = args;
-  const st = project.steps[stepId] ?? (project.steps[stepId] = { status: 'not-started', current: null, history: [] });
+  /** Step name used in the confirmation/failure message shown to the user. */
+  label: string;
+}): Promise<boolean> {
+  const { project, stepId, state, out, confidence, retest, notes, pendingPhotos, draftKey, label } = args;
 
-  // Preserve the prior result in history rather than overwriting.
-  if (st.current) st.history.unshift(st.current);
+  // Everything below mutates `project` in place, and the same object stays on
+  // screen. If the save fails we put it back exactly as it was, so the retry
+  // the user is invited to make records the result ONCE instead of stacking a
+  // second timeline entry and pushing a phantom attempt into history.
+  const snapshot = JSON.parse(JSON.stringify(project)) as CalibrationProject;
+  const savedPhotoIds: string[] = [];
 
-  const attempt: CalibrationAttempt = {
-    id: uid(),
-    startedAt: new Date().toISOString(),
-    completedAt: new Date().toISOString(),
-    method: state.method,
-    settings: (state.settings ?? {}) as CalibrationAttempt['settings'],
-    result: (state.result ?? {}) as CalibrationAttempt['result'],
-    computed: out.computed,
-    prerequisitesConfirmed: state.prereqs,
-    notes,
-    photoIds: [],
-    confidence
-  };
+  try {
+    const st = project.steps[stepId] ?? (project.steps[stepId] = { status: 'not-started', current: null, history: [] });
 
-  for (const ph of pendingPhotos) {
-    const photo: StoredPhoto = {
-      id: uid(), projectId: project.id, stepId, attemptId: attempt.id,
-      createdAt: new Date().toISOString(), name: ph.name, type: ph.type, blob: ph.blob, analysis: null
+    // Preserve the prior result in history rather than overwriting.
+    if (st.current) st.history.unshift(st.current);
+
+    const attempt: CalibrationAttempt = {
+      id: uid(),
+      startedAt: new Date().toISOString(),
+      completedAt: new Date().toISOString(),
+      method: state.method,
+      settings: (state.settings ?? {}) as CalibrationAttempt['settings'],
+      result: (state.result ?? {}) as CalibrationAttempt['result'],
+      computed: out.computed,
+      prerequisitesConfirmed: state.prereqs,
+      notes,
+      photoIds: [],
+      confidence
     };
-    await savePhoto(photo);
-    attempt.photoIds.push(photo.id);
+
+    for (const ph of pendingPhotos) {
+      // The id is stamped onto the pending photo the first time round, so a
+      // retry overwrites the same record instead of storing the picture twice.
+      ph.id = ph.id ?? uid();
+      const photo: StoredPhoto = {
+        id: ph.id, projectId: project.id, stepId, attemptId: attempt.id,
+        createdAt: new Date().toISOString(), name: ph.name, type: ph.type, blob: ph.blob, analysis: null
+      };
+      await savePhoto(photo);
+      savedPhotoIds.push(photo.id);
+      attempt.photoIds.push(photo.id);
+    }
+
+    st.current = attempt;
+    st.status = 'completed';
+    st.confidence = confidence;
+    st.retestRecommended = retest;
+    st.completedAt = attempt.completedAt;
+
+    Object.assign(project.finals, out.finalsPatch);
+
+    const valueSummary = out.enterInSlicer.map(e => `${e.label} = ${e.value}`).join(', ')
+      || String(out.computed['verdict'] ?? 'completed');
+    addTimeline(project, {
+      stepId, kind: 'completed',
+      summary: valueSummary,
+      detail: retest ? 'User flagged for retest.' : undefined
+    });
+
+    applyRetestFlags(project);
+    await saveProject(project);
+  } catch (err) {
+    restoreProject(project, snapshot);
+    // Best effort: drop the photos this attempt wrote so the database looks
+    // exactly as it did before. Failing to clean them up must not mask the
+    // real error, and the ids are stable so a retry overwrites them anyway.
+    for (const id of savedPhotoIds) {
+      try { await deletePhoto(id); } catch { /* nothing more we can do */ }
+    }
+    toast(`Could not save ${label} — nothing was recorded. ${String(err)} Your entries are still here; press “Save & continue” to try again.`, 'error');
+    return false;
   }
 
-  st.current = attempt;
-  st.status = 'completed';
-  st.confidence = confidence;
-  st.retestRecommended = retest;
-  st.completedAt = attempt.completedAt;
-
-  Object.assign(project.finals, out.finalsPatch);
-
-  const valueSummary = out.enterInSlicer.map(e => `${e.label} = ${e.value}`).join(', ')
-    || String(out.computed['verdict'] ?? 'completed');
-  addTimeline(project, {
-    stepId, kind: 'completed',
-    summary: valueSummary,
-    detail: retest ? 'User flagged for retest.' : undefined
-  });
-
-  applyRetestFlags(project);
-  await saveProject(project);
   clearDraft(draftKey);
+  toast(`${label} saved.`, 'success');
+  return true;
+}
+
+/** Reset `target` to `snapshot` while keeping the same object identity. */
+function restoreProject(target: CalibrationProject, snapshot: CalibrationProject): void {
+  for (const key of Object.keys(target)) delete (target as unknown as Record<string, unknown>)[key];
+  Object.assign(target, snapshot);
 }

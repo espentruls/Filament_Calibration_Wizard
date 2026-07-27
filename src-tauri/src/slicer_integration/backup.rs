@@ -63,6 +63,98 @@ pub fn sha256_file(path: &Path) -> Result<String, String> {
     Ok(format!("{:x}", h.finalize()))
 }
 
+// ---------------------------------------------------------------------------
+// Durability barriers. Backup and install both depend on "the copy that
+// survives a crash", so the barriers live next to the backup code whose whole
+// job is to guarantee one.
+// ---------------------------------------------------------------------------
+
+/// Flush a file's bytes to stable storage. Opened for write because Windows
+/// only honours FlushFileBuffers on a handle with write access.
+pub fn sync_file(path: &Path) -> Result<(), String> {
+    let f = std::fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .map_err(|e| format!("Cannot open {} to flush it: {e}", path.display()))?;
+    f.sync_all()
+        .map_err(|e| format!("Flush to disk failed for {}: {e}", path.display()))
+}
+
+/// Copy a file and flush the copy to stable storage before returning, through
+/// a handle this process created — so the flush can never be refused because
+/// the source file happens to be read-only, and the copy's bytes are on disk
+/// rather than merely in the page cache when this returns.
+pub fn copy_durable(src: &Path, dest: &Path) -> Result<(), String> {
+    let mut input =
+        std::fs::File::open(src).map_err(|e| format!("Read failed {}: {e}", src.display()))?;
+    let mut output =
+        std::fs::File::create(dest).map_err(|e| format!("Write failed {}: {e}", dest.display()))?;
+    std::io::copy(&mut input, &mut output)
+        .map_err(|e| format!("Copy {} to {} failed: {e}", src.display(), dest.display()))?;
+    output
+        .sync_all()
+        .map_err(|e| format!("Flush to disk failed for {}: {e}", dest.display()))
+}
+
+/// Flush a directory's own entries (create/rename/unlink) to stable storage.
+///
+/// Unix: opening the directory and `fsync`-ing it is the documented way to
+/// make a directory entry durable. Windows: there is no user-mode equivalent
+/// (a directory handle cannot even be obtained through `std::fs::File`), and
+/// NTFS records directory-entry changes in its metadata journal, which it
+/// commits in order — so on that platform the guarantee rests on the file-data
+/// flushes plus that journal, and this call is a deliberate no-op.
+pub fn sync_dir(dir: &Path) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        let d = std::fs::File::open(dir)
+            .map_err(|e| format!("Cannot open {} to flush it: {e}", dir.display()))?;
+        d.sync_all()
+            .map_err(|e| format!("Flush to disk failed for {}: {e}", dir.display()))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = dir;
+        Ok(())
+    }
+}
+
+/// How many ids are tried before a backup gives up claiming a directory.
+const MAX_BACKUP_ID_ATTEMPTS: u32 = 512;
+
+/// Claim a backup directory that no other backup can be using, and return its
+/// id and path.
+///
+/// The directory — not the clock — is the uniqueness gate: `create_dir` fails
+/// with `AlreadyExists` when the path is taken, so two backups made inside the
+/// same second, or by two processes at once, can never land on the same id and
+/// overwrite each other's contents. (`create_dir_all` would silently succeed
+/// on an existing directory, which is exactly how a backup used to eat the
+/// previous one.) The loop is bounded so a permanently blocked directory
+/// reports an error instead of spinning.
+fn claim_backup_dir(slicer_root: &Path, now: u64) -> Result<(String, PathBuf), String> {
+    std::fs::create_dir_all(slicer_root)
+        .map_err(|e| format!("Cannot create backup dir {}: {e}", slicer_root.display()))?;
+    let pid = std::process::id();
+    for attempt in 0..MAX_BACKUP_ID_ATTEMPTS {
+        let backup_id = if attempt == 0 {
+            format!("{now}-{pid}")
+        } else {
+            format!("{now}-{pid}-{attempt}")
+        };
+        let root = slicer_root.join(&backup_id);
+        match std::fs::create_dir(&root) {
+            Ok(()) => return Ok((backup_id, root)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(format!("Cannot create backup dir {}: {e}", root.display())),
+        }
+    }
+    Err(format!(
+        "Cannot claim a unique backup directory under {} after {MAX_BACKUP_ID_ATTEMPTS} attempts — nothing was backed up.",
+        slicer_root.display()
+    ))
+}
+
 /// Create and verify a backup covering `paths` (files that are about to be
 /// created or replaced). Files that do not exist yet are recorded with
 /// `existed_before: false` so restore knows to delete them.
@@ -76,10 +168,9 @@ pub fn create_backup(
     paths: &[PathBuf],
 ) -> Result<ProfileBackupManifest, String> {
     let now = now_unix();
-    let backup_id = format!("{now}-{}", std::process::id());
-    let root = all_backups_root.join(slicer_id).join(&backup_id);
+    let (backup_id, root) = claim_backup_dir(&all_backups_root.join(slicer_id), now)?;
     let files_dir = root.join("files");
-    std::fs::create_dir_all(&files_dir).map_err(|e| format!("Cannot create backup dir: {e}"))?;
+    std::fs::create_dir(&files_dir).map_err(|e| format!("Cannot create backup dir: {e}"))?;
 
     let mut entries = Vec::new();
     for (i, p) in paths.iter().enumerate() {
@@ -90,7 +181,11 @@ pub fn create_backup(
                 .unwrap_or("bin")
                 .to_ascii_lowercase();
             let dest = files_dir.join(format!("{i}.{ext}"));
-            std::fs::copy(p, &dest).map_err(|e| format!("Backup copy failed for {}: {e}", p.display()))?;
+            // The install that follows destroys the original, so the copy has
+            // to be on stable storage — not just in the page cache — before
+            // this function reports success.
+            copy_durable(p, &dest)
+                .map_err(|e| format!("Backup copy failed for {}: {e}", p.display()))?;
             let src_sum = sha256_file(p)?;
             let dest_sum = sha256_file(&dest)?;
             if src_sum != dest_sum {
@@ -127,6 +222,13 @@ pub fn create_backup(
     let manifest_path = root.join("manifest.json");
     std::fs::write(&manifest_path, &manifest_json)
         .map_err(|e| format!("Manifest write failed: {e}"))?;
+    // Copies first, then the index that points at them, then the directory
+    // entries: a crash can therefore leave copies without a manifest (an
+    // ignored, incomplete backup) but never a manifest promising copies that
+    // are not there.
+    sync_file(&manifest_path)?;
+    sync_dir(&files_dir)?;
+    sync_dir(&root)?;
     // Verify the manifest is readable back.
     let reread = std::fs::read_to_string(&manifest_path)
         .map_err(|e| format!("Manifest re-read failed: {e}"))?;
@@ -253,45 +355,146 @@ fn load_manifest(app: &tauri::AppHandle, backup_id: &str) -> Result<ProfileBacku
     Err(format!("Backup {backup_id} not found"))
 }
 
+/// A restore that stopped part-way, carrying exactly what it had already done.
+/// A half-restored preset library is the user's problem to finish by hand, so
+/// the record of it is never discarded — it travels on the error.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoreFailure {
+    /// Why the restore stopped.
+    pub message: String,
+    /// Files already put back to their backed-up contents.
+    pub restored_files: Vec<String>,
+    /// Files already removed because the backup recorded them as not existing.
+    pub deleted_files: Vec<String>,
+    /// Files the restore never got to, starting with the one that failed.
+    pub pending_files: Vec<String>,
+}
+
+impl std::fmt::Display for RestoreFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)?;
+        if self.restored_files.is_empty() && self.deleted_files.is_empty() {
+            write!(f, "\nNothing was changed — the restore stopped before it wrote anything.")?;
+        } else {
+            write!(f, "\nThe restore stopped part-way. Already reverted to the backed-up version:")?;
+            for p in &self.restored_files {
+                write!(f, "\n  restored {p}")?;
+            }
+            for p in &self.deleted_files {
+                write!(f, "\n  removed {p}")?;
+            }
+        }
+        if !self.pending_files.is_empty() {
+            write!(f, "\nNot reverted (still as they were before this restore):")?;
+            for p in &self.pending_files {
+                write!(f, "\n  {p}")?;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Build the failure record for the entry at `index`: everything from there on
+/// is untouched by this restore.
+fn stop_restore(
+    manifest: &ProfileBackupManifest,
+    index: usize,
+    restored: &[String],
+    deleted: &[String],
+    message: String,
+) -> RestoreFailure {
+    RestoreFailure {
+        message,
+        restored_files: restored.to_vec(),
+        deleted_files: deleted.to_vec(),
+        pending_files: manifest.files[index..]
+            .iter()
+            .map(|e| e.original_path.clone())
+            .collect(),
+    }
+}
+
 /// Restore a backup: copy back every file that existed before (after checksum
 /// verification of the backed-up copy) and delete files that did not exist.
 /// Original paths are re-validated against `allowed_root` (the slicer's data
 /// directory in production; a temp directory in integration tests).
+///
+/// Either every entry is reverted, or the restore stops at the first failure
+/// and reports precisely which files it had already changed — it never
+/// continues past an error and never leaves a silent mixed state.
 pub fn restore_backup_inner(
     manifest: &ProfileBackupManifest,
     allowed_root: &Path,
-) -> Result<(Vec<String>, Vec<String>), String> {
-    let mut restored = Vec::new();
-    let mut deleted = Vec::new();
-    for f in &manifest.files {
+) -> Result<(Vec<String>, Vec<String>), RestoreFailure> {
+    let mut restored: Vec<String> = Vec::new();
+    let mut deleted: Vec<String> = Vec::new();
+    for (i, f) in manifest.files.iter().enumerate() {
+        let stop = |message: String, restored: &[String], deleted: &[String]| {
+            stop_restore(manifest, i, restored, deleted, message)
+        };
         let original = PathBuf::from(&f.original_path);
-        security::ensure_target_under(allowed_root, &original)?;
-        security::validate_preset_extension(
+        if let Err(e) = security::ensure_target_under(allowed_root, &original) {
+            return Err(stop(e, &restored, &deleted));
+        }
+        if let Err(e) = security::validate_preset_extension(
             original.file_name().and_then(|n| n.to_str()).unwrap_or(""),
-        )?;
+        ) {
+            return Err(stop(e, &restored, &deleted));
+        }
         if f.existed_before {
-            let backup_path = f
-                .backup_path
-                .as_ref()
-                .ok_or_else(|| "Manifest entry missing backup path".to_string())?;
+            let Some(backup_path) = f.backup_path.as_ref() else {
+                return Err(stop(
+                    "Manifest entry missing backup path".to_string(),
+                    &restored,
+                    &deleted,
+                ));
+            };
             let bp = PathBuf::from(backup_path);
-            let sum = sha256_file(&bp)?;
+            let sum = match sha256_file(&bp) {
+                Ok(s) => s,
+                Err(e) => return Err(stop(e, &restored, &deleted)),
+            };
             if Some(&sum) != f.checksum_sha256.as_ref() {
-                return Err(format!(
-                    "Backup file checksum mismatch for {} — refusing to restore corrupted data",
-                    bp.display()
+                return Err(stop(
+                    format!(
+                        "Backup file checksum mismatch for {} — refusing to restore corrupted data",
+                        bp.display()
+                    ),
+                    &restored,
+                    &deleted,
                 ));
             }
-            std::fs::copy(&bp, &original)
-                .map_err(|e| format!("Restore copy failed for {}: {e}", original.display()))?;
-            let restored_sum = sha256_file(&original)?;
+            // A restore is itself a recovery step, so it is written durably:
+            // a crash straight after must not undo what the user was just
+            // told had been put back.
+            if let Err(e) = copy_durable(&bp, &original) {
+                return Err(stop(
+                    format!("Restore copy failed for {}: {e}", original.display()),
+                    &restored,
+                    &deleted,
+                ));
+            }
+            let restored_sum = match sha256_file(&original) {
+                Ok(s) => s,
+                Err(e) => return Err(stop(e, &restored, &deleted)),
+            };
             if restored_sum != sum {
-                return Err(format!("Restore verification failed for {}", original.display()));
+                return Err(stop(
+                    format!("Restore verification failed for {}", original.display()),
+                    &restored,
+                    &deleted,
+                ));
             }
             restored.push(f.original_path.clone());
         } else if original.is_file() {
-            std::fs::remove_file(&original)
-                .map_err(|e| format!("Restore delete failed for {}: {e}", original.display()))?;
+            if let Err(e) = std::fs::remove_file(&original) {
+                return Err(stop(
+                    format!("Restore delete failed for {}: {e}", original.display()),
+                    &restored,
+                    &deleted,
+                ));
+            }
             deleted.push(f.original_path.clone());
         }
     }
@@ -356,7 +559,10 @@ pub fn restore_profile_backup(
     let data_root = security::platform_data_root()?;
     let slicer = super::descriptor(&manifest.slicer_id)?;
     let allowed_root = data_root.join(slicer.data_dir_name);
-    let (restored_files, deleted_files) = restore_backup_inner(&manifest, &allowed_root)?;
+    // The failure text carries the reverted-so-far list, so a part-way restore
+    // reaches the user as an actionable report instead of a bare error.
+    let (restored_files, deleted_files) =
+        restore_backup_inner(&manifest, &allowed_root).map_err(|f| f.to_string())?;
     Ok(RestoreResult {
         restored_files,
         deleted_files,
@@ -473,6 +679,145 @@ mod tests {
         assert!(deleted.is_empty());
         assert_eq!(std::fs::read_to_string(&filament).unwrap(), "{\"flow\":\"0.98\"}");
         assert_eq!(std::fs::read_to_string(&machine).unwrap(), "{\"retract\":\"0.8\"}");
+    }
+
+    #[test]
+    fn back_to_back_backups_never_overwrite_each_other() {
+        let t = TempUserRoot::new("collide");
+        let u = t.user_dir();
+        let filament = u.join("filament/My PLA.json");
+        std::fs::write(&filament, "{\"flow\":\"0.98\"}").unwrap();
+        let first = snapshot(&t).unwrap();
+        // Same second, same process — the clock cannot tell these apart.
+        std::fs::write(&filament, "{\"flow\":\"1.15\"}").unwrap();
+        let second = snapshot(&t).unwrap();
+
+        assert_ne!(first.backup_id, second.backup_id, "two backups shared one id");
+        assert_ne!(first.backup_root, second.backup_root);
+
+        // Both are on disk, each describing itself.
+        for m in [&first, &second] {
+            let manifest_path = PathBuf::from(&m.backup_root).join("manifest.json");
+            assert!(manifest_path.is_file(), "missing manifest for {}", m.backup_id);
+            let on_disk: ProfileBackupManifest =
+                serde_json::from_str(&std::fs::read_to_string(&manifest_path).unwrap()).unwrap();
+            assert_eq!(on_disk.backup_id, m.backup_id);
+        }
+
+        // Each still holds exactly the bytes it captured, checksum intact.
+        let captured = |m: &ProfileBackupManifest| {
+            let f = &m.files[0];
+            let bp = f.backup_path.clone().expect("file was backed up");
+            assert_eq!(
+                sha256_file(Path::new(&bp)).unwrap(),
+                *f.checksum_sha256.as_ref().unwrap(),
+                "backup copy no longer matches its manifest checksum"
+            );
+            std::fs::read_to_string(&bp).unwrap()
+        };
+        assert_eq!(captured(&first), "{\"flow\":\"0.98\"}");
+        assert_eq!(captured(&second), "{\"flow\":\"1.15\"}");
+    }
+
+    #[test]
+    fn a_backup_id_another_process_already_claimed_is_never_reused() {
+        let t = TempUserRoot::new("taken");
+        let u = t.user_dir();
+        std::fs::write(u.join("filament/My PLA.json"), "{\"flow\":\"0.98\"}").unwrap();
+        // Stand-in for a backup another process claimed during this second.
+        let taken = t
+            .backups()
+            .join("orca")
+            .join(format!("{}-{}", now_unix(), std::process::id()));
+        std::fs::create_dir_all(taken.join("files")).unwrap();
+        std::fs::write(taken.join("manifest.json"), "{\"other\":\"process\"}").unwrap();
+
+        let m = snapshot(&t).unwrap();
+        assert_ne!(PathBuf::from(&m.backup_root), taken, "claimed a taken directory");
+        assert_eq!(
+            std::fs::read_to_string(taken.join("manifest.json")).unwrap(),
+            "{\"other\":\"process\"}",
+            "the other process's backup was overwritten"
+        );
+    }
+
+    #[test]
+    fn a_mid_restore_failure_reports_what_was_already_reverted() {
+        let t = TempUserRoot::new("partial");
+        let u = t.user_dir();
+        let filament = u.join("filament/My PLA.json");
+        let machine = u.join("machine/My Printer.json");
+        std::fs::write(&filament, "{\"flow\":\"0.98\"}").unwrap();
+        std::fs::write(&machine, "{\"retract\":\"0.8\"}").unwrap();
+        let m = snapshot(&t).unwrap();
+
+        // Both live files drift; the machine backup copy is damaged, so the
+        // restore can revert the filament preset but not the machine one.
+        std::fs::write(&filament, "{\"flow\":\"1.15\"}").unwrap();
+        std::fs::write(&machine, "{\"retract\":\"9.9\"}").unwrap();
+        let machine_backup = m
+            .files
+            .iter()
+            .find(|f| f.original_path.contains("My Printer"))
+            .unwrap()
+            .backup_path
+            .clone()
+            .unwrap();
+        std::fs::write(&machine_backup, "corrupted").unwrap();
+
+        let failure = restore_backup_inner(&m, &t.0).expect_err("restore must fail");
+        // It stopped at the bad entry instead of continuing.
+        assert_eq!(std::fs::read_to_string(&machine).unwrap(), "{\"retract\":\"9.9\"}");
+        // …but it *had* already reverted the filament preset, and must say so.
+        assert_eq!(std::fs::read_to_string(&filament).unwrap(), "{\"flow\":\"0.98\"}");
+        let msg = failure.to_string();
+        assert!(msg.contains("checksum mismatch"), "{msg}");
+        assert!(
+            msg.contains("My PLA.json"),
+            "a half-finished restore must name what it already reverted: {msg}"
+        );
+        // The same record is available structurally, not just as prose.
+        let recorded = |needle: &str| {
+            m.files
+                .iter()
+                .find(|f| f.original_path.contains(needle))
+                .unwrap()
+                .original_path
+                .clone()
+        };
+        assert_eq!(
+            failure.restored_files,
+            vec![recorded("My PLA.json")],
+            "reverted files must be reported exactly"
+        );
+        assert!(failure.deleted_files.is_empty());
+        assert_eq!(
+            failure.pending_files,
+            vec![recorded("My Printer.json")],
+            "files left alone must be reported exactly"
+        );
+    }
+
+    #[test]
+    fn a_restore_that_fails_on_its_first_file_reports_that_nothing_changed() {
+        let t = TempUserRoot::new("nothing");
+        let u = t.user_dir();
+        let filament = u.join("filament/My PLA.json");
+        std::fs::write(&filament, "{\"flow\":\"0.98\"}").unwrap();
+        let m = snapshot(&t).unwrap();
+        std::fs::write(&filament, "{\"flow\":\"1.15\"}").unwrap();
+        std::fs::write(m.files[0].backup_path.as_ref().unwrap(), "corrupted").unwrap();
+
+        let failure = restore_backup_inner(&m, &t.0).expect_err("restore must fail");
+        assert!(failure.restored_files.is_empty());
+        assert!(failure.deleted_files.is_empty());
+        assert_eq!(failure.pending_files, vec![m.files[0].original_path.clone()]);
+        assert!(
+            failure.to_string().contains("Nothing was changed"),
+            "{failure}"
+        );
+        // The live file is untouched — the restore never wrote corrupted data.
+        assert_eq!(std::fs::read_to_string(&filament).unwrap(), "{\"flow\":\"1.15\"}");
     }
 
     #[test]

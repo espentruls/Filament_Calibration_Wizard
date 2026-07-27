@@ -14,7 +14,8 @@
 
 import type {
   DetectedFilamentProfile, IntegrationSlicerId, NormalizedMaterial,
-  ParsedFilamentProfile, ProfileFieldChange, ProfileSource, CalibratedFieldPatch
+  ParsedFilamentProfile, ProfileFieldChange, ProfileSource, CalibratedFieldPatch,
+  SkippedFieldNote
 } from './types';
 
 // --- material normalization -------------------------------------------------
@@ -225,6 +226,8 @@ function sortKeysDeep(v: unknown): unknown {
 export interface ClonePatchResult {
   data: PresetJson;
   changedFields: ProfileFieldChange[];
+  /** Patches deliberately not written (see cloneAndPatch), with reasons. */
+  skippedFields: SkippedFieldNote[];
   preservedFieldCount: number;
 }
 
@@ -257,9 +260,14 @@ function presetKeyLabel(key: string): string {
  *   extruder index unless applyToAllExtruders is set; other positions keep
  *   their original value (including "nil").
  * - When a patched key is missing (delta preset), it is added as an array
- *   sized to the preset's extruder count, with "nil" in untouched positions —
- *   except settings where "nil" would be invalid (flow/temp), which replicate
- *   the patched value.
+ *   sized to the preset's extruder count, with "nil" — the no-filament-override
+ *   sentinel — in untouched positions. Settings where "nil" is invalid
+ *   (flow/temp/PA) may only replicate the patched value when there is exactly
+ *   one slot, or when the user asked for every extruder: on a multi-nozzle
+ *   preset with per-nozzle targeting there is no prior value to preserve and no
+ *   legal neutral value, so the key is NOT WRITTEN AT ALL and the omission is
+ *   reported in `skippedFields`. Replicating it there would silently hand one
+ *   nozzle's calibration to a physically different nozzle.
  */
 /**
  * A fresh Bambu-style custom filament id: `P` + 7 hex, unique per generation
@@ -351,21 +359,62 @@ export function cloneAndPatch(args: {
   // Keys that may not hold "nil" (the slicer requires a concrete value).
   const NO_NIL = new Set(['nozzle_temperature', 'nozzle_temperature_initial_layer', 'filament_flow_ratio', 'filament_max_volumetric_speed', 'pressure_advance', 'filament_shrink']);
 
+  /** True when the base preset declares this key as a usable per-extruder array. */
+  const declaredArray = (v: unknown): v is string[] =>
+    Array.isArray(v) && v.length > 0 && v.every(x => typeof x === 'string');
+
+  /**
+   * What an untargeted slot gets when the base preset does not declare the key.
+   * "nil" is the documented no-filament-override sentinel: the slot behaves
+   * exactly as it did while the key was absent. `null` = no honest value exists
+   * (the slicer rejects "nil" here), so the key must not be written at all.
+   */
+  const neutralFill = (key: string): string | null => (NO_NIL.has(key) ? null : 'nil');
+
+  /** Slots this write targets; every other slot must keep its behaviour. */
+  const targetsFor = (len: number): number[] =>
+    applyToAllExtruders ? Array.from({ length: len }, (_, i) => i) : [idx];
+
+  const untargetedSlots = (len: number): number[] => {
+    const t = new Set(targetsFor(len));
+    return Array.from({ length: len }, (_, i) => i).filter(i => !t.has(i));
+  };
+
+  /** Every slot is written, so no untargeted slot can be silently invented. */
+  const writesEverySlot = applyToAllExtruders || extruders === 1;
+
+  const skipped: SkippedFieldNote[] = [];
+
   for (const patch of patches) {
     const key = patch.presetKey;
     const after = formatPresetNumber(patch.value) + (patch.valueSuffix ?? '');
     const existing = data[key];
+    const absent = !declaredArray(existing);
+
+    // The base preset does not declare this key, so the nozzles this project
+    // did NOT calibrate have no value to preserve. Writing the calibrated value
+    // into them would apply one nozzle's calibration to different hardware
+    // (a bowden aux K on a direct-drive main nozzle, for example), so the key
+    // is left out entirely unless a legal neutral value exists for those slots.
+    if (absent && !writesEverySlot && neutralFill(key) === null) {
+      const others = untargetedSlots(extruders).map(i => i + 1).join(', ');
+      skipped.push({
+        presetKey: key, label: patch.label,
+        reason: `${patch.label} (${key}) was NOT written: the base preset does not set it, so nozzle ${others} has no existing value to keep and this setting does not accept the "nil" (no override) sentinel. Writing ${after}${patch.unit ? ` ${patch.unit}` : ''} would have applied nozzle ${idx + 1}'s calibration to nozzle ${others} as well. Pick a base preset that already sets ${key}, set it by hand in the slicer for nozzle ${idx + 1}, or re-run with "apply to all extruders" if every nozzle really should use this value.`
+      });
+      continue; // companions belong to this value; they must not be written either
+    }
+
     let arr: string[];
-    if (Array.isArray(existing) && existing.every(x => typeof x === 'string') && existing.length > 0) {
-      arr = [...(existing as string[])];
+    if (declaredArray(existing)) {
+      arr = [...existing];
       // Preserve array shape; pad only if the profile itself is wider.
       while (arr.length < extruders) arr.push(arr[arr.length - 1]);
     } else {
-      const fill = NO_NIL.has(key) ? after : 'nil';
-      arr = new Array(extruders).fill(fill) as string[];
+      arr = new Array(extruders).fill(neutralFill(key) ?? after) as string[];
     }
 
-    const targets = applyToAllExtruders ? arr.map((_, i) => i) : [idx];
+    const targets = targetsFor(arr.length);
     let recorded = false;
     for (const t of targets) {
       const before = Array.isArray(existing) && typeof (existing as unknown[])[t] === 'string'
@@ -379,6 +428,18 @@ export function cloneAndPatch(args: {
         recorded = true;
       }
       arr[t] = after;
+    }
+    // A key added from scratch writes every slot, not just the target: report
+    // what lands in the untargeted ones too, or the preview would hide it.
+    if (absent) {
+      for (const i of untargetedSlots(arr.length)) {
+        changed.push({
+          presetKey: key, label: patch.label,
+          before: null, after: arr[i], unit: patch.unit,
+          extruderIndex: extruders > 1 ? i : undefined
+        });
+        recorded = true;
+      }
     }
     // Padding alone still mutates the key even when the target value matched:
     // record it, or the diff would flag the widened array as unexpected drift.
@@ -398,16 +459,28 @@ export function cloneAndPatch(args: {
     // only the calibrated extruder position(s) are written.
     for (const comp of patch.companions ?? []) {
       const compExisting = data[comp.presetKey];
+      const compAbsent = !declaredArray(compExisting);
+      // Same rule as the main patch: never invent a companion value for a
+      // nozzle this project did not calibrate (e.g. enabling pressure advance
+      // on the untargeted nozzle).
+      if (compAbsent && !writesEverySlot && neutralFill(comp.presetKey) === null) {
+        const others = untargetedSlots(extruders).map(i => i + 1).join(', ');
+        skipped.push({
+          presetKey: comp.presetKey, label: presetKeyLabel(comp.presetKey),
+          reason: `${presetKeyLabel(comp.presetKey)} (${comp.presetKey}) was NOT written: the base preset does not set it, so nozzle ${others} has no existing value to keep and this setting does not accept the "nil" (no override) sentinel. Set it by hand in the slicer for nozzle ${idx + 1}, or re-run with "apply to all extruders".`
+        });
+        continue;
+      }
       let compArr: string[];
-      if (Array.isArray(compExisting) && compExisting.every(x => typeof x === 'string') && compExisting.length > 0) {
-        compArr = [...(compExisting as string[])];
+      if (declaredArray(compExisting)) {
+        compArr = [...compExisting];
         // Preserve array shape; pad only if the profile itself is wider.
         while (compArr.length < extruders) compArr.push(compArr[compArr.length - 1]);
       } else {
-        compArr = new Array(extruders).fill(comp.value) as string[];
+        compArr = new Array(extruders).fill(neutralFill(comp.presetKey) ?? comp.value) as string[];
       }
       let compRecorded = false;
-      for (const t of targets) {
+      for (const t of targetsFor(compArr.length)) {
         const compBefore = Array.isArray(compExisting) && typeof (compExisting as unknown[])[t] === 'string'
           ? (compExisting as string[])[t]
           : null;
@@ -419,6 +492,16 @@ export function cloneAndPatch(args: {
           compRecorded = true;
         }
         compArr[t] = comp.value;
+      }
+      // Same "report every slot" rule as the main patch path.
+      if (compAbsent) {
+        for (const i of untargetedSlots(compArr.length)) {
+          changed.push({
+            presetKey: comp.presetKey, label: presetKeyLabel(comp.presetKey),
+            before: null, after: compArr[i], extruderIndex: extruders > 1 ? i : undefined
+          });
+          compRecorded = true;
+        }
       }
       // Same padding rule as the main patch path (see above): before = null
       // for the padded slot, after = the value that actually filled it.
@@ -435,12 +518,14 @@ export function cloneAndPatch(args: {
     }
   }
 
+  const skippedKeys = new Set(skipped.map(s => s.presetKey));
   const preservedFieldCount = Object.keys(src).filter(k =>
     !['name', 'from', 'filament_settings_id', 'setting_id', 'user_id'].includes(k) &&
-    !patches.some(p => p.presetKey === k || (p.companions ?? []).some(c => c.presetKey === k))
+    (skippedKeys.has(k) ||
+      !patches.some(p => p.presetKey === k || (p.companions ?? []).some(c => c.presetKey === k)))
   ).length;
 
-  return { data, changedFields: changed, preservedFieldCount };
+  return { data, changedFields: changed, skippedFields: skipped, preservedFieldCount };
 }
 
 // --- serialization ----------------------------------------------------------

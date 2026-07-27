@@ -207,6 +207,37 @@ function gaugeInstrument(opts: {
 // Temperature
 // ---------------------------------------------------------------------------
 
+/**
+ * Entry-time limits for the three temperatures the temperature step collects.
+ *
+ * ALL THREE command the hotend — the first-layer and high-flow values are
+ * carried into the profile and printed exactly like the normal one — so all
+ * three are checked against the printer's rating, not just the normal
+ * temperature. `null` means the (optional) field was left empty.
+ */
+export function temperatureEntryIssues(args: {
+  normalTemp: number | null;
+  firstLayerTemp: number | null;
+  highFlowTemp: number | null;
+  printer?: PrinterProfile;
+}): ValidationIssue[] {
+  const fields: { label: string; value: number | null }[] = [
+    { label: 'Normal printing temp', value: args.normalTemp },
+    { label: 'First-layer temp', value: args.firstLayerTemp },
+    { label: 'High-flow temp', value: args.highFlowTemp }
+  ];
+  const issues: ValidationIssue[] = [];
+  for (const { label, value } of fields) {
+    if (value === null) continue;
+    issues.push(...validateNumber(value, { label, min: 140, max: 500 }));
+    // The printer check names the field: three temperatures on one form would
+    // otherwise produce three indistinguishable "N °C exceeds…" messages.
+    issues.push(...validateAgainstPrinter('nozzleTemp', value, args.printer)
+      .map(i => ({ ...i, message: `${label}: ${i.message}` })));
+  }
+  return issues;
+}
+
 const temperatureController: TestController = {
   settingsForm(ctx, prior) {
     const sug = suggestTempRange(ctx.material.id, ctx.printer);
@@ -336,9 +367,12 @@ const temperatureController: TestController = {
         if (!normalSel.value) issues.push({ level: 'error', message: 'Pick a normal printing temperature.' });
         if (!acceptable.size) issues.push({ level: 'warning', message: 'No blocks marked acceptable — marking at least the chosen one helps future comparisons.' });
         if (!adhesionChecked.checked) issues.push({ level: 'warning', message: 'You haven\'t confirmed a strength/adhesion check. Looks alone can be misleading.' });
-        if (firstLayer.value !== '') issues.push(...validateNumber(firstLayer.value, { label: 'First-layer temp', min: 140, max: 500 }));
-        if (highFlow.value !== '') issues.push(...validateNumber(highFlow.value, { label: 'High-flow temp', min: 140, max: 500 }));
-        if (normalSel.value) issues.push(...validateAgainstPrinter('nozzleTemp', num(normalSel.value), ctx.printer));
+        issues.push(...temperatureEntryIssues({
+          normalTemp: normalSel.value ? num(normalSel.value) : null,
+          firstLayerTemp: firstLayer.value === '' ? null : num(firstLayer.value),
+          highFlowTemp: highFlow.value === '' ? null : num(highFlow.value),
+          printer: ctx.printer
+        }));
         return {
           data: {
             acceptableTemps: [...acceptable].sort((a, b) => a - b),

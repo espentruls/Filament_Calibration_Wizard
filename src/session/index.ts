@@ -5,12 +5,12 @@
 // step-by-step wizard, which keeps working exactly as it does today. A session
 // is a view over an existing `CalibrationProject`: it knows which nozzle it
 // calibrates, carries results forward between steps with visible provenance,
-// says precisely what to change in the slicer for that nozzle, tracks what is
-// ready / blocked / stale, and — only when an engine is genuinely available —
-// offers to prepare the next test automatically.
+// says precisely what to change in the slicer for that nozzle, and tracks what
+// is ready / blocked / stale.
 //
-// Everything here is pure logic: no DOM, no storage calls, no slicing. It runs
-// with the experimental `automatedCalibration` flag OFF, which is its default.
+// Everything here is pure logic: no DOM, no storage calls, no slicing. The user
+// prints the slicer's own built-in test and enters what they see — that manual
+// path is the whole of the guided session, on desktop and in the browser alike.
 // ---------------------------------------------------------------------------
 
 export type * from './types';
@@ -47,32 +47,6 @@ export type { StepRecord } from './progression';
 
 export { alerts, buildActionPlan, valueActions } from './actions';
 
-// The single auto-preparation gate. `resolveSessionCapability` /
-// `peekSessionCapability` are what a screen calls; the probe below them is
-// cached per session, so asking once per render costs one filesystem scan
-// rather than one per draw. The machine-level calls are exported for callers
-// that have no session in hand (a plan overview, a diagnostics screen).
-export {
-  AUTOMATABLE_SLICERS,
-  ENGINE_PROBE_TTL_MS,
-  PREPARABLE_ASSET_TYPES,
-  canAutoPrepareStep,
-  canAutoPrepareSteps,
-  invalidateEngineAvailability,
-  peekEngineAvailability,
-  peekSessionCapability,
-  probeEngineAvailability,
-  resolveSessionCapability,
-  slicerIsAutomatable,
-  stepAutoPrepareFrom
-} from './capability';
-export type {
-  CapabilityOptions,
-  EngineAvailability,
-  EngineAvailabilityInput,
-  StepAutoPrepareAnswer
-} from './capability';
-
 export { partialProfile } from './partialProfile';
 
 export {
@@ -81,7 +55,6 @@ export {
   resolveGuidedSession,
   resolveSessionNozzle,
   sessionActionsFor,
-  sessionCapabilityFor,
   sessionContext,
   sessionMaterial,
   sessionPartialProfile,

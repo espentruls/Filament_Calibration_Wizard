@@ -246,6 +246,85 @@ describe('clone-and-patch round trips (all slicer fixtures)', () => {
     expect(change!.extruderIndex).toBe(1);   // and it is the padded position, not the target
   });
 
+  // Regression: the per-extruder-array path was fixed, but the ABSENT-key path
+  // still filled every slot with the calibrated value. On a dual-nozzle Bambu
+  // that wrote the bowden auxiliary's K onto the direct-drive main nozzle.
+  describe('absent keys on a multi-nozzle base never leak into untargeted nozzles', () => {
+    function dualWithout(...keys: string[]): ParsedFilamentProfile {
+      const parsed = parseFixture('bambu-user-full-pctg-dualnozzle.json', 'bambu');
+      const raw = parsed.profile.rawProfile as Record<string, unknown>;
+      for (const k of keys) delete raw[k];
+      expect(parsed.extruderCount).toBe(2);
+      return parsed;
+    }
+
+    it('does not write a nil-invalid key at all, and says why', () => {
+      // Base preset never overrode pressure advance; the project calibrated the
+      // bowden aux nozzle (slot 2) at K 0.72 — a value that would wreck the
+      // direct-drive main nozzle, whose own range is 0–0.1.
+      const parsed = dualWithout('pressure_advance', 'enable_pressure_advance');
+      const project = makeProject({ pressureAdvance: 0.72 });
+      const generated = generateProfile({
+        slicerId: 'bambu', baseProfile: parsed.profile, newName: 'PF Aux PA',
+        patches: buildPatchesFromProject(project), targetExtruderIndex: 1,
+        applyToAllExtruders: false, project
+      }, parsed);
+      const reparsed = JSON.parse(generated.serialized) as Record<string, unknown>;
+      expect(reparsed.pressure_advance).toBeUndefined();
+      expect(reparsed.enable_pressure_advance).toBeUndefined();
+      expect(generated.changedFields.some(c => c.presetKey === 'pressure_advance')).toBe(false);
+      expect(generated.changedFields.some(c => c.presetKey === 'enable_pressure_advance')).toBe(false);
+      const skipped = (generated.skippedFields ?? []).find(s => s.presetKey === 'pressure_advance');
+      expect(skipped).toBeDefined();
+      expect(skipped!.reason).toContain('pressure_advance');
+      expect(skipped!.reason).toContain('0.72');
+    });
+
+    it('fills untargeted slots with the no-override sentinel and reports every slot', () => {
+      const parsed = dualWithout('filament_retraction_length');
+      const project = makeProject({ retractionDistance: 3.5 });
+      const generated = generateProfile({
+        slicerId: 'bambu', baseProfile: parsed.profile, newName: 'PF Aux Retract',
+        patches: buildPatchesFromProject(project), targetExtruderIndex: 1,
+        applyToAllExtruders: false, project
+      }, parsed);
+      const reparsed = JSON.parse(generated.serialized) as Record<string, unknown>;
+      expect(reparsed.filament_retraction_length).toEqual(['nil', '3.5']);
+      // The change list must account for BOTH slots, not just the target.
+      const rows = generated.changedFields.filter(c => c.presetKey === 'filament_retraction_length');
+      expect(rows.map(r => [r.extruderIndex, r.after])).toEqual(
+        expect.arrayContaining([[0, 'nil'], [1, '3.5']]));
+    });
+
+    it('still writes every slot when the user asked for all extruders', () => {
+      const parsed = dualWithout('pressure_advance', 'enable_pressure_advance');
+      const project = makeProject({ pressureAdvance: 0.72 });
+      const generated = generateProfile({
+        slicerId: 'bambu', baseProfile: parsed.profile, newName: 'PF All PA',
+        patches: buildPatchesFromProject(project), targetExtruderIndex: 0,
+        applyToAllExtruders: true, project
+      }, parsed);
+      const reparsed = JSON.parse(generated.serialized) as Record<string, unknown>;
+      expect(reparsed.pressure_advance).toEqual(['0.72', '0.72']);
+      expect(reparsed.enable_pressure_advance).toEqual(['1', '1']);
+      expect(generated.skippedFields ?? []).toEqual([]);
+    });
+
+    it('single-extruder bases still gain missing keys', () => {
+      const parsed = parseFixture('flashforge-user-delta-pctg.json', 'flash-studio');
+      expect(parsed.extruderCount).toBe(1);
+      const project = makeProject({ pressureAdvance: 0.05 });
+      const generated = generateProfile({
+        slicerId: 'flash-studio', baseProfile: parsed.profile, newName: 'PF Single PA',
+        patches: buildPatchesFromProject(project), targetExtruderIndex: 0,
+        applyToAllExtruders: false, project
+      }, parsed);
+      const reparsed = JSON.parse(generated.serialized) as Record<string, unknown>;
+      expect(reparsed.pressure_advance).toEqual(['0.05']);
+      expect(generated.skippedFields ?? []).toEqual([]);
+    });
+  });
+
   it('applies to all extruders when explicitly requested', () => {
     const parsed = parseFixture('bambu-user-full-pctg-dualnozzle.json', 'bambu');
     const project = makeProject();

@@ -60,14 +60,12 @@ import {
 import { buildPlan, focusStep, nextActionable, progressPercent } from './progression';
 import { buildActionPlan } from './actions';
 import { partialProfile } from './partialProfile';
-import { resolveSessionCapability, type CapabilityOptions } from './capability';
 import {
   PROVENANCE_TO_UPSTREAM,
   type GuidedSession,
   type PartialProfileReport,
   type ResolvedValue,
   type SessionActionPlan,
-  type SessionCapability,
   type SessionNozzle,
   type SessionStep,
   type SessionSyncResult,
@@ -198,15 +196,6 @@ export function sessionActionsFor(
   stepId: CalibrationId
 ): SessionActionPlan {
   return buildActionPlan(sessionContext(session), session.nozzle, stepId);
-}
-
-/** Whether this step could be auto-prepared right now (progressive enhancement). */
-export function sessionCapabilityFor(
-  session: GuidedSession,
-  stepId: CalibrationId,
-  opts?: CapabilityOptions
-): Promise<SessionCapability> {
-  return resolveSessionCapability(sessionContext(session), session.nozzle, stepId, opts);
 }
 
 /** Which calibrated values exist so far, for a partial profile install. */
