@@ -994,7 +994,7 @@ mod tests {
         let m_orca =
             snapshot_user_presets_core(&backups, "orca", "orca library", "proj-1", &orca.user_dir())
                 .unwrap();
-        let m_bambu = snapshot_user_presets_core(
+        let mut m_bambu = snapshot_user_presets_core(
             &backups,
             "bambu",
             "bambu library",
@@ -1002,6 +1002,33 @@ mod tests {
             &bambu.user_dir(),
         )
         .unwrap();
+
+        // The hazard these tests exist for is two backups in DIFFERENT slicer
+        // folders sharing one id. Ids carry a wall-clock second, so whether the
+        // two snapshots above collide depends on how fast the machine is: they
+        // did locally and on the Windows and macOS runners, and did not on the
+        // slower Linux one, where the test failed on its own precondition
+        // rather than on the behaviour it guards. So force the collision
+        // instead of racing the clock — the production id scheme is exercised
+        // by `back_to_back_backups_never_overwrite_each_other`, which is where
+        // uniqueness belongs.
+        if m_bambu.backup_id != m_orca.backup_id {
+            let from = PathBuf::from(&m_bambu.backup_root);
+            let to = from.parent().unwrap().join(&m_orca.backup_id);
+            std::fs::rename(&from, &to).unwrap();
+            m_bambu.backup_id = m_orca.backup_id.clone();
+            m_bambu.backup_root = to.to_string_lossy().to_string();
+            let manifest_path = to.join("manifest.json");
+            let mut on_disk: ProfileBackupManifest =
+                serde_json::from_str(&std::fs::read_to_string(&manifest_path).unwrap()).unwrap();
+            on_disk.backup_id = m_orca.backup_id.clone();
+            on_disk.backup_root = m_bambu.backup_root.clone();
+            std::fs::write(&manifest_path, serde_json::to_string(&on_disk).unwrap()).unwrap();
+        }
+        assert_eq!(
+            m_orca.backup_id, m_bambu.backup_id,
+            "the fixture must hand these tests a genuine id collision"
+        );
         (orca, bambu, m_orca, m_bambu)
     }
 
@@ -1066,11 +1093,8 @@ mod tests {
     /// because the manifest it then read agrees with itself.
     #[test]
     fn a_listed_row_addresses_the_folder_it_was_found_in_not_the_one_its_manifest_names() {
+        // The fixture guarantees the id collision this test needs.
         let (orca, _bambu, m_orca, m_bambu) = two_slicer_libraries("listclaim");
-        assert_eq!(
-            m_orca.backup_id, m_bambu.backup_id,
-            "this test only means something while the ids collide"
-        );
         // A backup folder copied off another machine, or a hand-edited file in
         // PerfectFit's own app data: filed under orca, claiming bambu.
         let manifest_path = PathBuf::from(&m_orca.backup_root).join("manifest.json");
