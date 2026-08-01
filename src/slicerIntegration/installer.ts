@@ -68,6 +68,10 @@ export async function installProfile(args: {
     raw = await bridge.installGeneratedProfile({
       slicerId: args.profile.slicerId,
       accountId: args.location.accountId,
+      // Which INSTALL of that slicer — release, beta — the folder belongs to.
+      // Both Bambu Studio installs have a `default` account folder, so the
+      // account id alone would leave the destination ambiguous.
+      variantId: args.location.variantId,
       profileName: args.profile.name,
       presetJson: args.profile.serialized,
       // Account folders require the owning account in the sidecar, or the

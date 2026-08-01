@@ -92,7 +92,7 @@ export async function renderProject(root: HTMLElement, id: string): Promise<void
       h('a', { class: 'btn', href: `#/report/${p.id}` }, '📄 Report'),
       h('a', { class: 'btn', href: `#/card/${p.id}` }, '🪪 Calibration card'),
       h('button', { class: 'btn', onClick: () => copyFinalsToClipboard(p) }, '📋 Copy final settings'),
-      h('button', { class: 'btn', onClick: async () => download(`perfectfit-${p.id.slice(0, 8)}.json`, await exportProject(p, printer)) }, '⭳ Export JSON')
+      h('button', { class: 'btn', onClick: async () => download(`trim-${p.id.slice(0, 8)}.json`, await exportProject(p, printer)) }, '⭳ Export JSON')
     )
   );
 
@@ -106,7 +106,7 @@ export async function renderProject(root: HTMLElement, id: string): Promise<void
   if (!stage && hasCalibratedValues(p)) {
     root.append(h('div', { class: 'callout callout-ok' },
       h('p', { class: 'co-title' }, '🎉 Your filament calibration is complete.'),
-      h('p', {}, 'Turn the results into a ready-to-use filament profile for your slicer — PerfectFit clones a base profile, applies only your calibrated values, and can install it for you (desktop app).'),
+      h('p', {}, 'Turn the results into a ready-to-use filament profile for your slicer — Trim clones a base profile, applies only your calibrated values, and can install it for you (desktop app).'),
       h('div', { class: 'btn-row' },
         h('a', { class: 'btn btn-primary', href: `#/profile/${p.id}` }, '🧵 Create Slicer Profile'),
         h('a', { class: 'btn', href: `#/report/${p.id}` }, '📄 View Report'))

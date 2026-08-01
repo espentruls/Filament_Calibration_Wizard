@@ -1,10 +1,16 @@
-# PerfectFit X2D — Filament Calibration Wizard
+# Trim — Filament Calibration
 
-Create a perfectly calibrated filament profile for Orca Slicer or Bambu Studio in one guided workflow. No tutorials, no guesswork, no spreadsheets.
+Create a calibrated filament profile for Orca Slicer or Bambu Studio in one guided workflow, on
+single-nozzle, dual-nozzle and multi-nozzle printers. No tutorials, no guesswork, no spreadsheets.
 
-> **This is a fork.** PerfectFit X2D builds on
+> **The name.** In aviation, trimming is adjusting the controls so the aircraft holds steady
+> without constant correction — which is exactly what calibrating a filament profile does. The app
+> was called *PerfectFit X2D* up to version 2.0.0; the X2D suggested one printer, and it works with
+> any of them. See [CHANGELOG.md](CHANGELOG.md) for what the 3.0.0 rename means for existing data.
+
+> **This is a fork.** Trim builds on
 > [PerfectFit](https://github.com/tayloraaron078-tech/Filament_Calibration_Wizard) by Aaron Taylor
-> and adds dual-nozzle (Bambu Lab X2D) support. It ships under its own product name and bundle
+> and adds per-nozzle calibration. It ships under its own product name and bundle
 > identifier, so it installs **alongside** upstream rather than over it and keeps a separate data
 > store. Every download link, issue link, and install guide in this repository refers to this fork;
 > upstream is credited, not linked as a download.
@@ -22,9 +28,12 @@ without tutorials, wikis, or guesswork.
 - **No black boxes**: every calculation shows inputs, formula, substitution, and rounding.
 - **Signature features**: calibration timeline, confidence score, smart retest recommendations,
   printable one-page calibration card with QR, printable full report, JSON backup/restore.
-- **Dual-nozzle aware** (Bambu Lab X2D): printer profiles can describe multiple nozzles, each
-  project calibrates one specific nozzle, the bowden-fed auxiliary gets its own PA/retraction
-  ranges, and aux projects get a dedicated ooze-control step.
+- **Per-nozzle calibration** — the thing that distinguishes Trim. Printer profiles describe as many
+  nozzles as the machine has: one on a single-nozzle printer, two on a Bambu Lab X2D, more on an
+  H2D or H2C. Each project calibrates one specific nozzle, and its ranges follow that nozzle's feed
+  path, so a bowden-fed auxiliary gets its own PA/retraction ranges instead of direct-drive numbers,
+  and aux projects get a dedicated ooze-control step. The X2D layout is the one this has been used
+  on; H2D and H2C are modelled from published specifications and untested on the actual machines.
 - **Guided session**: one screen per test — the exact settings to change in your slicer, then print
   and measure. Results carry forward (pressure advance runs at the temperature and flow you already
   measured), and every pre-filled number shows where it came from. The classic step-by-step wizard
@@ -179,7 +188,7 @@ npm run validate:printers   # exits non-zero if printers.json is stale
 server {
     listen 80;
     server_name calibration.example.lan;
-    root /var/www/perfectfit/dist;
+    root /var/www/trim/dist;
     index index.html;
     location / {
         try_files $uri $uri/ /index.html;
@@ -203,8 +212,8 @@ the static bundle, which is then served by a tiny BusyBox `httpd` — no Node,
 backend, or database in the runtime layer.
 
 ```bash
-docker build -t perfectfit:latest .
-docker run -d -p 8080:80 --name perfectfit perfectfit:latest   # http://localhost:8080
+docker build -t trim:latest .
+docker run -d -p 8080:80 --name trim trim:latest   # http://localhost:8080
 ```
 
 `example-docker-compose.yaml` is a sample stack for reverse-proxying the
@@ -231,9 +240,23 @@ npm run tauri dev      # develop inside the native window
 npm run tauri build    # native app plus the bundles configured for the current OS
 ```
 
-`src-tauri/tauri.conf.json` carries this fork's identity — product name **PerfectFit X2D**, bundle
-identifier `io.github.espentruls.perfectfit-x2d` — which is why it installs alongside upstream
-PerfectFit instead of on top of it, and why the two do not share a data store.
+`src-tauri/tauri.conf.json` carries this fork's identity — product name **Trim**, bundle identifier
+`io.github.espentruls.trim` — which is why it installs alongside upstream PerfectFit instead of on
+top of it, and why the two do not share a data store.
+
+The identifier changed in 3.0.0 (it was `io.github.espentruls.perfectfit-x2d`). No data is carried
+across, and none needed to be: 2.0.0 was published but never installed by anyone. A 2.0.0 build's
+data is not deleted either — the two identities coexist, so 3.0.0 installs alongside rather than
+over it.
+
+**Before changing the identifier again, read `APP_IDENTIFIER` in
+[`src-tauri/src/lib.rs`](src-tauri/src/lib.rs).** On Windows and Linux that string decides where
+*all* of the app's data lives, not just its caches: Tauri forces the webview's data directory to
+`LocalData/<identifier>`, so `%LOCALAPPDATA%\<identifier>\EBWebView\Default` holds the IndexedDB
+and localStorage behind every project, printer, photo and setting, while `{app data}/<identifier>`
+holds the slicer preset backups. The IndexedDB origin (`http://tauri.localhost`) does not depend on
+the identifier, so the stores are portable — but nothing moves them. The next identifier change
+needs a data migration shipped with it.
 
 The frontend itself needs no changes for the desktop build: it avoids absolute URLs and needs no
 server. Inside Tauri, calibration data persists in the WebView's storage; the JSON backup/restore in
@@ -247,7 +270,7 @@ PerfectFit and this fork.
 | Projects, printer profiles, photos | IndexedDB (`perfectfit-db`) |
 | Settings, in-progress form drafts | localStorage |
 | Backups | JSON files you export (Settings → Backup) |
-| Slicer preset backups (desktop build only) | `{app data}/slicer-backups/{slicer}/{backup id}/` — e.g. `%APPDATA%\io.github.espentruls.perfectfit-x2d\slicer-backups\` on Windows. Written automatically before any preset install, restorable from Settings → *Slicer profile backups*. |
+| Slicer preset backups (desktop build only) | `{app data}/slicer-backups/{slicer}/{backup id}/` — e.g. `%APPDATA%\io.github.espentruls.trim\slicer-backups\` on Windows. Written automatically before any preset install, restorable from Settings → *Slicer profile backups*. |
 
 - **Backup**: Settings → *Export all data* (optionally with photos, base64-embedded).
 - **Restore**: Settings → *Restore from backup*. Imports never overwrite: colliding ids
@@ -322,7 +345,7 @@ the one feature that writes outside the app's own storage — read it before you
   calibration on any device pointed at the **same hosted instance & browser profile**; it does
   not embed the data itself (the printed card carries the values in plain text).
 - **Slicer profile generation and installation (experimental, on by default) edits your real
-  preset library.** From a project with calibrated values, PerfectFit X2D builds an Orca/Bambu
+  preset library.** From a project with calibrated values, Trim builds an Orca/Bambu
   filament preset from your results.
   In the browser build it downloads a `.json` preset for manual import. In the desktop (Tauri)
   build it can install directly into your slicer's user preset directory (e.g.
@@ -351,7 +374,7 @@ the one feature that writes outside the app's own storage — read it before you
 - **Linux: blank window on launch (Wayland).** If the app opens to an empty window and, when
   launched from a terminal, prints `Could not create default EGL display: EGL_BAD_PARAMETER`,
   start it with `WEBKIT_DISABLE_DMABUF_RENDERER=1` set — for example
-  `WEBKIT_DISABLE_DMABUF_RENDERER=1 './PerfectFit X2D_<version>_amd64.AppImage'`, substituting the
+  `WEBKIT_DISABLE_DMABUF_RENDERER=1 './Trim_<version>_amd64.AppImage'`, substituting the
   filename you actually downloaded (tab-completion will fill it in). WebKitGTK's DMABUF
   renderer fails to initialise EGL on some Wayland setups; this makes it fall back to a working
   path. The app sets the variable itself (unless you set it yourself), so this workaround should
@@ -385,13 +408,13 @@ to your printer and never starts a print.
 
 AI-assisted photo evaluation (storage schema already reserves an `analysis` field), photo
 comparison, multiple printers per filament (multiple nozzles per printer already ships — see
-**Dual-nozzle aware** above), printer API integration,
+**Per-nozzle calibration** above), printer API integration,
 community preset sharing, filament inventory with drying/spool tracking.
 
 ## License
 
 Copyright (C) 2026 Aaron Taylor — original PerfectFit
-Copyright (C) 2026 espentruls — PerfectFit X2D fork
+Copyright (C) 2026 espentruls — Trim (fork of PerfectFit)
 
 PerfectFit is free software: you can redistribute it and/or modify it under the terms of the
 **GNU Affero General Public License, version 3** as published by the Free Software Foundation.

@@ -1,10 +1,10 @@
 [package]
 name = "app"
-version = "2.0.0"
-description = "PerfectFit X2D — Filament Calibration Wizard"
+version = "3.0.0"
+description = "Trim — Filament Calibration"
 # This fork's maintainer ships the binary; upstream PerfectFit (Aaron Taylor) is
 # credited in README.md, CHANGELOG.md and the AGPL-3.0 notice, which is where the
-# licence attribution belongs.
+# licence attribution belongs. Trim was called PerfectFit X2D up to 2.0.0.
 authors = ["espentruls"]
 license = "AGPL-3.0-only"
 repository = "https://github.com/espentruls/Filament_Calibration_Wizard"

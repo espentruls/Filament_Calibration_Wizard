@@ -43,7 +43,7 @@ Explain exactly how the changes were tested.
 ### Test environment
 
 **Operating system:**  
-**PerfectFit version or branch:**  
+**Trim version or branch:**  
 **Slicer and version:**  
 **Printer, if relevant:**  
 

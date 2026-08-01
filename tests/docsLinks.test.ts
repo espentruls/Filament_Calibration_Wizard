@@ -77,7 +77,10 @@ describe('docs and package metadata point at this repository', () => {
     expect(doc).toContain(conf.productName);
     // "look for PerfectFit in Applications" would be wrong: the bundle is named
     // by productName, so a bare mention sends the reader hunting for the wrong
-    // icon. Every app-name mention has to carry the real product name.
+    // icon. Since 3.0.0 that icon says "Trim", and "PerfectFit" survives in this
+    // guide only as the name of the version the reader is migrating FROM — so
+    // every occurrence must still be qualified as "PerfectFit X2D", never bare,
+    // or the guide tells a Mac user to look for an app that is not there.
     const bare = [...doc.matchAll(/PerfectFit(?! X2D)/g)];
     expect(bare.map(m => doc.slice(Math.max(0, m.index! - 30), m.index! + 30)))
       .toEqual([]);

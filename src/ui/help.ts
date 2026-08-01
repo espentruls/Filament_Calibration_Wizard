@@ -35,7 +35,7 @@ export function renderHelp(root: HTMLElement, term?: string): void {
     h('p', { style: 'margin:0' }, h('span', { class: 'placard' }, 'Reference')),
     h('h1', {}, 'Help & glossary'),
     h('div', { class: 'card' },
-      h('h2', {}, 'How PerfectFit works'),
+      h('h2', {}, 'How Trim works'),
       h('p', {}, 'Each calibration project walks one spool through up to six calibration tests plus a final verification print. The wizard tells you exactly what to click in your slicer, how to judge the print, and does every calculation in the open — inputs, formula, result.'),
       h('p', {}, 'A value you have not measured yet stays dark everywhere in the app. Nothing is filled in with a plausible default on your behalf, so what you see is only ever what you actually measured.'),
       h('p', {}, 'Your data never leaves this device: no account, no uploads, no analytics, no telemetry. Photos you attach are stored locally in your browser\'s storage. External model links open third-party sites in a new tab.'),

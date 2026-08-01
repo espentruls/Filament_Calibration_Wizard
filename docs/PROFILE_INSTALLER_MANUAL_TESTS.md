@@ -6,7 +6,7 @@ in `docs/SLICER_PROFILE_TEST_MATRIX.md`.
 
 **Safety first:** use a disposable preset and a machine/account you can
 recover. Never run these steps against presets you care about without a
-PerfectFit backup AND your own copy.
+Trim backup AND your own copy.
 
 ## A. Preparation
 
@@ -14,12 +14,12 @@ PerfectFit backup AND your own copy.
 - [ ] Close the slicer.
 - [ ] In the slicer's user filament folder, note the existing preset files
       (`%APPDATA%\<Slicer>\user\<active>\filament\`).
-- [ ] Complete (or reuse) a PerfectFit calibration project with at least
+- [ ] Complete (or reuse) a Trim calibration project with at least
       temperature + flow completed.
 
 ## B. Detection & scanning (read-only)
 
-- [ ] PerfectFit desktop → project → Create Slicer Profile.
+- [ ] Trim desktop → project → Create Slicer Profile.
 - [ ] The slicer appears with the correct version.
 - [ ] All user-data locations are listed; the one marked **active** matches
       the slicer's actual active account (check the slicer's preset dropdown).
@@ -42,7 +42,7 @@ PerfectFit backup AND your own copy.
 
 - [ ] Open the slicer → import the exported profile
       (drag & drop into the window, or Filament settings → import).
-- [ ] The preset appears with the PerfectFit name.
+- [ ] The preset appears with the Trim name.
 - [ ] Every calibrated value shows the calibrated number.
 - [ ] Inherited/unchanged settings match the base profile.
 - [ ] Slice any model with the preset — no errors, sane G-code preview.
@@ -50,7 +50,7 @@ PerfectFit backup AND your own copy.
 
 ## E. Direct installation (desktop only)
 
-- [ ] Close the slicer. PerfectFit → Install into slicer.
+- [ ] Close the slicer. Trim → Install into slicer.
 - [ ] With the slicer OPEN, the install is refused with the
       “slicer is running” message and a working **Check again** flow.
 - [ ] With the slicer closed, install succeeds and reports:
@@ -59,7 +59,7 @@ PerfectFit backup AND your own copy.
 - [ ] Settings → Slicer profile backups lists the new backup.
 - [ ] Reopen the slicer → the preset appears without any import.
 - [ ] Values and inheritance correct; slice test passes.
-- [ ] Duplicate handling: install again with the same name → PerfectFit asks
+- [ ] Duplicate handling: install again with the same name → Trim asks
       (replace / rename / cancel); replace makes a second backup.
 
 ## F. Backup restore

@@ -2,7 +2,12 @@ import { h, field, numberInput, issueList, clear, toast } from './dom';
 import { listPrinters, createProject, saveProject, loadSettings } from '../storage/store';
 import { MATERIALS, getMaterial } from '../data/materials';
 import { CALIBRATIONS } from '../data/calibrations';
-import { printerCanHeatChamber, suggestChamberTemp } from '../logic/ranges';
+import { nozzleTopology, printerCanHeatChamber, suggestChamberTemp } from '../logic/ranges';
+import {
+  nozzleFilamentVerdict, readFilamentPresetFacts, resolveFilamentPresetFacts,
+  splitPresetName, vendorAnnotatedSibling
+} from '../logic/validation';
+import type { FilamentPresetChainNode, FilamentPresetFacts, VendorCompatibilityAdvisory } from '../logic/validation';
 import { withOptionalStep } from '../logic/stepPlan';
 import { slicerVersionOptions } from '../data/slicers';
 import { navigate } from '../app';
@@ -10,11 +15,74 @@ import * as bridge from '../slicerIntegration/bridge';
 import { detectInstallations, scanProfiles } from '../slicerIntegration/scanner';
 import { rankBaselineNames } from '../slicerIntegration/recommendations';
 import type { DetectedFilamentProfile, IntegrationSlicerId } from '../slicerIntegration/types';
-import type { CalibrationProject, MaterialId, SlicerId, ExperienceMode } from '../types';
+import type {
+  CalibrationProject, CompatibilityOverrideRecord, CompatibilityVerdict,
+  MaterialId, SlicerId, ExperienceMode
+} from '../types';
 
 /** Display scale for the material temperature band (presentation only). */
 const TEMP_SCALE_MIN = 150;
 const TEMP_SCALE_MAX = 350;
+
+/**
+ * Whether the compatibility callout has anything worth the space it takes.
+ *
+ * On a machine with a per-nozzle choice it always does — the whole question is
+ * "which nozzle", and "we could not tell" is a real answer there. On a
+ * single-nozzle machine it appears only when there is an actual warning, so a
+ * one-nozzle printer is never shown dual-nozzle machinery just to be told
+ * nothing is known.
+ */
+export function showsCompatibilityPanel(
+  verdict: CompatibilityVerdict | null, perNozzle: boolean
+): boolean {
+  if (!verdict) return false;
+  return perNozzle || verdict.needsAcknowledgement;
+}
+
+/**
+ * The one thing standing between a warned combination and a new project: an
+ * explicit tick. Not a block — the tick is always available and always enough,
+ * and no other value on the form can make it unavailable. What it prevents is a
+ * project being created with the warning never acknowledged, which would leave
+ * every later report unable to say the warning was ever shown.
+ */
+export function compatibilityGateIssues(
+  verdict: CompatibilityVerdict | null, acknowledged: boolean
+): { level: 'error' | 'warning'; message: string }[] {
+  if (!verdict?.needsAcknowledgement || acknowledged) return [];
+  return [{
+    level: 'error',
+    message: 'This filament and this nozzle are flagged above. Tick "Calibrate this combination anyway" to go ahead — or change the nozzle, the material, or the starting profile.'
+  }];
+}
+
+/**
+ * The override as it is stored: the level, the headline and the evidence
+ * exactly as the user saw them, not a summary written afterwards.
+ */
+export function compatibilityOverrideRecord(args: {
+  verdict: CompatibilityVerdict | null;
+  acknowledged: boolean;
+  nozzleIndex: number;
+  nozzleLabel?: string;
+  material: MaterialId;
+  presetName?: string | null;
+}): CompatibilityOverrideRecord | null {
+  const { verdict, acknowledged } = args;
+  if (!verdict?.needsAcknowledgement || !acknowledged) return null;
+  return {
+    at: new Date().toISOString(),
+    level: verdict.level,
+    headline: verdict.headline,
+    evidence: verdict.evidence.map(e => `${e.detail} (${e.source})`),
+    nozzleIndex: args.nozzleIndex,
+    nozzleLabel: args.nozzleLabel,
+    material: args.material,
+    presetName: args.presetName ?? undefined,
+    inferred: verdict.inferred
+  };
+}
 
 export async function renderNewProject(root: HTMLElement): Promise<void> {
   const printers = await listPrinters();
@@ -71,6 +139,18 @@ export async function renderNewProject(root: HTMLElement): Promise<void> {
   // The scan is cached per slicer; re-ranking on form changes is instant.
   let scannedFor: IntegrationSlicerId | null = null;
   let scannedProfiles: DetectedFilamentProfile[] = [];
+  /** name → inheritance node, rebuilt only when a new scan lands. */
+  let profileIndex: Map<string, FilamentPresetChainNode> | null = null;
+  const indexProfiles = (): Map<string, FilamentPresetChainNode> => {
+    if (profileIndex) return profileIndex;
+    profileIndex = new Map();
+    for (const p of scannedProfiles) {
+      profileIndex.set(p.name.toLowerCase(), {
+        name: p.name, raw: p.rawProfile, parentName: p.parentProfileName
+      });
+    }
+    return profileIndex;
+  };
   const rankProfileOptions = () => {
     clear(profileOptions);
     if (!scannedProfiles.length) return;
@@ -102,9 +182,11 @@ export async function renderNewProject(root: HTMLElement): Promise<void> {
         if (!inst || !loc) { scannedFor = wizSlicer; scannedProfiles = []; return; }
         const scan = await scanProfiles(inst.slicerId, loc);
         scannedProfiles = scan.profiles;
+        profileIndex = null;
         scannedFor = wizSlicer;
       }
       rankProfileOptions();
+      refreshCompatibility();
     } catch { /* scan is best-effort; free text always works */ }
   };
   slicerSel.addEventListener('change', () => void refreshProfileOptions());
@@ -114,7 +196,6 @@ export async function renderNewProject(root: HTMLElement): Promise<void> {
     clearTimeout(rankTimer);
     rankTimer = setTimeout(rankProfileOptions, 250);
   }));
-  void refreshProfileOptions();
   const notes = h('textarea', { placeholder: 'Anything worth remembering about this spool (age, storage, prior drying…)' });
   const dateInput = h('input', { type: 'date', value: new Date().toISOString().slice(0, 10) });
 
@@ -131,12 +212,28 @@ export async function renderNewProject(root: HTMLElement): Promise<void> {
     clear(nozzleHost);
     nozzleChoice = 0;
     const printer = printers.find(pp => pp.id === printerSel.value);
-    const nozzles = printer?.nozzles ?? [];
-    if (nozzles.length < 2) return;
+    // The nozzle count comes from the printer profile's PHYSICAL nozzle list and
+    // from nowhere else. It is never derived from a filament preset's value-slot
+    // count: a single-nozzle Bambu P2S presents three slots (Standard / High
+    // Flow / E3D High Flow hotend variants of one nozzle), and an X2D presents
+    // four or six depending on the installed bundle. A single-nozzle machine
+    // sees none of this machinery.
+    const topo = nozzleTopology(printer);
+    if (!topo.perNozzle) {
+      // "Several extruders, no nozzle list" is not a second nozzle — it is a
+      // profile that has not said enough to calibrate one nozzle at a time.
+      if (topo.kind === 'unknown' && topo.note) {
+        nozzleHost.append(h('div', { class: 'callout' },
+          h('p', { class: 'co-title' }, 'Nozzles not described on this printer profile'),
+          h('p', {}, topo.note)));
+      }
+      return;
+    }
+    const nozzles = topo.nozzles;
     const group = h('div', { class: 'grid grid-2' }, nozzles.map((n, i) => {
       const radio = h('input', {
         type: 'radio', name: 'nozzle-choice', value: String(i), checked: i === 0,
-        onChange: () => { nozzleChoice = i; refreshOoze(); }
+        onChange: () => { nozzleChoice = i; refreshOoze(); refreshCompatibility(); }
       });
       const caps = [
         n.maxSpeed ? `≤ ${n.maxSpeed} mm/s` : null,
@@ -152,14 +249,126 @@ export async function renderNewProject(root: HTMLElement): Promise<void> {
           caps.map(c => h('span', { class: 'placard' }, c))),
         h('p', { class: 'rc-desc' },
           n.feed === 'bowden'
-            ? 'Wider K (0–1) and retraction (2–6 mm) ranges, no flexible filaments, and the ooze-control step is pre-selected below.'
+            // Not "no flexible filaments": that is a flat prohibition, and this
+            // app warns rather than prohibits. What the filament is allowed to
+            // do on this nozzle is answered below, from the preset data.
+            ? 'Wider K (0–1) and retraction (2–6 mm) ranges, and the ooze-control step is pre-selected below. Compatibility for the filament you chose is checked against your slicer\'s own presets underneath.'
             : 'Standard test ranges — the extruder motor sits on the toolhead, so the pressure response is short and predictable.'));
     }));
     nozzleHost.append(h('fieldset', {},
       h('legend', {}, 'Nozzle under calibration *'),
       h('p', { class: 'field-help', style: 'margin-top:0' },
         'Which nozzle does this project calibrate? Each physical nozzle needs its own calibration — the feed path changes pressure advance and retraction completely.'),
-      group));
+      group,
+      topo.note ? h('p', { class: 'field-help', style: 'color:var(--warn)' }, `⚠ ${topo.note}`) : null));
+  };
+
+  // --- filament / nozzle compatibility --------------------------------------
+  // Read out of the installed presets, not out of a list carried in this app: a
+  // list goes stale the moment the vendor ships a new bundle, and it cannot
+  // explain itself. Every level short of "clear" is a warning the user can
+  // override — they own the printer — and an override is recorded on the
+  // project so nothing written later reads as an endorsement.
+  let compatVerdict: CompatibilityVerdict | null = null;
+  let compatPresetName: string | null = null;
+  let compatAcknowledged = false;
+  const compatHost = h('div', {});
+
+  /** Resolved facts for whatever preset the "starting profile" field names. */
+  const compatFacts = (extruderIndex: number): {
+    facts?: FilamentPresetFacts; advisory: VendorCompatibilityAdvisory | null;
+  } => {
+    const wanted = startingProfile.value.trim().toLowerCase();
+    if (!wanted || !scannedProfiles.length) return { advisory: null };
+    const index = indexProfiles();
+    const start = index.get(wanted);
+    if (!start) return { advisory: null };
+    // A user's preset is nearly always a delta: its compatibility keys live in
+    // the parent it inherits from, so the chain is walked before anything is read.
+    const facts = resolveFilamentPresetFacts(start, n => index.get(n.toLowerCase()));
+    if (facts.annotated) return { facts, advisory: null };
+    // Unannotated preset: look for the vendor's own preset for the same
+    // material label on the same printer. Pre-filtered by name so only a
+    // handful of candidates are ever parsed.
+    const mine = splitPresetName(facts.scopedName ?? facts.name ?? '');
+    if (!mine) return { facts, advisory: null };
+    const candidates = scannedProfiles
+      .filter(p => {
+        const s = splitPresetName(p.name);
+        return !!s && s.scope === mine.scope
+          && s.label.toLowerCase() === mine.label.toLowerCase()
+          && s.vendor.toLowerCase() !== mine.vendor.toLowerCase();
+      })
+      .map(p => ({ name: p.name, facts: readFilamentPresetFacts(p.rawProfile, p.name) }));
+    return {
+      facts,
+      advisory: vendorAnnotatedSibling({ name: facts.name ?? start.name, facts }, candidates, extruderIndex)
+    };
+  };
+
+  const refreshCompatibility = (): void => {
+    clear(compatHost);
+    compatVerdict = null;
+    compatPresetName = null;
+    compatAcknowledged = false;
+    const printer = printers.find(pp => pp.id === printerSel.value);
+    const topo = nozzleTopology(printer);
+    // On a machine whose nozzles are not described, there is no "second nozzle"
+    // to reason about — say nothing rather than reason about a guess.
+    if (topo.kind === 'unknown') return;
+    const index = topo.perNozzle ? nozzleChoice : 0;
+    const nozzle = topo.nozzles[index];
+    const material = getMaterial(materialSel.value);
+    const { facts, advisory } = compatFacts(index);
+    const v = nozzleFilamentVerdict({
+      extruderIndex: index,
+      nozzleLabel: nozzle?.label,
+      feed: nozzle?.feed ?? printer?.extruderType,
+      material,
+      filament: facts,
+      vendorAdvisory: advisory
+    });
+    compatVerdict = v;
+    compatPresetName = facts?.name ?? null;
+    if (!showsCompatibilityPanel(v, topo.perNozzle)) return;
+
+    const tone = v.level === 'blocked' || v.level === 'critical' ? ' callout-bad'
+      : v.level === 'caution' ? ' callout-warn' : '';
+    const title = {
+      blocked: '⛔ Marked unusable on this nozzle',
+      critical: '⚠ Marked highly not recommended',
+      caution: '⚠ Marked not recommended',
+      clear: 'Listed as available on this nozzle',
+      unknown: 'Compatibility unknown'
+    }[v.level];
+
+    const ackBox = h('input', {
+      type: 'checkbox',
+      onChange: () => { compatAcknowledged = ackBox.checked; }
+    });
+    compatHost.append(h('div', { class: `callout${tone}` },
+      h('p', { class: 'co-title' }, title),
+      h('p', {}, v.headline),
+      v.evidence.length
+        ? h('ul', { class: 'issues' }, v.evidence.map(e => h('li', {
+            class: `issue ${e.inferred ? 'issue-warning' : ''}`
+          },
+          h('span', { class: e.inferred ? 'placard' : 'placard placard-lit' }, e.inferred ? 'Deduced' : 'Read'),
+          h('span', {}, ` ${e.detail} `,
+            h('span', { class: 'readout-label' }, `(${e.source})`)))))
+        : null,
+      v.level === 'unknown'
+        ? h('p', { class: 'field-help' },
+            'Pick the exact preset you calibrate from in "Starting filament profile" and this reads whatever your slicer has on disk. Until then there is nothing to read — which is not the same as nothing being wrong.')
+        : null,
+      v.needsAcknowledgement
+        ? h('div', { class: 'check-item', style: 'margin-top:var(--s-3)' }, ackBox,
+            h('div', {},
+              h('strong', {}, 'Calibrate this combination anyway'),
+              h('p', { class: 'field-help', style: 'margin:.2rem 0 0' },
+                'You own the printer, so this is your call — nothing here stops you. Ticking it records the warning on the project, so the report and the later steps keep saying which combination these values came from.')))
+        : null
+    ));
   };
   // --- optional steps -------------------------------------------------------
   // The ooze-control checklist is NOT in DEFAULT_ORDER and must never be: it
@@ -195,9 +404,17 @@ export async function renderNewProject(root: HTMLElement): Promise<void> {
         'Optional steps can be reordered or skipped later, and they only count toward this project\'s progress.')));
   };
 
-  printerSel.addEventListener('change', () => { refreshNozzles(); refreshOoze(); });
+  printerSel.addEventListener('change', () => { refreshNozzles(); refreshOoze(); refreshCompatibility(); });
+  materialSel.addEventListener('change', refreshCompatibility);
+  let compatTimer: ReturnType<typeof setTimeout> | undefined;
+  startingProfile.addEventListener('input', () => {
+    clearTimeout(compatTimer);
+    compatTimer = setTimeout(refreshCompatibility, 250);
+  });
   refreshNozzles();
   refreshOoze();
+  refreshCompatibility();
+  void refreshProfileOptions();
 
   const materialInfo = h('div', {});
   const refreshMaterialInfo = () => {
@@ -283,6 +500,7 @@ export async function renderNewProject(root: HTMLElement): Promise<void> {
         field('Nozzle type / material', nozzleType, 'Abrasive filaments (CF/GF) need hardened nozzles.')
       ),
       nozzleHost,
+      compatHost,
       oozeHost,
       h('div', { class: 'field-row' },
         field('Slicer & version *', slicerSel, 'Instructions are version-aware; pick what you actually run.'),
@@ -310,6 +528,7 @@ export async function renderNewProject(root: HTMLElement): Promise<void> {
             const issues: { level: 'error' | 'warning'; message: string }[] = [];
             if (!manufacturer.value.trim()) issues.push({ level: 'error', message: 'Manufacturer is required (write "Unknown" if the spool is unbranded).' });
             if (materialSel.value === 'OTHER' && !materialOther.value.trim()) issues.push({ level: 'error', message: 'Name the material when choosing "Other".' });
+            issues.push(...compatibilityGateIssues(compatVerdict, compatAcknowledged));
             clear(issuesHost);
             if (issues.length) { const l = issueList(issues); if (l) issuesHost.append(l); return; }
 
@@ -333,8 +552,23 @@ export async function renderNewProject(root: HTMLElement): Promise<void> {
             project.calibrationDate = dateInput.value || project.calibrationDate;
 
             // Multi-nozzle printers: record which nozzle this project calibrates.
+            // `perNozzle` (physical nozzles, from the printer profile) is the
+            // only thing that may decide this — never a preset's slot count.
             const printer = printers.find(pp => pp.id === printerSel.value);
-            if ((printer?.nozzles?.length ?? 0) >= 2) project.nozzleIndex = nozzleChoice;
+            const topo = nozzleTopology(printer);
+            if (topo.perNozzle) project.nozzleIndex = nozzleChoice;
+            // The override is the user's decision, so it is stored as theirs:
+            // the level, the headline and the evidence exactly as shown.
+            const overrideIndex = topo.perNozzle ? nozzleChoice : 0;
+            const override = compatibilityOverrideRecord({
+              verdict: compatVerdict,
+              acknowledged: compatAcknowledged,
+              nozzleIndex: overrideIndex,
+              nozzleLabel: topo.nozzles[overrideIndex]?.label,
+              material: materialSel.value as MaterialId,
+              presetName: compatPresetName
+            });
+            if (override) project.compatibilityOverride = override;
             // The ooze-control step is opt-in and stays out of DEFAULT_ORDER, so
             // no existing project's plan or confidence score is touched by its
             // existence. Pre-ticked for a bowden aux nozzle, which reproduces

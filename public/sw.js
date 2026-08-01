@@ -1,4 +1,4 @@
-/* PerfectFit service worker — offline cache of the app shell (web/PWA only;
+/* Trim service worker — offline cache of the app shell (web/PWA only;
    the Tauri desktop app never registers this and unregisters old copies).
    No network calls are ever made for user data; this only caches the app's
    own static files after the first visit.
@@ -8,7 +8,11 @@
    immutable assets. A cache-first HTML shell must never come back: it keeps
    serving an old index.html whose hashed bundle no longer exists after an
    update, leaving the app stuck on the loading screen. */
-const CACHE = 'perfectfit-v2';
+// Bumped for the 3.0 rename. The name only identifies a cache of the app's own
+// static files, so a new one simply re-caches on the next visit; `activate`
+// deletes every cache that is not this one, which is what clears out the shell
+// the old name was serving.
+const CACHE = 'trim-v3';
 
 self.addEventListener('install', (event) => {
   event.waitUntil(

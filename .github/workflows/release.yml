@@ -16,12 +16,12 @@ jobs:
       matrix:
         include:
           - platform: macos-latest
-            artifact-name: perfectfit-macos
+            artifact-name: trim-macos
             args: '--target universal-apple-darwin --bundles dmg'
           - platform: ubuntu-22.04
             args: '--bundles deb,appimage'
           - platform: windows-latest
-            artifact-name: perfectfit-windows
+            artifact-name: trim-windows
             args: '--bundles nsis'
     runs-on: ${{ matrix.platform }}
     steps:
@@ -99,17 +99,20 @@ jobs:
       # The check above covers the five places that state the version as a
       # version. Two docs also state it INSIDE an installer filename, in a
       # command the reader is meant to copy: README.md's Linux/Wayland
-      # workaround (`PerfectFit X2D_<version>_amd64.AppImage`) and "Install on
-      # Mac.md"'s quarantine command (`PerfectFit X2D_<version>_universal.dmg`).
-      # Nothing generates those, so they used to rot silently on the next bump
-      # and hand a reader a command naming a file they do not have. Both now use
-      # a `<version>` placeholder; this step fails if a literal version comes
-      # back and disagrees with package.json.
+      # workaround (`Trim_<version>_amd64.AppImage`) and "Install on Mac.md"'s
+      # quarantine command (`Trim_<version>_universal.dmg`). Nothing generates
+      # those, so they used to rot silently on the next bump and hand a reader a
+      # command naming a file they do not have. Both now use a `<version>`
+      # placeholder; this step fails if a literal version comes back and
+      # disagrees with package.json. The filename stem is `productName` from
+      # tauri.conf.json, which is what Tauri names the bundles after — it moved
+      # from "PerfectFit X2D" to "Trim" in 3.0.0.
       - name: Check installer filenames in the docs have not gone stale
         shell: bash
         run: |
           set -euo pipefail
           pkg=$(node -p "require('./package.json').version")
+          product=$(node -p "require('./src-tauri/tauri.conf.json').productName")
           ok=1
           for f in README.md "Install on Mac.md"; do
             while IFS= read -r v; do
@@ -117,10 +120,10 @@ jobs:
               if [ "$v" = "$pkg" ]; then
                 echo "$f names installer version $v (matches package.json)"
               else
-                echo "::error file=$f::$f names an installer 'PerfectFit X2D_${v}_...' but package.json says $pkg. Use the <version> placeholder, or update the filename."
+                echo "::error file=$f::$f names an installer '${product}_${v}_...' but package.json says $pkg. Use the <version> placeholder, or update the filename."
                 ok=0
               fi
-            done < <(grep -oE 'PerfectFit X2D_[0-9]+\.[0-9]+\.[0-9]+' "$f" | sed 's/^.*_//' | sort -u)
+            done < <(grep -oE "${product}_[0-9]+\.[0-9]+\.[0-9]+" "$f" | sed 's/^.*_//' | sort -u)
           done
           [ "$ok" -eq 1 ]
           echo "No stale installer filename in README.md or Install on Mac.md."
@@ -141,38 +144,39 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: 'PerfectFit X2D ${{ github.ref_name }}'
+          releaseName: 'Trim ${{ github.ref_name }}'
           releaseBody: |
-            # PerfectFit X2D ${{ github.ref_name }}
+            # Trim ${{ github.ref_name }}
 
             A fork of [PerfectFit](https://github.com/tayloraaron078-tech/Filament_Calibration_Wizard)
-            focused on **dual-nozzle printers** — in particular the Bambu Lab X2D, whose
-            auxiliary nozzle is bowden-fed and receives no automatic flow-dynamics
-            calibration from the printer.
+            that calibrates a filament profile for **single-nozzle, dual-nozzle and
+            multi-nozzle printers**, one nozzle at a time. Per-nozzle calibration is what
+            distinguishes it: a nozzle's feed path decides its ranges, so a bowden
+            auxiliary is never handed direct-drive numbers.
 
-            ## ⚠ Read first if you already have PerfectFit installed
+            ## ⚠ This release renames the app
 
-            This build carries its own application identity — `PerfectFit X2D`,
-            identifier `io.github.espentruls.perfectfit-x2d` — instead of upstream's
-            `com.redeemed3d.perfectfit`. It therefore installs **alongside** upstream
-            PerfectFit rather than on top of it, and no longer shares upstream's data
-            store (previously both wrote to the same one, so upstream's "erase all data"
-            erased this app's projects too).
+            Up to 2.0.0 this was **PerfectFit X2D**. It is now **Trim** — the X2D in the
+            old name suggested one printer, and the app works with any of them. In
+            aviation, trimming is adjusting the controls so the aircraft holds steady
+            without constant correction, which is what calibrating a filament profile
+            does.
 
-            **Your calibration data does not move by itself.** Nothing is deleted — the
-            old data stays on disk — but this build starts empty. Before you install it:
+            The rename also changes the application identity, from
+            `io.github.espentruls.perfectfit-x2d` to `io.github.espentruls.trim`, which
+            is the identity your operating system installs and stores data under.
 
-            1. In your existing build: **Settings → ⭳ Export all data + photos**, keep the JSON file.
-            2. Install this version.
-            3. **Settings → 📥 Restore from backup** and pick that file.
+            **This build starts fresh and does not carry anything over from 2.0.0.** It
+            does not need to: 2.0.0 was published but never actually installed by
+            anyone. If you are one of the people who did try it, nothing of yours is
+            deleted — the two identities can coexist, so Trim installs **alongside**
+            the old build rather than over it, and anything 2.0.0 wrote stays on disk
+            under the old identifier. Use **Settings → ⭳ Export all data + photos** in
+            the old build and **Settings → 📥 Restore from backup** in Trim if you want
+            it here.
 
-            Slicer preset backups (Settings → "Slicer profile backups") are stored under
-            the old identity too — on Windows in
-            `%APPDATA%\com.redeemed3d.perfectfit\slicer-backups`. Restore anything you
-            still need from the old build before uninstalling it, or copy that folder to
-            `%APPDATA%\io.github.espentruls.perfectfit-x2d\slicer-backups` afterwards.
-            The browser/Docker deployment is unaffected: its data is keyed to the site
-            origin, not to the desktop identifier.
+            The browser/Docker deployment is unaffected either way: its data is keyed to
+            the site origin, not to the desktop identifier.
 
             ## Downloads
 
@@ -219,9 +223,12 @@ jobs:
 
             ## What this fork adds
 
-            - **Dual-nozzle printer profiles.** A printer has nozzles, each with its own
-              feed path. A Bambu Lab X2D quick-fill sets up both: main direct-drive, and
-              auxiliary bowden with its real speed and acceleration limits.
+            - **Per-nozzle printer profiles.** A printer has nozzles, each with its own
+              feed path — one on a single-nozzle machine, two on a Bambu Lab X2D, more on
+              an H2D or H2C. A quick-fill sets up an X2D's pair: main direct-drive, and
+              auxiliary bowden with its real speed and acceleration limits. The H2D and
+              H2C layouts are modelled from published specifications and have not been
+              tested on the actual machines.
             - **Per-nozzle calibration projects.** A project states which nozzle it
               calibrates, and suggested ranges follow the feed path — a bowden auxiliary
               nozzle gets a pressure-advance range roughly ten times a direct-drive

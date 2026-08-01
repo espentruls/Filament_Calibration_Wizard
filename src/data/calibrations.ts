@@ -165,8 +165,20 @@ export const CALIBRATIONS: Record<CalibrationId, CalibrationDef> = {
       'Temperature affects almost everything you can see on a print: stringing, glossiness, ' +
       'overhangs, bridging, and — most importantly — how strongly layers stick to each other.',
     whyThisOrder:
-      'Temperature comes first because every other test depends on how the plastic flows. ' +
-      'Calibrating flow or pressure advance at the wrong temperature means redoing them.',
+      'First, because temperature is the one result that invalidates every other one. It sets how ' +
+      'viscous the melt is, so changing it afterwards moves the flow ratio, the pressure advance ' +
+      'value and the melt-rate ceiling with it — Bambu list a changed print temperature in the ' +
+      'filament settings among their own reasons to re-run Flow Dynamics. Calibrate anything else ' +
+      'first and you will measure it twice. ' +
+      'Two things people look for here and do not find: bed temperature and first layer. Bed ' +
+      'temperature is not a calibration step in any of the guides this order was built from, and ' +
+      'first layer is not a calibration step in this wizard either — it is a machine-level job you ' +
+      'do once per printer and plate, not per spool. It is the ground the rest of the calibration ' +
+      'stands on rather than a part of it, which is why it appears as a prerequisite on the next ' +
+      'screen instead of as a step of its own. ' +
+      'Retraction is not third either — it is sixth, because temperature, flow and pressure advance ' +
+      'all change how much the nozzle oozes, and tuning retraction before them bakes those errors ' +
+      'into the distance.',
     whyExpanded:
       'The nozzle temperature controls how runny (viscous) the melted plastic is. Too cold and the plastic ' +
       'doesn\'t fully weld to the layer below — parts snap easily along layer lines and the extruder may skip. ' +
@@ -177,7 +189,7 @@ export const CALIBRATIONS: Record<CalibrationId, CalibrationDef> = {
     prerequisites: [
       { id: 'dry', label: 'Filament is dry — dried by YOU, not assumed dry because it\'s new', coachNote: 'Wet filament pops, strings and looks bad at every temperature — you\'d be calibrating the moisture instead of the filament. Don\'t trust "fresh from a sealed bag": PETG, TPU, nylon, ABS and ASA all arrive wet from the factory often enough to assume it, even sealed with desiccant. An OLD open spool should simply be assumed wet. If the material is moisture-sensitive, dry it before calibrating, full stop — nothing calibrated on a wet spool transfers to the same spool once dry, so the hours are genuinely wasted.' },
       { id: 'clean-nozzle', label: 'Nozzle is clean and not partially clogged', coachNote: 'A partial clog mimics under-extrusion and will mislead every test.' },
-      { id: 'adhesion', label: 'First layer / bed adhesion is reliable on this printer', coachNote: 'If first layers regularly fail, fix bed leveling and Z-offset before calibrating filament.' },
+      { id: 'adhesion', label: 'First layer / bed adhesion is reliable on this printer', coachNote: 'This is the prerequisite that explains an absence: there is no first-layer or bed-temperature test in this wizard, because neither is a per-filament calibration. Bed levelling, Z-offset and plate cleanliness are settled once for this printer and plate and then left alone for every spool afterwards. Bambu take the same position in their own calibration instructions — they tell you to wash the build plate before you start, because a first layer that does not attach well changes the calibration result. If your first layers regularly fail, stop here and fix that first; everything below is measured on top of it.' },
       { id: 'profile-selected', label: 'A sensible starting filament profile is selected in the slicer', coachNote: 'Start from the closest generic profile (e.g. "Generic PETG") for your material.' },
       { id: 'nozzle-match', label: 'The printer preset selected in the slicer is the one for the nozzle actually installed', coachNote: 'Slicers list every nozzle size of a machine as its own separate preset (e.g. "Snapmaker U1 (0.4 nozzle)" and "(0.6 nozzle)"), and picking the wrong one is silent. It matters here: the built-in tests scale the test model by nozzle_diameter ÷ 0.4 and set layer height to nozzle_diameter ÷ 2, so a 0.6 preset on a physical 0.4 nozzle prints a 1.5× oversized tower at a layer height your nozzle cannot cleanly lay down — every result from it is misleading.' }
     ],
@@ -210,8 +222,20 @@ export const CALIBRATIONS: Record<CalibrationId, CalibrationDef> = {
       'Too little leaves gaps between lines and weak parts; too much makes rough, bulging surfaces ' +
       'and inaccurate dimensions. Pass 1 finds the right neighborhood; Pass 2 fine-tunes it.',
     whyThisOrder:
-      'Flow is calibrated right after temperature because the amount of plastic that actually comes out ' +
-      'depends on how well it melts. Calibrating flow before temperature risks compensating for a melt problem with a flow number.',
+      'Straight after temperature, because the amount of plastic that actually comes out depends on ' +
+      'how well it melts — calibrate flow first and you compensate for a melt problem with a flow ' +
+      'number. What this result changes downstream: pressure advance is judged on corner shape and ' +
+      'line width, shrinkage is judged on measured dimensions, and max volumetric speed is judged on ' +
+      'where under-extrusion first appears. All three read wrong if the flow ratio is wrong. ' +
+      'One disagreement to know about, because you will meet it the moment you open the vendor ' +
+      'documentation: Orca, Ellis and Bambu all run pressure advance BEFORE flow. Bambu put it ' +
+      'plainly — "It is advisable to conduct a Flow Dynamics Calibration prior to the Flow Rate ' +
+      'Calibration." We start from flow instead, and neither side is making a mistake: the ' +
+      'dependency is circular. A wrong flow ratio ruins the corner judgement pressure advance needs, ' +
+      'and a wrong pressure advance distorts the speed transitions inside the flow blocks. We start ' +
+      'here because this test is judged by eye on top surfaces, where pressure timing matters least, ' +
+      'and then close the loop with a flow re-check after pressure advance — so the state you finish ' +
+      'in is the same one you would reach starting from the other end.',
     whyExpanded:
       'Slicers compute how much filament to feed from the line width, layer height, and movement distance. ' +
       'Real filament varies in diameter and how it flows, so a correction factor — the Flow Ratio — scales that amount. ' +
@@ -228,7 +252,7 @@ export const CALIBRATIONS: Record<CalibrationId, CalibrationDef> = {
     dependencies: ['temperature'],
     prerequisites: [
       { id: 'temp-done', label: 'Nozzle temperature is calibrated (or a known-good temp is set)', coachNote: 'Flow tests printed at a bad temperature give misleading surfaces.' },
-      { id: 'profile', label: 'The filament profile you\'re calibrating is active in the slicer', coachNote: 'The test bases its math on the profile\'s CURRENT flow ratio — the wrong profile ruins the math.' },
+      { id: 'profile', label: 'The filament profile you\'re calibrating is active in the slicer', coachNote: 'The test bases its math on the profile\'s CURRENT flow ratio — the wrong profile ruins the math. If you already calibrated this filament\'s flow ratio by hand, that saved value IS the baseline this test starts from: do not reset it to 1.0 first. The wizard asks you for the profile\'s current ratio and computes the new one from it, so an existing result is refined rather than discarded.' },
       { id: 'shrink-known', label: 'Shrinkage compensation is 100% (off) for this test, or you know the value that is applied', coachNote: 'A live shrinkage value scales the geometry under the blocks. It does not spoil a SURFACE judgement — but it does mean any caliper reading you take off these blocks is scaled, so never convert one into a flow correction without dividing the shrinkage back out.' },
       { id: 'plate-clean', label: 'Build plate is clean (top surfaces show fingerprint grease)', coachNote: 'You\'ll judge top surfaces — grease and dust show up as defects that aren\'t flow related.' }
     ],
@@ -248,7 +272,8 @@ export const CALIBRATIONS: Record<CalibrationId, CalibrationDef> = {
     versionNotes: [
       'Orca v2.x offers YOLO (Recommended), YOLO (Perfectionist), and the legacy Pass 1 (Coarse) / Pass 2 (Fine) under Calibration → Flow ratio. Orca names the menu entry after the SETTING ("Flow ratio"); Bambu Studio names it after the test ("Flow rate").',
       'Bambu Studio: Calibration → Flow rate → Coarse / Fine (coarse ±20% in 5% steps, fine 1% steps).',
-      'On Bambu printers, disable the printer\'s own "Flow Calibration" option before printing the test — it would fight the test.'
+      'On Bambu printers, disable the printer\'s own "Flow Calibration" option before printing the test — it would fight the test.',
+      'Already ran Bambu Studio\'s Flow rate calibration by hand? Nothing is wasted, and nothing has to be thrown away. Bambu\'s Coarse pass is this step and its Fine pass is the next one — the same block counts, the same step sizes and the same formula. Enter the ratio you ended up with wherever the wizard asks for the profile\'s current flow ratio, and it becomes the starting point. If you would rather not reprint both plates, mark this step and the fine pass skipped from the project screen; the flow re-check later will confirm the number under your calibrated pressure advance.'
     ]
   },
 
@@ -261,8 +286,11 @@ export const CALIBRATIONS: Record<CalibrationId, CalibrationDef> = {
       'Narrows the flow ratio found in Pass 1 to a final value. Pass 1 steps are coarse (5%); ' +
       'Pass 2 re-runs the test in fine (1%) steps below the Pass 1 result.',
     whyThisOrder:
-      'Runs immediately after Pass 1, using the value Pass 1 produced. If you used the one-pass YOLO method ' +
-      'with good results, you can skip Pass 2 — YOLO\'s 0.01 steps already land within fine range.',
+      'Immediately after Pass 1, using the value Pass 1 produced. It refines the same number, so ' +
+      'everything Pass 1 said about what a flow error does downstream — to corner judgement, to ' +
+      'measured dimensions, to where under-extrusion appears — applies here unchanged. If you used ' +
+      'the one-pass YOLO method with good results, you can skip Pass 2: YOLO\'s 0.01 steps already ' +
+      'land within fine range.',
     whyExpanded:
       'Because Pass 1 modifies flow in 5% jumps, the truth usually lies between two blocks. ' +
       'Pass 2 prints ten blocks from −9% to 0% around the Pass-1 result in 1% steps, ' +
@@ -298,8 +326,14 @@ export const CALIBRATIONS: Record<CalibrationId, CalibrationDef> = {
       'and lines stay a constant width when the printer speeds up and slows down. ' +
       'It does not change HOW MUCH plastic is extruded overall — that\'s Flow Ratio.',
     whyThisOrder:
-      'PA is tuned after flow because judging corner bulges requires correct line widths. ' +
-      'With flow wrong, every corner looks wrong no matter the PA value.',
+      'After flow, because judging a corner bulge means reading line width, and line width is wrong ' +
+      'everywhere if the flow ratio is wrong — every corner looks bad no matter the PA value. ' +
+      'What this result changes downstream: it retimes pressure through every speed change, and speed ' +
+      'changes are exactly what the flow blocks are made of, which is why the next step re-checks ' +
+      'flow under it. It also changes how much pressure is sitting in the nozzle when a travel move ' +
+      'begins, which is why retraction waits until this is set. ' +
+      'Note that Bambu and Orca both run this step before flow rather than after; the flow step ' +
+      'explains why we go the other way round and why both routes finish in the same place.',
     whyExpanded:
       'Molten plastic in the nozzle acts like a compressed spring: when the print head accelerates, pressure ' +
       'takes a moment to build, so lines start thin; when it decelerates into a corner, leftover pressure keeps ' +
@@ -311,7 +345,8 @@ export const CALIBRATIONS: Record<CalibrationId, CalibrationDef> = {
     prerequisites: [
       { id: 'flow-done', label: 'Flow ratio is calibrated', coachNote: 'PA evaluation reads line width consistency — impossible to judge with the wrong flow.' },
       { id: 'la-enabled', label: 'Printer firmware supports PA / Linear Advance (Klipper: built in; Marlin: M900 must be enabled in the firmware build)', coachNote: 'If the tower shows zero change from bottom to top, your firmware is likely ignoring the command.' },
-      { id: 'first-layer', label: 'First layer is reliable (needed for the Line method especially)', coachNote: 'The line test lives entirely on the first layer; bed mesh leveling helps.' }
+      { id: 'first-layer', label: 'First layer is reliable (needed for the Line method especially)', coachNote: 'The line test lives entirely on the first layer; bed mesh leveling helps.' },
+      { id: 'existing-k', label: 'If a K value already exists for this filament, you know where it came from — the automatic calibration or a manual test — and which nozzle it belongs to', coachNote: 'Bambu Studio calls both of them Flow Dynamics, and they are not interchangeable numbers. Automatic K on the eddy-current machines (the X2D/H2D family) is intentionally on a HIGHER scale than manual pattern K, so transcribing an automatic reading into this step records a value on the wrong scale. A manual result carries over directly. Stored results are keyed to filament AND nozzle, so before assuming an existing K covers the nozzle this project targets, check which nozzle it was measured on — a value calibrated for one nozzle is not a value for the other.' }
     ],
     methods: [
       { id: 'tower', label: 'Tower method', description: 'A square tower where PA increases with height. Slower, but doesn\'t depend on first-layer quality. Judge the best-looking corners and measure that height.', slicers: ['orca', 'bambu'], recommended: true },
@@ -330,6 +365,7 @@ export const CALIBRATIONS: Record<CalibrationId, CalibrationDef> = {
       'Orca v2.x: Calibration → Pressure advance offers Line, Pattern (adapted from Ellis\' generator), and Tower, each with direct-drive and Bowden defaults. Bambu Studio\'s Develop-mode menu also calls its manual test "Pressure advance" — the automatic "Flow Dynamics" wizard is a separate thing, on the Calibration TAB rather than in that menu.',
       'Orca also offers Adaptive PA (per-flow-rate table) for high-speed printers — out of scope for this wizard\'s v1.',
       'Bambu Studio calls this "Flow Dynamics Calibration" (K value), with manual line test or automatic on X1/P1 lidar models.',
+      'Bambu publish a list of when a Flow Dynamics Calibration should be re-run, and one of their triggers points back into this wizard\'s own order: "When the maximum volumetric speed or print temperature is changed in the filament settings." The max volumetric speed step comes after this one, so expect to re-confirm the K value once it has run.',
       'Verified 2026-07: Bambu Studio does NOT write the filament pressure_advance field into the sliced G-code for Bambu machines — Flow Dynamics governs PA. To apply a fixed K you must either use Flow Dynamics, or inject "M900 K<value> L1000 M10" via filament start G-code AND set Flow Dynamics Calibration = Off in the Send-print-job dialog (Auto/On/Off) at print time. Orca-family slicers do emit the command from the native field, including for Bambu printers.'
     ]
   },
@@ -344,15 +380,25 @@ export const CALIBRATIONS: Record<CalibrationId, CalibrationDef> = {
       'distributed during speed changes, which can shift where the "perfect" flow block lands — a flow ' +
       'ratio chosen before PA is sometimes one fine step off afterwards.',
     whyThisOrder:
-      'Immediately after Pressure Advance, because that\'s the setting that just changed the conditions ' +
-      'your earlier flow result was judged under. If the re-check lands on the same value, great — ' +
-      'you\'ve confirmed it. If not, you\'ve caught a real error cheaply.',
+      'Immediately after Pressure Advance, because that is the setting that just changed the conditions ' +
+      'your earlier flow result was judged under. If the re-check lands on the same value you have ' +
+      'confirmed it; if it does not, you have caught a real error cheaply. ' +
+      'Worth saying out loud: this step is ours. No published guide has it. We add it because the ' +
+      'guides disagree about whether flow or pressure advance comes first, and re-checking one number ' +
+      'is cheaper than choosing wrong — it is what makes our order converge on the same end state as ' +
+      'theirs no matter which end you start from.',
     whyExpanded:
       'Flow ratio and Pressure Advance interact: the flow test\'s blocks contain speed changes, and how ' +
-      'PA times the pressure through those changes affects the surface you judged. With PA at its old ' +
-      '(usually zero or default) value, slight over- or under-pressure at transitions can disguise itself ' +
-      'as a flow problem — so the block you picked may have been compensating for pressure, not volume. ' +
-      'Re-running the fine pass with PA now active removes that distortion. Expect the result to move at ' +
+      'PA times the pressure through those changes affects the surface you judged. Your earlier flow ' +
+      'result was judged under whatever PA happened to be active at the time — a profile default, a ' +
+      'leftover from another spool, or a value the printer derived by itself moments before the print. ' +
+      'On a current Bambu machine the last of those is the usual case rather than the exception: the ' +
+      'X1 and A1 series and the H2D/H2S/P2S/X2D family run their own Flow Dynamics calibration before ' +
+      'printing, automatically by default, and redo it when the filament or the nozzle changes. ' +
+      'Whichever it was, it was not the value you have now deliberately set, so slight over- or ' +
+      'under-pressure at the transitions could have disguised itself as a flow problem — the block you ' +
+      'picked may have been compensating for pressure rather than volume. Re-running the fine pass with ' +
+      'your calibrated PA active removes that distortion. Expect the result to move at ' +
       'most one or two fine (1%) steps; a larger jump suggests something else changed (temperature, ' +
       'moisture, a different plate).',
     dependencies: ['flow-pass1', 'pressure-advance'],
@@ -387,8 +433,13 @@ export const CALIBRATIONS: Record<CalibrationId, CalibrationDef> = {
       'when printing resumes. This step also owns general in-print drool on ANY printer, single- or ' +
       'multi-nozzle: it carries the full ordered list of ooze levers, of which retraction is only the third.',
     whyThisOrder:
-      'Retraction is tuned near the end because temperature (ooze), flow (pressure), and PA all change how much ' +
-      'the nozzle oozes during travel. Tuning retraction first would bake those errors into the distance. ' +
+      'Late, because temperature, flow and pressure advance all change how much the nozzle oozes ' +
+      'during a travel move — tuning retraction before them bakes those errors into the distance. ' +
+      'Nothing later reads this number: retraction consumes earlier results rather than producing one ' +
+      'for anything downstream, which is why it can sit this far back without holding anything up. ' +
+      'If you came here to stop stringing, read the lever order before touching the distance: ' +
+      'retraction is only the third-biggest lever, behind drying the filament and nozzle temperature, ' +
+      'and reaching for it first is how people lose days. ' +
       'If your ooze appears at TOOLCHANGES rather than during ordinary travel within one filament, that is a ' +
       'different problem with different fixes — see the Dual-Nozzle Ooze Control step (prime tower, ramming, ' +
       'per-extruder overrides) instead of pushing retraction distance up here.',
@@ -448,8 +499,18 @@ export const CALIBRATIONS: Record<CalibrationId, CalibrationDef> = {
       'The slicer then automatically slows any move that would exceed it — preventing under-extrusion, weak layers, ' +
       'and extruder clicking on fast prints.',
     whyThisOrder:
-      'Run near the end: it needs the calibrated temperature (melt rate depends strongly on temperature) and flow. ' +
-      'Note the official Orca guide runs it earlier (right after temperature) — either works; what matters is temperature first.',
+      'Near the end: melt rate depends strongly on temperature, and where under-extrusion first ' +
+      'appears depends on flow, so both have to be settled before this can be measured. Note the ' +
+      'official Orca guide runs it earlier (right after temperature) — either works; what matters is ' +
+      'temperature first. ' +
+      'One consequence points BACKWARDS, and it is worth knowing before you start. Bambu list "When ' +
+      'the maximum volumetric speed or print temperature is changed in the filament settings" among ' +
+      'their own reasons to run a Flow Dynamics Calibration. Changing the max volumetric speed is ' +
+      'exactly what this step exists to do, so finishing it puts the pressure advance value you ' +
+      'calibrated three steps ago up for re-confirmation. That is not a reason to move this step ' +
+      'ahead of pressure advance: a flow ratio that was still wrong would shift where under-extrusion ' +
+      'appears and make this measurement wrong instead. Run it here, then re-confirm the K value ' +
+      'before the verification print — the verification step carries the reminder.',
     whyExpanded:
       'In beginner terms: your hotend is a wax melter with a speed limit. Push plastic through faster than it can melt, ' +
       'and the plastic comes out thin, weak, or not at all — the extruder skips and clicks. ' +
@@ -482,7 +543,9 @@ export const CALIBRATIONS: Record<CalibrationId, CalibrationDef> = {
       'Alternative reading: in Preview with the "Flow" color scheme, find the flow value at your measured layer.',
       'The official wiki recommends reducing the measured value 10–20% for production — this app defaults to 15% headroom (configurable).',
       'Menu location differs between the slicers: Orca puts Max flowrate at the TOP level of the Calibration menu (second entry, under Temperature), while Bambu Studio files it under Calibration → More... alongside VFA.',
-      'Bambu Studio Developer mode exposes Max flowrate and VFA calibration while a Bambu printer is selected; use the calculator approach only as a fallback.'
+      'Bambu Studio Developer mode exposes Max flowrate and VFA calibration while a Bambu printer is selected; use the calculator approach only as a fallback.',
+      'Why the headroom is not optional, in the vendor\'s own words: Bambu warn that "An incorrect maximum volumetric speed can lead to nozzle clogging", and that incorrect flow settings "can potentially damage your printer, including causing nozzle clogs or extrusion clogging". The measured ceiling is where quality collapsed, not a speed to print at.',
+      'On Bambu printers this value is per extruder variant, not one number for the machine: a filament preset carries a separate max volumetric speed for each feed path and hotend variant the printer offers, so a ceiling measured on one nozzle is not the other nozzle\'s ceiling.'
     ]
   },
 
@@ -500,7 +563,11 @@ export const CALIBRATIONS: Record<CalibrationId, CalibrationDef> = {
     whyThisOrder:
       'Near the end, because dimensions depend on temperature and flow: over-extrusion masquerades as ' +
       '"too little shrinkage" and a different print temperature changes how much the part contracts. ' +
-      'Measure only after those are locked in.',
+      'Measure only after those are locked in. There is a second reason it cannot come earlier — ' +
+      'shrinkage has to stay switched OFF while the flow tests run, because a live compensation value ' +
+      'scales the geometry under the flow blocks and scales any caliper reading taken off them with ' +
+      'it. Every published guide puts dimensional work near the end for the same attribution reason: ' +
+      'a dimensional error cannot be blamed on the filament until extrusion is settled.',
     whyExpanded:
       'Thermoplastics contract as they cool from printing temperature to room temperature. The slicer\'s ' +
       'shrinkage setting is a percentage: if a nominal 100 mm part measures 99.4 mm, the filament\'s ' +
@@ -596,7 +663,10 @@ export const CALIBRATIONS: Record<CalibrationId, CalibrationDef> = {
       'seams, small details, travels, and speed changes. It confirms the profile works as a whole — settings that ' +
       'each looked right in isolation can still interact badly.',
     whyThisOrder:
-      'Last, because it validates the combination of all previous results under realistic conditions.',
+      'Last, because it validates the combination of all previous results under realistic conditions. ' +
+      'It is also where the one loop in this order gets closed: the max volumetric speed step changes ' +
+      'a setting that Bambu themselves list as a reason to re-run Flow Dynamics, so the pressure ' +
+      'advance value calibrated earlier wants re-confirming before this print rather than after it.',
     whyExpanded:
       'Calibration tests are deliberately artificial — each isolates one variable. A verification print is the ' +
       'opposite: a normal object printed with your normal process profile. You inspect it category by category. ' +
@@ -605,7 +675,8 @@ export const CALIBRATIONS: Record<CalibrationId, CalibrationDef> = {
     dependencies: ['temperature', 'flow-pass1', 'pressure-advance', 'retraction', 'max-volumetric-speed'],
     prerequisites: [
       { id: 'all-saved', label: 'All calibrated values are saved in the filament profile & printer profile', coachNote: 'Verify each value landed in the slicer — a common failure is testing with half-saved settings.' },
-      { id: 'user-preset', label: 'Values saved as a NEW user preset (not overwriting a stock system preset)', coachNote: 'Name it like "Brand Material Color - Printer - Nozzle" so it\'s recognizable later.' }
+      { id: 'user-preset', label: 'Values saved as a NEW user preset (not overwriting a stock system preset)', coachNote: 'Name it like "Brand Material Color - Printer - Nozzle" so it\'s recognizable later.' },
+      { id: 'k-reconfirmed', label: 'Pressure advance has been re-confirmed since the max volumetric speed step changed the profile', coachNote: 'This is the one loop in the order. Bambu list "When the maximum volumetric speed or print temperature is changed in the filament settings" among their own reasons to run a Flow Dynamics Calibration, and the max volumetric speed step exists to change exactly that setting — three steps after the pressure advance value was measured. So the K value you are about to verify was calibrated under a max flow that no longer applies. Re-run the pressure advance test (or, on a Bambu machine you let calibrate itself, let Flow Dynamics run once) before this print, so the verification tests the profile you will actually use. If the max volumetric speed step left the value unchanged, this does not apply — tick it and carry on.' }
     ],
     methods: [
       { id: 'benchy-like', label: 'Torture-style test model', description: 'Any compact model combining overhangs, bridges, small details and smooth hulls (e.g. 3DBenchy — free to print, see models list). Print with your NORMAL process profile.', slicers: ['orca', 'bambu'], recommended: true },

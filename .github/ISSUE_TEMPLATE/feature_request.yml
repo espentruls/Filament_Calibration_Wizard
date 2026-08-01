@@ -1,5 +1,5 @@
 name: "Feature request"
-description: "Suggest an improvement or new capability for PerfectFit"
+description: "Suggest an improvement or new capability for Trim"
 title: "[Feature]: "
 labels:
   - "enhancement"
@@ -9,7 +9,7 @@ body:
       value: |
         Thanks for suggesting an improvement!
 
-        PerfectFit is focused on guiding users through filament calibration in Orca Slicer and Bambu Studio. Ideas that improve that workflow are especially welcome.
+        Trim is focused on guiding users through filament calibration in Orca Slicer and Bambu Studio. Ideas that improve that workflow are especially welcome.
 
   - type: checkboxes
     id: preliminary-checks
@@ -18,7 +18,7 @@ body:
       options:
         - label: "I searched existing issues and did not find the same suggestion."
           required: true
-        - label: "This request relates to filament calibration or the PerfectFit workflow."
+        - label: "This request relates to filament calibration or the Trim workflow."
           required: true
 
   - type: textarea
@@ -70,7 +70,7 @@ body:
         - "Users of Orca Slicer"
         - "Users of Bambu Studio"
         - "Users of a specific printer or printer type"
-        - "Most PerfectFit users"
+        - "Most Trim users"
         - "Other"
     validations:
       required: true

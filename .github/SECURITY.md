@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Security fixes are generally applied to the latest available version of PerfectFit Filament Calibration Wizard.
+Security fixes are generally applied to the latest available version of Trim.
 
 | Version | Supported |
 |---|---|
@@ -21,7 +21,7 @@ Use GitHub's private vulnerability reporting feature if it is enabled for this r
 When reporting a vulnerability, include:
 
 - A clear description of the problem
-- The affected PerfectFit version
+- The affected Trim version
 - The affected operating system
 - Steps required to reproduce it
 - The possible security impact
@@ -39,7 +39,7 @@ Examples include:
 - Path traversal or unauthorized file access
 - Exposure of sensitive local information
 - A method of bypassing an intended security restriction
-- A vulnerable dependency that can realistically affect PerfectFit users
+- A vulnerable dependency that can realistically affect Trim users
 
 Ordinary crashes, installation failures, incorrect instructions, calibration problems, and user-interface defects should be submitted through the normal Bug Report form.
 
@@ -51,6 +51,6 @@ Please allow time to investigate and prepare a correction before publicly discus
 
 ## Scope
 
-This policy covers the PerfectFit Filament Calibration Wizard application and its official release packages.
+This policy covers the Trim application and its official release packages.
 
-Third-party slicers, printer firmware, operating systems, and unrelated services are outside the project’s direct security scope. Reports involving PerfectFit’s interaction with those systems are still welcome.
+Third-party slicers, printer firmware, operating systems, and unrelated services are outside the project’s direct security scope. Reports involving Trim’s interaction with those systems are still welcome.

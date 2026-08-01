@@ -1,6 +1,6 @@
 # X2D Dual-Nozzle Enhancement Plan
 
-Goal: make PerfectFit fully useful for the Bambu Lab X2D (2026, dual-nozzle), whose
+Goal: make Trim fully useful for the Bambu Lab X2D (2026, dual-nozzle), whose
 auxiliary (right) nozzle is bowden-fed from a rear-mounted extruder, is NOT covered by
 Bambu's automatic Flow Dynamics calibration, and ships with defaults that ooze/string
 for many third-party filaments.
@@ -118,7 +118,7 @@ app), auto-detecting the X2D from Bambu Studio configs, VFA scoring step.
 
 ## Known hazard if slicing is ever wired up
 
-**Do not let PerfectFit slice a calibration test to g-code until an engine can be
+**Do not let Trim slice a calibration test to g-code until an engine can be
 shown to apply the USER'S printer. Staging a project to open in the slicer is
 safe; producing g-code is not.**
 

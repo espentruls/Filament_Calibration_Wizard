@@ -16,11 +16,14 @@ Real-slicer manual pass performed 2026-07-19 on Windows 11 x64 by Claude (comput
 | Snapmaker Orca | 01.10.01.50 | Win 11 | x64 | ✅ | ✅ | ✅ | ✅ | ✅ | on-disk✅ | ✅ | ✅ | ✅ (sliced on U1 with preset on tool 1) | **Yes** | Claude | 2026-07-19 |
 | Orca Slicer | 2.4.2 | Win 11 | x64 | ✅ | ✅ | ✅ | ✅ (account dir) | ✅ | on-disk✅ | ✅ | ✅ | n/a | **Yes** | Claude | 2026-07-19 |
 | Bambu Studio | 02.07.01.62 | Win 11 | x64 | ✅ | ✅ | ✅¹ | ✅ (account dir) | ✅ | ✅ | ✅ | ✅ | ✅ (dual-nozzle: tool 0 patched, tool 1 preserved, in real slicer) | **Yes** | Claude | 2026-07-19 |
+| Bambu Studio (Beta) | 02.08.01.55 | Win 11 | x64 | ✅⁴ | ✅⁴ | — | — | — | — | — | — | — | **No** | Claude | 2026-08-01 |
 | any | any | macOS | — | — | ✅³ | ✅³ | — | — | — | — | — | — | No | — | — |
 
 ¹ Bambu dual-nozzle H2S per-nozzle patching + array preservation covered by automated fixture tests.
 ² (Resolved 2026-07-19) Orca and Bambu were fully tested in their real cloud-linked account dirs after confirming with the repo owner that dropping presets into those folders is their normal, working workflow. Both signed-in slicers showed the preset, sliced cleanly, and restored byte-identical. A one-line cloud caveat remains in the UI: a signed-in slicer may later sync/duplicate/re-id a locally installed preset (cosmetic, not data loss).
 ³ Parsing/generation are platform-independent pure data transforms (covered by the automated fixture suite).
+
+⁴ Bambu Studio Beta is a separate install flavour with its own data directory (`%APPDATA%\BambuStudioBeta\`, config `BambuStudio.conf`) — see the install-flavours section of `SLICER_PROFILE_RESEARCH.md`. Detection and a read-only scan were run against the real install on 2026-08-01: two Bambu installs reported, the Beta listed first as the more recently used one, the stale release folder flagged, and a scan of account `2572316032` returning the user's own preset plus 2055 system presets and the vendor manifest **from the Beta's own library** (`BambuStudioBeta\system\BBL.json`, 02.08.00.04) rather than the release's 02.07.00.08. Nothing has been generated or installed against 02.08, so `directInstallVerified` stays false and the wizard offers scan/generate/export only. To promote it, run the bar in `PROFILE_INSTALLER_MANUAL_TESTS.md` against the Beta and record the result here first.
 
 Evidence detail per slicer:
 - **ElegooSlicer — full pass.** Cloned a printer-compatible base (`PolyMaker_Petg@Giga_0.6_Nozzle`, delta preset inheriting `Generic PETG HF @System`). Installed; preset appeared under User presets; Material settings showed nozzle 213 °C (other layers), first-layer 255 °C correctly inherited (not calibrated), flow 1.03, PA 0.041 with pressure-advance enabled, MVS 17, PETG/PolyMaker/density preserved; a cube sliced to completion; backup restore removed both files and the dir returned byte-identical (6 files).
@@ -37,13 +40,27 @@ Evidence detail per slicer:
 - `src-tauri/src/slicer_integration/install.rs` (cargo, 7 tests): fresh
   install, duplicate refusal, replace-with-backup + restore, checksum
   corruption guard, traversal rejection — all in temp directories.
-- Read-only probes (`cargo test -- --ignored`, run manually 2026-07-19):
-  real detection of all five slicers and a real read-only scan of
-  ElegooSlicer.
+- `src-tauri/src/slicer_integration/discovery.rs` (cargo, 12 tests): install
+  flavour detection against synthetic data roots built under the OS temp
+  directory — both Bambu flavours reported under one family id, the Beta's
+  config read from `BambuStudio.conf` inside `BambuStudioBeta\`, the account
+  folder chosen from `app.preset_folder`, no active location guessed when the
+  config is unreadable or names a missing folder, recency ordering with the
+  stale sibling flagged, and a shared executable never conjuring a second
+  install. A helper assertion refuses any data root outside the temp directory,
+  so no test can be pointed at real slicer data.
+- `tests/slicerIntegration/discovery.test.ts` (vitest, 23 tests): the registry's
+  flavour table, per-version capability honesty for 02.08, recency ranking, the
+  "do not guess a location" rule, and the detection mapping against fabricated
+  payloads.
+- Read-only probes (`cargo test -- --ignored`, run manually): real detection of
+  all five slicers (2026-07-19), a real read-only scan of ElegooSlicer
+  (2026-07-19), and real detection + scan of Bambu Studio Beta account
+  `2572316032` (2026-08-01).
 
 ## Remaining manual tests before enabling auto-install per slicer
 
 See `docs/PROFILE_INSTALLER_MANUAL_TESTS.md`. The minimum bar per slicer:
-manual import of an exported PerfectFit profile → all values correct →
+manual import of an exported Trim profile → all values correct →
 direct install with slicer closed → reopen → preset appears and inherits
 correctly → slice test → restore backup → preset gone, originals intact.

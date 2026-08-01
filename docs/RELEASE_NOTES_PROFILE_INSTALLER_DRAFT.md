@@ -1,4 +1,4 @@
-# PerfectFit Filament Calibration Wizard
+# Trim
 ## Upcoming Release: Slicer Profile Integration (DRAFT)
 
 > Draft release notes for the `feature/slicer-profile-installer` branch.
@@ -7,7 +7,7 @@
 
 ### Headline Feature
 
-PerfectFit can now turn completed calibration results into a ready-to-use
+Trim can now turn completed calibration results into a ready-to-use
 filament profile for supported slicers. Finish calibrating, pick the
 recommended base profile, review exactly what will change, and export the
 profile — or (once verified per slicer version) install it directly with an
@@ -57,7 +57,7 @@ automatic backup.
   re-run later.
 - **Project integration:** generated profiles are stored in the calibration
   project (base profile, fingerprint, changed fields, validation, install
-  history) and included in PerfectFit JSON backups.
+  history) and included in Trim JSON backups.
 - **Diagnostics:** copy/save a redacted diagnostic report (detected slicers,
   versions, locations, capabilities) for bug reports.
 
@@ -112,7 +112,7 @@ a blocker. macOS remains disabled pending path verification. Linux packages are 
   best-effort and install stays disabled.
 - Cloud-synchronized preset folders (Bambu/Orca accounts): the slicer may
   later sync, duplicate, re-identify, or remove locally installed presets.
-  PerfectFit warns but cannot prevent this.
+  Trim warns but cannot prevent this.
 - Multi-tool: per-tool patching is implemented and fixture-tested; a real
   multi-tool install has not been run yet. Unsupported cases fail safely to
   export.

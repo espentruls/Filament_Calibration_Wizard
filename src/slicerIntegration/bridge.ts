@@ -40,10 +40,18 @@ export interface RawUserDataLocation {
 }
 
 export interface RawDetectedSlicer {
+  /** Family key — 'bambu' for both the release and the Beta. */
   slicer_id: string;
+  /** Install flavour key, e.g. 'bambu-beta'. */
+  variant_id: string;
+  variant_label: string;
+  is_default_variant: boolean;
   data_dir: string | null;
   conf_version: string | null;
+  conf_modified_at: number | null;
   preset_folder: string | null;
+  sync_user_preset: boolean | null;
+  superseded_by: string | null;
   executable_path: string | null;
   user_locations: RawUserDataLocation[];
   notes: string[];
@@ -87,8 +95,15 @@ export function detectSupportedSlicers(): Promise<RawDetectedSlicer[]> {
   return invoke('detect_supported_slicers');
 }
 
-export function scanSlicerProfiles(slicerId: IntegrationSlicerId, accountId: string): Promise<RawProfileFile[]> {
-  return invoke('scan_slicer_profiles', { slicerId, accountId });
+// `variantId` names ONE install flavour ('bambu' vs 'bambu-beta'). Omitting it
+// makes the native side resolve the account folder across every flavour of the
+// family and refuse when more than one has it, rather than guess — but pass it
+// whenever it is known, which is any time the location came from detection.
+
+export function scanSlicerProfiles(
+  slicerId: IntegrationSlicerId, accountId: string, variantId?: string
+): Promise<RawProfileFile[]> {
+  return invoke('scan_slicer_profiles', { slicerId, accountId, variantId: variantId ?? null });
 }
 
 export function detectRunningSlicerProcess(slicerId: IntegrationSlicerId): Promise<boolean> {
@@ -117,6 +132,7 @@ export function installGeneratedProfile(args: {
   projectId: string;
   allowReplace: boolean;
   skipProcessCheck: boolean;
+  variantId?: string;
 }): Promise<RawInstallOutcome> {
   return invoke('install_generated_profile', {
     slicerId: args.slicerId,
@@ -126,7 +142,8 @@ export function installGeneratedProfile(args: {
     infoText: args.infoText,
     projectId: args.projectId,
     allowReplace: args.allowReplace,
-    skipProcessCheck: args.skipProcessCheck
+    skipProcessCheck: args.skipProcessCheck,
+    variantId: args.variantId ?? null
   });
 }
 
@@ -135,9 +152,11 @@ export function verifyGeneratedProfile(path: string, expectedJson: string): Prom
 }
 
 export function backupSlicerUserPresets(
-  slicerId: IntegrationSlicerId, accountId: string, projectId: string
+  slicerId: IntegrationSlicerId, accountId: string, projectId: string, variantId?: string
 ): Promise<RawBackupSummary> {
-  return invoke('backup_slicer_user_presets', { slicerId, accountId, projectId });
+  return invoke('backup_slicer_user_presets', {
+    slicerId, accountId, projectId, variantId: variantId ?? null
+  });
 }
 
 export function listProfileBackups(): Promise<RawBackupSummary[]> {

@@ -1,8 +1,8 @@
-# Contributing to PerfectFit X2D Filament Calibration Wizard
+# Contributing to Trim
 
-Thank you for helping improve PerfectFit X2D Filament Calibration Wizard.
+Thank you for helping improve Trim.
 
-PerfectFit X2D is a guided desktop application that helps users calibrate filament for Orca Slicer and Bambu Studio. Contributions may include bug reports, feature suggestions, documentation improvements, testing, and code changes.
+Trim is a guided desktop application that helps users calibrate filament for Orca Slicer and Bambu Studio. Contributions may include bug reports, feature suggestions, documentation improvements, testing, and code changes.
 
 There are several ways you can contribute.
 
@@ -77,7 +77,7 @@ Small typo corrections and obvious documentation fixes may be submitted directly
 
 ## Development setup
 
-PerfectFit uses Tauri with a web frontend and Rust backend.
+Trim uses Tauri with a web frontend and Rust backend.
 
 ### Requirements
 

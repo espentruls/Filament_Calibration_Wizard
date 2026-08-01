@@ -1,5 +1,5 @@
 //! Timestamped, checksummed backups of slicer files before installation,
-//! with verified restore. Backups live in PerfectFit's own app-data folder:
+//! with verified restore. Backups live in Trim's own app-data folder:
 //!
 //! {app_data}/slicer-backups/{slicer-id}/{backup-id}/
 //!     manifest.json
@@ -307,23 +307,19 @@ pub fn snapshot_user_presets_core(
 
 /// Back up a slicer account's whole user preset library (filament, machine,
 /// process presets) before the user starts editing profiles. Read-only with
-/// respect to slicer data; writes only into PerfectFit's backup folder.
+/// respect to slicer data; writes only into Trim's backup folder.
 #[tauri::command]
 pub fn backup_slicer_user_presets(
     app: tauri::AppHandle,
     slicer_id: String,
     account_id: String,
     project_id: String,
+    variant_id: Option<String>,
 ) -> Result<RawBackupSummary, String> {
-    security::validate_component(&account_id)?;
-    let slicer = super::descriptor(&slicer_id)?;
-    let data_root = security::platform_data_root()?;
-    let slicer_root = data_root.join(slicer.data_dir_name);
-    let user_dir = slicer_root.join("user").join(&account_id);
-    if !user_dir.is_dir() {
-        return Err(format!("USER_DATA_NOT_FOUND: {}", user_dir.display()));
-    }
-    security::ensure_under(&slicer_root, &user_dir)?;
+    // Resolved per install flavour: a family can have several installs, and the
+    // snapshot has to come from the one the caller named rather than the
+    // family default.
+    let user_dir = super::discovery::user_dir(&slicer_id, variant_id.as_deref(), &account_id)?;
     let backups_root = backups_root(&app)?;
     let label = format!("Preset library snapshot ({account_id})");
     let m = snapshot_user_presets_core(&backups_root, &slicer_id, &label, &project_id, &user_dir)?;
@@ -567,7 +563,7 @@ pub struct RestoreResult {
 /// DIRECTORIES the backup was found in — never the pair its manifest claims.
 /// This listing is the only place the UI gets the pair it later hands to
 /// restore and delete, so a manifest that names a different slicer (a folder
-/// copied off another machine, a hand-edited file in PerfectFit's own app data)
+/// copied off another machine, a hand-edited file in Trim's own app data)
 /// would otherwise hand back an address that resolves inside ANOTHER slicer's
 /// folder — where a colliding id really does exist — and `load_manifest_at`'s
 /// mismatch guard would never fire, because the manifest it then read agrees
@@ -680,7 +676,6 @@ pub fn restore_profile_backup(
     backup_id: String,
 ) -> Result<RestoreResult, String> {
     let manifest = load_manifest(&app, &slicer_id, &backup_id)?;
-    let data_root = security::platform_data_root()?;
     let slicer = super::descriptor(&manifest.slicer_id)?;
     // A restore rewrites the very files an open slicer holds open and rewrites
     // again when it exits. `install_generated_profile` already refuses to run in
@@ -692,7 +687,17 @@ pub fn restore_profile_backup(
             slicer.display_name
         ));
     }
-    let allowed_root = data_root.join(slicer.data_dir_name);
+    // The allowed root is the install flavour the backed-up files actually came
+    // from, resolved from the manifest's own paths. Using the family default
+    // would reject every restore into a beta install as an escape from the
+    // release directory.
+    let first_original = manifest
+        .files
+        .first()
+        .map(|f| PathBuf::from(&f.original_path))
+        .ok_or_else(|| format!("Backup {backup_id} records no files."))?;
+    let allowed_root =
+        super::discovery::variant_root_for_path(&manifest.slicer_id, &first_original)?;
     // The failure text carries the reverted-so-far list, so a part-way restore
     // reaches the user as an actionable report instead of a bare error.
     let (restored_files, deleted_files) =
@@ -740,7 +745,7 @@ mod tests {
     impl TempUserRoot {
         fn new(tag: &str) -> Self {
             let dir = std::env::temp_dir().join(format!(
-                "perfectfit-snapshot-test-{tag}-{}-{}",
+                "trim-snapshot-test-{tag}-{}-{}",
                 std::process::id(),
                 super::super::now_unix()
             ));
@@ -1096,7 +1101,7 @@ mod tests {
         // The fixture guarantees the id collision this test needs.
         let (orca, _bambu, m_orca, m_bambu) = two_slicer_libraries("listclaim");
         // A backup folder copied off another machine, or a hand-edited file in
-        // PerfectFit's own app data: filed under orca, claiming bambu.
+        // Trim's own app data: filed under orca, claiming bambu.
         let manifest_path = PathBuf::from(&m_orca.backup_root).join("manifest.json");
         let mut m: ProfileBackupManifest =
             serde_json::from_str(&std::fs::read_to_string(&manifest_path).unwrap()).unwrap();

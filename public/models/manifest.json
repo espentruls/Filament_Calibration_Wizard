@@ -1,5 +1,5 @@
 {
-  "note": "Model manifest for PerfectFit. Orca Slicer generates all core calibration tests in-slicer, so no models are bundled or required. The entries below are optional external aids. None are redistributed here because their licenses do not clearly permit bundling; users download them from the source. You may drop your own STL/3MF copies into this folder for convenience — the app never reads them, they are just stored alongside for organization.",
+  "note": "Model manifest for Trim. Orca Slicer generates all core calibration tests in-slicer, so no models are bundled or required. The entries below are optional external aids. None are redistributed here because their licenses do not clearly permit bundling; users download them from the source. You may drop your own STL/3MF copies into this folder for convenience — the app never reads them, they are just stored alongside for organization.",
   "models": [
     {
       "test": "Final verification",

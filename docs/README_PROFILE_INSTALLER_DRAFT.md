@@ -7,7 +7,7 @@
 
 ## 🧵 Turn calibrations into slicer profiles (experimental)
 
-When a calibration is finished, PerfectFit can build a real filament profile
+When a calibration is finished, Trim can build a real filament profile
 for your slicer — no more copying numbers field by field.
 
 **How it works**
@@ -16,20 +16,20 @@ for your slicer — no more copying numbers field by field.
    Slicer, Bambu Studio, Snapmaker Orca, ElegooSlicer, Flash Studio Desktop)
    and every preset location, including which account folder the slicer
    actually uses.
-2. **Pick a base profile.** PerfectFit scans your filament presets and
+2. **Pick a base profile.** Trim scans your filament presets and
    recommends the best match for your filament, printer, and nozzle — with a
    plain-language explanation. Advanced users can pick any preset, or browse
    to an exported profile file.
 3. **Review the changes.** The base profile is cloned; only the values you
    calibrated are changed (temperature, flow ratio, pressure advance,
    retraction, max volumetric speed). Everything else — cooling, speeds,
-   fields PerfectFit doesn't even know about — is preserved exactly. You see
+   fields Trim doesn't even know about — is preserved exactly. You see
    a before → after diff of every change.
 4. **Export or install.**
    - **Export** (all platforms, all versions): save the preset file and
      import it in the slicer — drag & drop works in all supported slicers.
    - **Install automatically** (desktop, verified slicer versions only):
-     PerfectFit backs up the affected files, writes the preset
+     Trim backs up the affected files, writes the preset
      transactionally, verifies the result, and rolls back on any failure.
      Restart the slicer and the profile is there.
 
@@ -54,7 +54,7 @@ automatically.
 **Experimental status & version compatibility**
 
 Profile formats change between slicer versions, so support is verified per
-version. Unverified versions are export-only — PerfectFit will say so rather
+version. Unverified versions are export-only — Trim will say so rather
 than guess. The whole feature can be disabled in Settings → Experimental
 features.
 

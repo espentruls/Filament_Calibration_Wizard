@@ -1,8 +1,8 @@
 {
-  "name": "perfectfit-x2d-filament-calibration-wizard",
+  "name": "trim-filament-calibration",
   "private": true,
-  "version": "2.0.0",
-  "description": "PerfectFit X2D — a local-first guided wizard for calibrating filament profiles for Orca Slicer and Bambu Studio, with dual-nozzle (Bambu Lab X2D) support.",
+  "version": "3.0.0",
+  "description": "Trim — a local-first guided wizard for calibrating filament profiles for Orca Slicer and Bambu Studio, on single-nozzle, dual-nozzle and multi-nozzle printers.",
   "license": "AGPL-3.0-only",
   "author": "espentruls",
   "contributors": [

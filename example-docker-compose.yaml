@@ -1,16 +1,16 @@
 services:
-  perfectfit:
-    image: perfectfit:latest
-    container_name: perfectfit
+  trim:
+    image: trim:latest
+    container_name: trim
     restart: unless-stopped
     networks:
       - containers
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.perfectfit.rule=Host(`perfectfit.mynetwork.net`)"
-      - "traefik.http.routers.perfectfit.tls=true"
-      - "traefik.http.routers.perfectfit.tls.certresolver=letsencrypt"
-      - "traefik.http.services.perfectfit.loadbalancer.server.port=80"
+      - "traefik.http.routers.trim.rule=Host(`trim.mynetwork.net`)"
+      - "traefik.http.routers.trim.tls=true"
+      - "traefik.http.routers.trim.tls.certresolver=letsencrypt"
+      - "traefik.http.services.trim.loadbalancer.server.port=80"
 
 networks:
   containers:

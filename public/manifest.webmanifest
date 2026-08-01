@@ -1,7 +1,7 @@
 {
-  "name": "PerfectFit Filament Calibration Wizard",
-  "short_name": "PerfectFit",
-  "description": "Local-first guided filament calibration for Orca Slicer and Bambu Studio.",
+  "name": "Trim — Filament Calibration",
+  "short_name": "Trim",
+  "description": "Local-first guided filament calibration for Orca Slicer and Bambu Studio, on single-nozzle, dual-nozzle and multi-nozzle printers.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

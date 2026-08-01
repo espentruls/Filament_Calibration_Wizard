@@ -1,6 +1,6 @@
 # Slicer Profile Research
 
-Verified findings for the PerfectFit profile generator/installer. Every claim below is
+Verified findings for the Trim profile generator/installer. Every claim below is
 either **verified** (inspected on a real installation or in official sources, date noted)
 or explicitly marked **unverified**. Do not promote unverified behavior into code
 defaults.
@@ -209,11 +209,99 @@ slicer (removing the cloud copy) and reinstalled.
 
 ---
 
+## Install flavours: one slicer, several data directories
+
+A slicer *family* can be installed in more than one *flavour* — release, beta,
+nightly — each with its own data directory. The registry therefore has one row
+per flavour (`SLICER_VARIANTS` in `src/slicerIntegration/registry.ts` and
+`src-tauri/src/slicer_integration/mod.rs`), while the family id (`slicer_id`,
+e.g. `bambu`) stays the preset-format/adapter key shared by every flavour.
+
+**A row may only be added after the data directory, the config file name, the
+executable path and the process image name have been read off a real install,
+with the date.** Guessed rows are indistinguishable from verified ones once they
+are in the table.
+
+### Bambu Studio Beta (verified 2026-08-01, Windows 11 x64)
+
+| Item | Value |
+|---|---|
+| Data directory | `%APPDATA%\BambuStudioBeta\` |
+| Config file | `BambuStudio.conf` — **not** `BambuStudioBeta.conf` |
+| `app.version` | `02.08.01.55` |
+| `app.preset_folder` | `2572316032` (signed in) |
+| `app.sync_user_preset` | `True` |
+| Vendor library | `system\BBL.json` version `02.08.00.04`; only the `BBL` vendor |
+| Executable | `C:\Program Files\Bambu Studio\bambu-studio.exe`, FileVersion `02.08.01.55` |
+| Process image name | `bambu-studio.exe` |
+| macOS path | **UNVERIFIED** — no macOS machine available; deliberately absent |
+
+The config file name is decoupled from the directory name. Deriving it (as
+`{data_dir_name}.conf`) leaves the config unread, which makes the active preset
+folder unknown; the previous code then fell back to `default` and would have
+targeted the empty `user\default` instead of the account folder holding the
+user's presets.
+
+**The Beta replaced the release binary in the same folder.** On the inspected
+machine there is exactly one Bambu executable, at the release path, reporting
+the Beta's version, running under the release's process image name. Two
+consequences, both encoded:
+
+- The executable cannot tell the flavours apart, so a flavour is reported
+  because its **data directory** exists. An executable-only entry is emitted at
+  most once per family, for the default flavour, and only when no flavour of
+  that family has a data directory — otherwise a release-only machine would show
+  a phantom Beta.
+- Running-detection is family-wide (`family_process_names`), so the
+  refuse-while-open guard covers both flavours. That is also the conservative
+  reading while one binary serves both.
+
+### Stale data directories
+
+Same machine, same date: the release directory `%APPDATA%\BambuStudio\` was last
+written 2026-07-18 (config `02.07.01.62`, `preset_folder` empty,
+`sync_user_preset` `False`, `user\default\filament` empty), while the Beta
+directory's config was written 2026-08-01. Both are real; only one is in use.
+
+Because `02.07.` matches a `directInstallVerified` entry, the stale directory
+used to be reported as a fully verified install and would have accepted an
+install, verified it, and reported success into a folder the running slicer has
+not opened since July. Detection now sorts a family's installs by config write
+time, names the newer sibling on the older rows (`superseded_by`), and never
+hides either — a genuine side-by-side setup stays visible.
+
+### Choosing the account folder
+
+`app.preset_folder` names it. Empty string means `default` (verified on the
+signed-out release install). When the config **cannot be read**, or names a
+folder that is not there, **no location is marked active** and a note says so —
+the previous silent fallback to `default` is what turns a config-read failure
+into a write aimed at the wrong folder.
+
+Two flavours of one family both have a `default` account folder, so an account
+id alone does not identify a directory. Every scan/install/backup call carries
+the flavour id. Without one the native side resolves the account folder across
+the family and refuses (`AMBIGUOUS_INSTALL`) when more than one flavour has it,
+naming both candidates, rather than guessing.
+
+### Cloud sync observed
+
+`sync_user_preset = True` and the account folder is bulk-rewritten. On
+2026-08-01 all 501 preset `.json`/`.info` pairs in
+`user\2572316032\filament` carried write times inside a three-second window
+right after launch; a later read of the same folder found **one** preset left
+(the user's own hand-saved one). A preset installed into an account folder is
+live data the slicer owns. The mitigations are unchanged and correct: warn on a
+cloud-linked location, take a verified backup before writing, and offer
+re-verification afterwards. Nothing here claims a preset can survive a sync.
+
+---
+
 ## Calibrated-field mapping (Orca family, all five slicers)
 
 Field names verified against real presets from all five slicers:
 
-| PerfectFit result | Preset key | Unit/format |
+| Trim result | Preset key | Unit/format |
 |---|---|---|
 | Nozzle temperature | `nozzle_temperature` | °C, string array per extruder |
 | First-layer temp | `nozzle_temperature_initial_layer` | °C, string array |
@@ -232,7 +320,7 @@ Notes:
   if the base has it `"0"`/absent (verified semantics in OrcaSlicer UI and presets).
 - Bed temperature keys are plate-specific in this family
   (`hot_plate_temp`, `textured_plate_temp`, `cool_plate_temp`, … + `_initial_layer`
-  variants) — PerfectFit does not calibrate bed temp per plate, so v1 does **not**
+  variants) — Trim does not calibrate bed temp per plate, so v1 does **not**
   patch bed temperature.
 
 ## Unverified items (kept out of default behavior)
@@ -241,8 +329,24 @@ Notes:
 - Linux paths and native slicer integration behavior (Linux desktop packages are built, but profile detection/install is not yet verified).
 - Whether each slicer tolerates a missing `.info` for a new preset (observed existing
   presets without sidecars in Orca-Flashforge, so likely; we always write one anyway).
-- Bambu Studio cloud re-sync behavior for presets written into an account dir.
 - Older/newer slicer versions than the ones listed above.
+- **Bambu Studio Beta on macOS.** `~/Library/Application Support/BambuStudioBeta`
+  is plausible but was not inspected, so the Beta row carries no macOS candidate.
+- **Orca nightly builds and Orca forks.** No Orca install existed on the
+  inspected machine, so no nightly/fork flavour rows were added. Whether they use
+  a distinct data directory name or share `OrcaSlicer` is unknown.
+- **A true side-by-side Bambu install** (release and Beta as two separate
+  binaries). On the inspected machine the Beta replaced the release binary at the
+  same path, so only the shared-executable case is verified. The second
+  executable path and process name cannot be added until someone has seen them.
+- **Direct install on Bambu Studio 02.08.** Layout, config schema, system library
+  layout and preset/`.info` schema were verified read-only; no preset has been
+  generated or installed against that version, so `directInstallVerified` stays
+  false until `SLICER_PROFILE_TEST_MATRIX.md` records a pass.
+- Whether Bambu Studio 2.8 still ignores a preset with no `filament_id` the way
+  2.7.x did. The Beta's own Save-As wrote such a preset into the account folder,
+  so the 2.7-era claim is not established for 2.8. Minting a fresh id is safe
+  either way, so no behaviour changed on this.
 - `flash studio.exe` vs legacy `Orca-Flashforge.exe` executable naming across
   Flashforge versions.
 
@@ -251,5 +355,12 @@ Notes:
 - Direct filesystem inspection, 2026-07-19, Windows 11 Pro x64, all five slicers
   installed with real user presets (sanitized copies in
   `tests/slicerIntegration/fixtures/`).
-- OrcaSlicer wiki (cloned `SoftFever/OrcaSlicer.wiki.git` during earlier PerfectFit
+- Direct read-only inspection, 2026-08-01, Windows 11 x64: `%APPDATA%\BambuStudio`
+  and `%APPDATA%\BambuStudioBeta` (directory listings, both `.conf` files,
+  `user\` trees, `system\BBL.json`), `C:\Program Files\Bambu Studio\bambu-studio.exe`
+  version resource, and `tasklist`. Nothing was written. The layouts are
+  reproduced as synthetic trees in the `discovery.rs` tests and as fabricated
+  detection payloads in `tests/slicerIntegration/discovery.test.ts`; no automated
+  test reads a real slicer configuration.
+- OrcaSlicer wiki (cloned `SoftFever/OrcaSlicer.wiki.git` during earlier Trim
   research) for calibration semantics.

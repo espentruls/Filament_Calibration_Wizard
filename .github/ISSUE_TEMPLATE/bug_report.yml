@@ -1,5 +1,5 @@
 name: "Bug report"
-description: "Report a reproducible problem with PerfectFit"
+description: "Report a reproducible problem with Trim"
 title: "[Bug]: "
 labels:
   - "bug"
@@ -7,7 +7,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for helping improve PerfectFit!
+        Thanks for helping improve Trim!
 
         Use this form for problems with the application itself, including crashes, incorrect behavior, broken controls, installation failures, or instructions that do not match the selected slicer.
 
@@ -21,7 +21,7 @@ body:
       options:
         - label: "I searched existing issues and did not find the same problem."
           required: true
-        - label: "I am using the latest available version of PerfectFit."
+        - label: "I am using the latest available version of Trim."
           required: true
         - label: "I can reproduce the problem, or I have explained why it cannot be reproduced consistently."
           required: true
@@ -29,7 +29,7 @@ body:
   - type: input
     id: app-version
     attributes:
-      label: "PerfectFit version"
+      label: "Trim version"
       description: "The version is shown in the application or on the GitHub release page."
       placeholder: "Example: v0.1.0"
     validations:
@@ -120,7 +120,7 @@ body:
       label: "Steps to reproduce"
       description: "Provide the exact sequence that causes the problem."
       placeholder: |
-        1. Open PerfectFit
+        1. Open Trim
         2. Select Orca Slicer
         3. Open Pressure Advance
         4. Click...

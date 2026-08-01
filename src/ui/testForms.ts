@@ -263,7 +263,7 @@ export function spoolConditionCallout(material: MaterialPreset): CoachCallout | 
     );
   } else {
     body.push(
-      `PerfectFit has no vendor drying schedule to quote for ${material.label}. Its own material notes carry one, and a schedule printed on the spool beats both.`
+      `Trim has no vendor drying schedule to quote for ${material.label}. Its own material notes carry one, and a schedule printed on the spool beats both.`
     );
   }
 
@@ -344,7 +344,7 @@ export function chamberOozeCallout(
         : `Chamber: ${material.label} wants one, and this profile does not record one`,
       body: [
         suggestion.headline,
-        ...(statesNone ? [] : ['If your printer does heat its chamber, fill in “Max chamber temp” and “Heated chamber” on its printer profile (Printers → edit → Advanced machine specs) and this step will name a number. Until then PerfectFit says nothing about a chamber it has no evidence exists.']),
+        ...(statesNone ? [] : ['If your printer does heat its chamber, fill in “Max chamber temp” and “Heated chamber” on its printer profile (Printers → edit → Advanced machine specs) and this step will name a number. Until then Trim says nothing about a chamber it has no evidence exists.']),
         `Printing without a heated chamber leaves you less room to drop the nozzle temperature than someone printing the same spool inside one. The normal cost of a cooler ${material.label} nozzle is weaker layer bonds, and a warm chamber is what pays that back — it keeps the layer below near its bonding window while the next one lands.`,
         'So with no chamber recorded, treat the cool end of the tower with more suspicion, and snap-test before you commit to it.'
       ]
@@ -380,7 +380,7 @@ export function chamberOozeCallout(
  * invisibly). Saying only the first would trade visible ooze for invisible
  * delamination, which is the worse failure.
  *
- * Null for materials PerfectFit has no vendor window for.
+ * Null for materials Trim has no vendor window for.
  */
 export function temperatureOozeCallout(
   material: MaterialPreset, rungs: number[]
@@ -477,7 +477,7 @@ export function oozeLeverCallout(args: {
   };
 }
 
-/** Materials whose aux-hotend use PerfectFit can positively source from the vendor. */
+/** Materials whose aux-hotend use Trim can positively source from the vendor. */
 const AUX_VENDOR_RECOMMENDED = new Set(['ABS', 'ASA']);
 
 /**
@@ -497,7 +497,7 @@ export function flowMethodCallouts(ctx: TestCtx): CoachCallout[] {
     id: 'flow-visual', tone: 'info',
     title: 'This test is judged by eye, not with calipers — and that is deliberate',
     body: [
-      'Every flow method PerfectFit offers is scored on top-surface quality: gaps between lines, ridges, and how a fingernail drags. Nothing is measured with calipers, and that is exactly what keeps shrinkage out of the answer — shrinkage scales a whole part uniformly and does not change the ratio of deposited volume to swept volume inside a layer.',
+      'Every flow method Trim offers is scored on top-surface quality: gaps between lines, ridges, and how a fingernail drags. Nothing is measured with calipers, and that is exactly what keeps shrinkage out of the answer — shrinkage scales a whole part uniformly and does not change the ratio of deposited volume to swept volume inside a layer.',
       'The alternative is a trap worth naming. Calibrate flow by measuring a single wall instead, and a cooled ABS wall reads roughly 0.3–0.7% thin from shrinkage alone. You would read that as under-extrusion, raise the flow ratio to correct it, and bake permanent over-extrusion into the profile — which then corrupts the shrinkage step downstream. If you ever use a measured method, divide the shrinkage back out first.'
     ]
   });
@@ -1075,7 +1075,7 @@ const paController: TestController = {
 
 /**
  * Entry-time caution when a retraction tower is planned past the distance
- * PerfectFit will install for a flexible filament.
+ * Trim will install for a flexible filament.
  *
  * A warning, not an error: an expert may still deliberately explore past the
  * cap. But they are told the consequence BEFORE the print, instead of finding
@@ -1088,7 +1088,7 @@ export function flexibleRetractionEntryIssues(
   if (!material.flexible || !Number.isFinite(endMm) || endMm <= FLEXIBLE_RETRACTION_MAX_MM) return [];
   return [{
     level: 'warning',
-    message: `Flexible filament: PerfectFit will not install a retraction above ${FLEXIBLE_RETRACTION_MAX_MM} mm. Testing past it wastes a print — and grinding ${material.label} in the extruder is how jams start.`
+    message: `Flexible filament: Trim will not install a retraction above ${FLEXIBLE_RETRACTION_MAX_MM} mm. Testing past it wastes a print — and grinding ${material.label} in the extruder is how jams start.`
   }];
 }
 
@@ -1249,7 +1249,7 @@ const retractionController: TestController = {
     // the write path errors rather than silently rewriting, so both layers
     // tell the same story.
     if (ctx.material.flexible && calc.rounded > FLEXIBLE_RETRACTION_MAX_MM) {
-      warnings.push(`${calc.rounded} mm exceeds the ${FLEXIBLE_RETRACTION_MAX_MM} mm limit PerfectFit applies to flexible filament (${ctx.material.label}). Long retractions pull soft filament into the cold zone and jam the extruder — PerfectFit will refuse to install this value. Use the lowest acceptable distance at or under ${FLEXIBLE_RETRACTION_MAX_MM} mm.`);
+      warnings.push(`${calc.rounded} mm exceeds the ${FLEXIBLE_RETRACTION_MAX_MM} mm limit Trim applies to flexible filament (${ctx.material.label}). Long retractions pull soft filament into the cold zone and jam the extruder — Trim will refuse to install this value. Use the lowest acceptable distance at or under ${FLEXIBLE_RETRACTION_MAX_MM} mm.`);
     }
     if (result.stillStringyAtMax) {
       warnings.push('Stringing persisted at max retraction — dry the filament and consider a cooler temperature before trusting this value.');

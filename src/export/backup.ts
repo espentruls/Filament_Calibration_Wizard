@@ -8,10 +8,20 @@ import { idb, putAllAtomic } from '../storage/db';
 // purpose: import/export must not drag the engine layer in behind it.
 import { carriesSessionData } from '../automatedCalibration/sessionManager';
 
+/**
+ * The marker every export file carries, and the only thing import checks a file
+ * by. NOT branding: the app was renamed to Trim in 3.0.0 and this string
+ * deliberately did not change, because every backup a 1.x or 2.x user has
+ * already saved to disk carries the old value — changing it would make Trim
+ * reject its own users' backups as "not an export file". New exports keep
+ * writing it so a file stays readable by older versions too.
+ */
+const APP_MARKER = 'perfectfit-filament-calibration-wizard' as const;
+
 /** Serialize one project (with its printer profile embedded) for sharing. */
 export async function exportProject(p: CalibrationProject, printer?: PrinterProfile): Promise<string> {
   const file: BackupFile = {
-    app: 'perfectfit-filament-calibration-wizard',
+    app: APP_MARKER,
     schemaVersion: SCHEMA_VERSION,
     exportedAt: new Date().toISOString(),
     projects: [p],
@@ -22,7 +32,7 @@ export async function exportProject(p: CalibrationProject, printer?: PrinterProf
 
 export async function exportAll(includePhotos: boolean): Promise<string> {
   const file: BackupFile = {
-    app: 'perfectfit-filament-calibration-wizard',
+    app: APP_MARKER,
     schemaVersion: SCHEMA_VERSION,
     exportedAt: new Date().toISOString(),
     projects: await listProjects(),
@@ -129,8 +139,8 @@ export async function importBackup(json: string, options: ImportOptions = {}): P
     return emptyResult(false, 'That file is not valid JSON.');
   }
   const file = parsed as Partial<BackupFile>;
-  if (file.app !== 'perfectfit-filament-calibration-wizard' || !Array.isArray(file.projects)) {
-    return emptyResult(false, 'That file doesn\'t look like a PerfectFit export (missing app marker or projects).');
+  if (file.app !== APP_MARKER || !Array.isArray(file.projects)) {
+    return emptyResult(false, 'That file doesn\'t look like a Trim export (missing app marker or projects).');
   }
   if ((file.schemaVersion ?? 0) > SCHEMA_VERSION) {
     return emptyResult(false, `This file was made by a newer app version (schema ${file.schemaVersion} > ${SCHEMA_VERSION}). Update the app first.`);

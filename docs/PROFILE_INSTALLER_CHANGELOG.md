@@ -95,7 +95,7 @@ Key design-driving discoveries:
   save-dialog export (`tauri-plugin-dialog`). All frontend-supplied names are
   validated (`security.rs`): traversal, separators, reserved names, extension
   allowlist; writes only ever resolve inside slicer `user/*/filament` dirs or
-  the PerfectFit backup root.
+  the Trim backup root.
 - **TS engine** (`src/slicerIntegration/`): shared Orca-family parser +
   clone-and-patch (`orcaFamily.ts`), five thin adapters over a common base
   with per-slicer quirks, deterministic recommendations with reason lists,

@@ -67,7 +67,7 @@ export interface ProvenanceRecord {
 }
 
 /** A working filament profile a session mutates as results come in. Normalized
- *  PerfectFit keys — slicer-specific key mapping happens through the existing
+ *  Trim keys — slicer-specific key mapping happens through the existing
  *  `src/slicerIntegration/adapters`, never here.
  *
  *  `values` is deliberately FLAT (one slot per setting), so a single profile can

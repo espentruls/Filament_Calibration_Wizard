@@ -3,6 +3,13 @@
  * Settings live in localStorage (small, synchronous needs).
  */
 
+/**
+ * NOT branding — the database's identity. The app was renamed from
+ * "PerfectFit X2D" to "Trim" in 3.0.0 and this name deliberately did not change:
+ * IndexedDB opens databases BY NAME, so renaming it would open a new, empty
+ * database and every existing project, printer and photo would silently vanish.
+ * It stays as it is for as long as anyone might still have 2.x data.
+ */
 const DB_NAME = 'perfectfit-db';
 const DB_VERSION = 1;
 

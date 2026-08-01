@@ -28,6 +28,46 @@ export async function currentPlatform(): Promise<Platform> {
     : 'windows';
 }
 
+/**
+ * Order installations so the one the user is actually running comes first.
+ *
+ * Within a family, the install whose config was written most recently wins;
+ * an unknown timestamp sorts last, because "we could not read it" is not
+ * evidence of recency. Families keep their registry order. Pure so it can be
+ * tested without a desktop shell.
+ *
+ * This ordering is not cosmetic. A stale data directory can carry a version
+ * that matches a `directInstallVerified` entry while the running build uses a
+ * different folder entirely, so "the first install of this family" is exactly
+ * the wrong install to default to.
+ */
+export function rankInstallsByRecency(installs: SlicerInstallation[]): SlicerInstallation[] {
+  const familyOrder: IntegrationSlicerId[] = [];
+  for (const i of installs) if (!familyOrder.includes(i.slicerId)) familyOrder.push(i.slicerId);
+  return [...installs].sort((a, b) => {
+    if (a.slicerId !== b.slicerId) {
+      return familyOrder.indexOf(a.slicerId) - familyOrder.indexOf(b.slicerId);
+    }
+    const at = a.confModifiedAt, bt = b.confModifiedAt;
+    if (at === bt) return 0;
+    if (at === null) return 1;
+    if (bt === null) return -1;
+    return bt - at;
+  });
+}
+
+/**
+ * Cloud-sync caution, worded from what the config actually says.
+ *
+ * Observed on a real signed-in install: the whole account preset folder is
+ * rewritten on launch — 1002 files in three seconds on 2026-08-01, and by the
+ * next read only one preset remained. A preset installed there is therefore
+ * live data the slicer owns, not a file we placed and can assume stays put.
+ */
+function cloudSyncNote(displayName: string): string {
+  return `Preset cloud sync is on for ${displayName} (sync_user_preset in its config). It rewrites the account preset folder when it syncs, so a preset installed there can be changed or removed later. The files being replaced are backed up before anything is written.`;
+}
+
 /** Detect installed slicers (desktop only; returns [] in the browser). */
 export async function detectInstallations(): Promise<SlicerInstallation[]> {
   if (!bridge.isDesktop()) return [];
@@ -39,8 +79,14 @@ export async function detectInstallations(): Promise<SlicerInstallation[]> {
     const id = r.slicer_id as IntegrationSlicerId;
     const desc = SLICER_DESCRIPTORS[id];
     if (!desc) continue;
+    // The flavour key, not the family key: two Bambu Studio installs both have
+    // a `default` account folder, so a location id keyed on the family would
+    // address two different directories with one string.
+    const variantId = r.variant_id || id;
+    const displayName = r.variant_label || desc.displayName;
     const locations: UserDataLocation[] = r.user_locations.map(l => ({
-      id: `${id}:${l.account_id}`,
+      id: `${variantId}:${l.account_id}`,
+      variantId,
       path: l.path,
       accountId: l.account_id,
       active: l.active,
@@ -49,21 +95,43 @@ export async function detectInstallations(): Promise<SlicerInstallation[]> {
     }));
     const confidence: SlicerInstallation['confidence'] =
       r.conf_version && r.data_dir ? 'verified' : r.data_dir ? 'likely' : 'unknown';
+    const notes = [...r.notes];
+    const cloudSyncEnabled = r.sync_user_preset ?? null;
+    if (cloudSyncEnabled === true && locations.some(l => l.cloudLinked)) {
+      notes.push(cloudSyncNote(displayName));
+    }
     out.push({
-      id: `${id}@${r.conf_version ?? 'unknown'}`,
+      id: `${variantId}@${r.conf_version ?? 'unknown'}`,
       slicerId: id,
-      displayName: desc.displayName,
+      variantId,
+      displayName,
+      isDefaultVariant: r.is_default_variant ?? true,
       version: r.conf_version,
       executablePath: r.executable_path,
       dataDirectory: r.data_dir,
+      confModifiedAt: r.conf_modified_at ?? null,
+      cloudSyncEnabled,
+      supersededBy: r.superseded_by ?? null,
       userDataLocations: locations,
       source: 'automatic',
       confidence,
       capabilities: capabilitiesFor(id, r.conf_version, platform, true, flags.unsupportedVersionOverride),
-      notes: r.notes
+      notes
     });
   }
-  return out;
+  return rankInstallsByRecency(out);
+}
+
+/**
+ * The location a UI should preselect for one installation, or null when it must
+ * ask. Null is a real answer: when the config never named an active preset
+ * folder, picking the first directory found is how a preset ends up in an empty
+ * folder the running slicer never reads.
+ */
+export function chooseDefaultLocation(inst: SlicerInstallation): UserDataLocation | null {
+  const active = inst.userDataLocations.find(l => l.active);
+  if (active) return active;
+  return inst.userDataLocations.length === 1 ? inst.userDataLocations[0] : null;
 }
 
 export interface ProfileScanResult {
@@ -81,7 +149,11 @@ export async function scanProfiles(
   location: UserDataLocation
 ): Promise<ProfileScanResult> {
   const adapter = getAdapter(slicerId);
-  const rawFiles = await bridge.scanSlicerProfiles(slicerId, location.accountId);
+  // The flavour travels with the location: without it the native side has to
+  // resolve the account folder across every install of the family, and an
+  // account name both installs have (they both have `default`) is refused
+  // rather than guessed.
+  const rawFiles = await bridge.scanSlicerProfiles(slicerId, location.accountId, location.variantId);
   const profiles: DetectedFilamentProfile[] = [];
   const parsed = new Map<string, ParsedFilamentProfile>();
   const parseFailures: { fileName: string; error: string }[] = [];

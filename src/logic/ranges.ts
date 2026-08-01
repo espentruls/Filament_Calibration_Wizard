@@ -41,6 +41,72 @@ export function resolveNozzle(
 }
 
 /**
+ * How many PHYSICAL nozzles a printer profile declares, and whether the app is
+ * entitled to show per-nozzle machinery for it.
+ *
+ * This exists because "how many nozzles?" has three answers, not two, and
+ * because the tempting fourth source of the number is wrong. A filament
+ * preset's value-slot count is NOT a nozzle count: a single-nozzle Bambu P2S
+ * presents three value slots, which are the Standard / High Flow / E3D High
+ * Flow hotend variants of one physical nozzle, while a two-nozzle X2D presents
+ * four or six depending on the bundle version. Slot count carries no nozzle
+ * information in either direction, so nothing here may be derived from it — the
+ * only sound source is the printer profile's own `nozzles` list.
+ */
+export type NozzleTopologyKind = 'single' | 'multi' | 'unknown';
+
+export interface NozzleTopology {
+  kind: NozzleTopologyKind;
+  /** Physical nozzles. 0 when there is no printer profile to ask. */
+  count: number;
+  /** The declared nozzles, empty when the profile lists none. */
+  nozzles: NozzleProfile[];
+  /**
+   * True only when the profile declares two or more physical nozzles WITH their
+   * feed paths — i.e. when a per-nozzle choice is a real, answerable question.
+   * A single-nozzle machine must never be shown dual-nozzle machinery, and
+   * neither must a machine we merely suspect has two.
+   */
+  perNozzle: boolean;
+  /** One sentence when the profile is ambiguous or self-contradictory. */
+  note: string | null;
+}
+
+export function nozzleTopology(printer?: PrinterProfile): NozzleTopology {
+  if (!printer) {
+    return {
+      kind: 'unknown', count: 0, nozzles: [], perNozzle: false,
+      note: 'No printer profile is selected, so PerfectFit cannot say how many nozzles this machine has.'
+    };
+  }
+  const nozzles = printer.nozzles ?? [];
+  const declared = printer.extruderCount;
+  if (nozzles.length >= 2) {
+    const disagrees = typeof declared === 'number' && declared !== nozzles.length;
+    return {
+      kind: 'multi', count: nozzles.length, nozzles, perNozzle: true,
+      note: disagrees
+        ? `This profile lists ${nozzles.length} nozzles but records ${declared} extruder(s). The nozzle list is what PerfectFit calibrates against — correct whichever is wrong in the printer profile.`
+        : null
+    };
+  }
+  if (nozzles.length === 1) {
+    return { kind: 'single', count: 1, nozzles, perNozzle: false, note: null };
+  }
+  // No nozzle list. An extruder count above one says there is more hardware
+  // here than the profile describes, but not which physical nozzle is which or
+  // how each is fed — and without the feed path there is nothing honest to
+  // suggest per nozzle. So this reads as unknown, not as a second nozzle.
+  if (typeof declared === 'number' && declared > 1) {
+    return {
+      kind: 'unknown', count: declared, nozzles: [], perNozzle: false,
+      note: `This profile records ${declared} extruders but lists no nozzles, so PerfectFit cannot tell them apart or say how each one is fed. Add them under Nozzles in the printer profile to calibrate one nozzle at a time.`
+    };
+  }
+  return { kind: 'single', count: 1, nozzles: [], perNozzle: false, note: null };
+}
+
+/**
  * Small badge text identifying the project's nozzle, shown next to the project
  * name. Null when the project has no nozzle choice worth showing.
  */

@@ -1,6 +1,7 @@
 import { h, clear, field, numberInput, issueList, confirmDialog, toast } from './dom';
 import { listPrinters, savePrinter, deletePrinter, listProjects, uid } from '../storage/store';
 import { validateNumber } from '../logic/validation';
+import { nozzleTopology } from '../logic/ranges';
 import {
   groupedPrinterSpecs, getPrinterSpec, specLabel, profileValuesFromSpec, PRINTER_DB_COUNT,
   isSpecRefreshAvailable, specChangesForProfile, refreshProfileFromDatabase
@@ -151,6 +152,9 @@ export async function renderPrinters(root: HTMLElement): Promise<void> {
     const unbackedLimits = p.databasePrinterId
       ? limitProvenance(getPrinterSpec(p.databasePrinterId)).filter(l => !l.fromDatabase && l.fallback !== undefined)
       : [];
+    // One definition of "how many nozzles", shared with the New Project screen
+    // and every suggestion, so the two screens cannot tell different stories.
+    const topo = nozzleTopology(p);
     return h('div', { class: 'card' },
       h('h3', {}, p.name),
       h('p', { class: 'proj-vals', style: 'gap:var(--s-2)' },
@@ -161,7 +165,7 @@ export async function renderPrinters(root: HTMLElement): Promise<void> {
         // DRIVE" placard would sit directly above a "BOWDEN FEED" nozzle panel
         // contradicting it. When there is more than one nozzle, the per-nozzle
         // panels below are the only statement about feed.
-        (p.nozzles?.length ?? 0) > 1
+        topo.perNozzle
           ? null
           : h('span', { class: 'placard' }, p.extruderType === 'direct' ? 'Direct drive' : 'Bowden'),
         p.databasePrinterId
@@ -177,7 +181,10 @@ export async function renderPrinters(root: HTMLElement): Promise<void> {
         ? h('p', { class: 'field-help', style: 'color:var(--warn)' },
             `⚠ ${unbackedLimits.map(l => l.label).join(' and ')} ${unbackedLimits.length === 1 ? 'is' : 'are'} not published in the database for this printer — the value shown is PerfectFit's conservative fallback, not a spec. Edit the profile and set your hardware's own rating.`)
         : null,
-      p.nozzles?.length ? nozzlePanels(p.nozzles) : null,
+      // Two panels are for two PHYSICAL nozzles. A one-entry nozzle list is a
+      // single-nozzle machine and gets the ordinary placard above instead.
+      topo.perNozzle ? nozzlePanels(topo.nozzles) : null,
+      topo.note ? h('p', { class: 'field-help', style: 'color:var(--warn)' }, `⚠ ${topo.note}`) : null,
       p.notes ? h('p', { class: 'field-help' }, p.notes) : null,
       refreshCallout(root, p),
       h('div', { class: 'proj-actions' },
@@ -636,6 +643,8 @@ function openEditor(root: HTMLElement, existing: PrinterProfile | null): void {
         h('h4', { style: 'margin:0 0 var(--s-1)' }, 'Nozzles (dual-nozzle printers)'),
         h('p', { class: 'field-help' },
           'For machines with two physical nozzles (e.g. Bambu Lab X2D). Each calibration project then picks which nozzle it calibrates, and suggestions adapt to that nozzle\'s feed path.'),
+        h('p', { class: 'field-help' },
+          'List PHYSICAL nozzles only — one row per nozzle you can fit a hotend into. This is not the number of value slots a filament preset shows: a single-nozzle Bambu P2S shows three (Standard, High Flow and E3D High Flow hotend variants of the same nozzle), and an AMS or MMU feeds many filaments through one nozzle. Leave the list empty for any machine with one nozzle.'),
         nozzleHost,
         h('div', { class: 'btn-row' },
           h('button', {

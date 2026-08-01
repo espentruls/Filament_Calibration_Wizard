@@ -1,5 +1,94 @@
 # Changelog
 
+## 3.0.0 - 2026-08-01
+
+**PerfectFit X2D is now Trim.** In aviation, trimming is adjusting the controls
+so the aircraft holds steady without constant correction — which is exactly what
+calibrating a filament profile does, and it belongs to the instrument-panel
+language the interface already speaks.
+
+The old name claimed a printer. The app works with single-nozzle machines,
+dual-nozzle ones (Bambu Lab X2D), and multi-nozzle ones (H2D, H2C), and
+per-nozzle calibration — not the X2D specifically — is what distinguishes it, so
+naming one model was wrong. H2D and H2C layouts are modelled from published
+specifications and have not been tested on the actual machines.
+
+This is still a fork of
+[PerfectFit](https://github.com/tayloraaron078-tech/Filament_Calibration_Wizard)
+by Aaron Taylor, under AGPL-3.0. The rename changes nothing about that.
+
+The version goes to **3.0.0** because both the name and the bundle identifier
+changed, and the identifier is the identity the operating system installs and
+files data under. That is a user-visible break, and the number says so.
+
+### The new identity
+
+| | 2.0.0 | 3.0.0 |
+|---|---|---|
+| Product name | PerfectFit X2D | Trim |
+| Binary | `PerfectFitX2D` | `Trim` |
+| Bundle identifier | `io.github.espentruls.perfectfit-x2d` | `io.github.espentruls.trim` |
+
+**This build does not carry anything over from 2.0.0, and does not need to.**
+2.0.0 was published but never installed by anyone, so there is no 2.0.0 data
+anywhere to move. Trim starts fresh. Nothing from an older install is deleted
+either — because the two identities can coexist, Trim installs alongside a 2.0.0
+build rather than over it, and anything that build had written stays on disk
+under the old identifier, untouched.
+
+Browser and Docker deployments are unaffected regardless: their storage is keyed
+to the site origin, which the rename does not touch.
+
+### A note for whoever changes the identifier next
+
+Worth writing down before it costs somebody their projects, because it is not
+obvious: on **Windows and Linux**, the bundle identifier decides where the app's
+data lives — *all* of it, not just its caches. Tauri forces the webview's data
+directory to `LocalData/<identifier>` on those platforms, so
+`%LOCALAPPDATA%\<identifier>\EBWebView\Default` holds IndexedDB and Local
+Storage — every project, printer, photo, setting and autosave — while
+`{data dir}/<identifier>` holds the slicer preset backups.
+
+The IndexedDB origin (`http://tauri.localhost`) does NOT depend on the
+identifier, so those stores are perfectly portable. Nothing moves them, though.
+Change the identifier again and the app comes up empty with the user's data
+stranded in a folder it no longer looks in. 3.0.0 got away with it only because
+nothing was installed on 2.0.0; the next change needs a data migration shipped
+with it. The constant is `APP_IDENTIFIER` in `src-tauri/src/lib.rs`, where this
+is written down again, and a test fails if it drifts from tauri.conf.json.
+
+### What deliberately did NOT get renamed
+
+Several strings look like the old branding and are actually the identity of
+stored data. Renaming them would abandon it — and with no migration in the
+codebase, nothing would catch it. They were left alone and are now commented to
+say why:
+
+- `perfectfit-db` — the IndexedDB database name. IndexedDB opens databases by
+  name; a new name is a new, empty database.
+- `perfectfit.settings`, `perfectfit.autosave`, and the `perfectfit.` prefix
+  every localStorage key uses.
+- `perfectfit-filament-calibration-wizard` — the marker inside every exported
+  backup file, and the only thing import checks a file by. Changing it would
+  make Trim reject its own users' 1.x and 2.x export files, silently orphaning
+  every backup anyone has saved.
+- `perfect_fit_project_id` in slicer backup manifests already written to disk.
+- `; PerfectFit pressure advance` — the marker used to find and REPLACE a
+  previously injected line in a preset's start G-code. Rename it and
+  regenerating a profile appends a second pressure-advance command instead of
+  replacing the first.
+
+### Changed
+
+- Product name, window title, header logo, page title, PWA manifest, service
+  worker cache name, default export filenames, and the release workflow's
+  release name, notes and artifact names all now say Trim.
+- README and the release notes describe the app as supporting single-nozzle,
+  dual-nozzle and multi-nozzle printers, with per-nozzle calibration as the
+  distinguishing feature, rather than as an X2D-specific tool.
+- "X2D" remains throughout the printer database, calibration guidance and test
+  fixtures, where it is the name of a Bambu Lab printer model and not branding.
+
 ## 2.0.0 - 2026-07-27
 
 **First release of PerfectFit X2D — a fork.** It builds on upstream

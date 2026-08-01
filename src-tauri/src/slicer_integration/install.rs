@@ -161,8 +161,8 @@ pub fn install_core(
 
     // --- temp write + verify -------------------------------------------------
     let stamp = now_unix();
-    let temp_json = dest_dir.join(format!(".perfectfit-{stamp}.json.tmp"));
-    let temp_info = dest_dir.join(format!(".perfectfit-{stamp}.info.tmp"));
+    let temp_json = dest_dir.join(format!(".trim-{stamp}.json.tmp"));
+    let temp_info = dest_dir.join(format!(".trim-{stamp}.info.tmp"));
     let temps = [temp_json.clone(), temp_info.clone()];
 
     if let Err(e) = write_and_verify_temp(&temp_json, preset_json)
@@ -257,8 +257,9 @@ pub fn install_generated_profile(
     project_id: String,
     allow_replace: bool,
     skip_process_check: bool,
+    variant_id: Option<String>,
 ) -> Result<RawInstallOutcome, String> {
-    let dest_dir = match discovery::filament_dir(&slicer_id, &account_id) {
+    let dest_dir = match discovery::filament_dir(&slicer_id, variant_id.as_deref(), &account_id) {
         Ok(d) => d,
         Err(e) => {
             let code = if e.starts_with("USER_DATA_NOT_FOUND") {
@@ -279,9 +280,10 @@ pub fn install_generated_profile(
     }
 
     let backups_root = backup::backups_root(&app)?;
-    let data_root = security::platform_data_root()?;
-    let slicer = super::descriptor(&slicer_id)?;
-    let allowed_restore_root = data_root.join(slicer.data_dir_name);
+    // The rollback root has to be the install flavour the destination belongs
+    // to. Taking the family default instead would make a rollback inside a beta
+    // install fail the escape check and leave a half-finished install in place.
+    let allowed_restore_root = discovery::variant_root_for_path(&slicer_id, &dest_dir)?;
 
     Ok(install_core(
         &dest_dir,
@@ -309,7 +311,9 @@ pub fn verify_generated_profile(path: String, expected_json: String) -> Result<V
     let p = PathBuf::from(&path);
     let data_root = security::platform_data_root()?;
     let mut allowed = false;
-    for s in super::SLICERS {
+    // Every install flavour's data directory, so a file inside a beta install
+    // is re-verifiable too.
+    for s in super::SLICER_VARIANTS {
         let root = data_root.join(s.data_dir_name);
         if root.is_dir() && security::ensure_under(&root, &p).is_ok() {
             allowed = true;
@@ -373,7 +377,7 @@ pub fn resolve_export_path(picked: &Path) -> Result<PathBuf, String> {
     let candidate = PathBuf::from(with_json);
     if candidate.exists() {
         return Err(format!(
-            "{} has no file extension and {} already exists. PerfectFit will not overwrite a file you did not pick — save again with a name ending in .json.",
+            "{} has no file extension and {} already exists. Trim will not overwrite a file you did not pick — save again with a name ending in .json.",
             picked.display(),
             candidate.display()
         ));
@@ -472,7 +476,7 @@ mod tests {
     impl TempRoot {
         fn new(tag: &str) -> Self {
             let dir = std::env::temp_dir().join(format!(
-                "perfectfit-test-{tag}-{}-{}",
+                "trim-test-{tag}-{}-{}",
                 std::process::id(),
                 now_unix()
             ));
@@ -616,7 +620,7 @@ mod tests {
         // Stand-in for a crash between "destination removed" and "replacement
         // on disk": the replacement is not there when the move runs. The
         // destructive step must not have happened yet.
-        let missing_temp = t.filament().join(".perfectfit-never-written.json.tmp");
+        let missing_temp = t.filament().join(".trim-never-written.json.tmp");
         let err = move_into_place(&missing_temp, &dest)
             .expect_err("move with no replacement present must fail");
         assert!(

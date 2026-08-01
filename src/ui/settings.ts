@@ -86,16 +86,16 @@ export function renderSettings(root: HTMLElement): void {
     ),
     h('div', { class: 'card' },
       h('h2', {}, 'App data backup (projects & printers)'),
-      h('p', { class: 'field-help' }, 'Exports/restores PerfectFit\'s OWN data: calibration projects, printer profiles, and settings, as a JSON file you keep. Everything lives in this browser\'s local storage — clearing site data deletes it, so export regularly. (Looking for your slicer preset backups? They\'re in the "Slicer profile backups" card below.)'),
+      h('p', { class: 'field-help' }, 'Exports/restores Trim\'s OWN data: calibration projects, printer profiles, and settings, as a JSON file you keep. Everything lives in this browser\'s local storage — clearing site data deletes it, so export regularly. (Looking for your slicer preset backups? They\'re in the "Slicer profile backups" card below.)'),
       h('div', { class: 'btn-row' },
         h('button', {
           class: 'btn btn-primary', onClick: async () => {
-            download(`perfectfit-backup-${new Date().toISOString().slice(0, 10)}.json`, await exportAll(false));
+            download(`trim-backup-${new Date().toISOString().slice(0, 10)}.json`, await exportAll(false));
           }
         }, '⭳ Export all data (no photos)'),
         h('button', {
           class: 'btn', onClick: async () => {
-            download(`perfectfit-backup-full-${new Date().toISOString().slice(0, 10)}.json`, await exportAll(true));
+            download(`trim-backup-full-${new Date().toISOString().slice(0, 10)}.json`, await exportAll(true));
           }
         }, '⭳ Export all data + photos'),
         h('button', { class: 'btn', onClick: () => restoreBackupPicker(() => { clear(root); renderSettings(root); }) }, '📥 Restore from backup')
@@ -157,6 +157,12 @@ function restoreBackupPicker(onDone: () => void): void {
  * Every localStorage key this app writes is namespaced with this prefix:
  * `perfectfit.settings`, `perfectfit.autosave`, `perfectfit.experimentalFeatures`
  * and `perfectfit.presetBackupFirstRunPrompt`.
+ *
+ * NOT branding. The app was renamed to Trim in 3.0.0 and the prefix stayed:
+ * these keys address a user's existing stored data, and renaming them would
+ * abandon it. It must also keep matching the keys in src/storage/store.ts —
+ * a prefix that drifts turns "clear this app's data" into a no-op that reports
+ * success while leaving everything behind.
  */
 const APP_STORAGE_PREFIX = 'perfectfit.';
 
@@ -166,7 +172,7 @@ const APP_STORAGE_PREFIX = 'perfectfit.';
  * `localStorage.clear()` empties the whole ORIGIN. The browser build can be
  * served next to anything else on the same host, so clearing the origin would
  * destroy data that isn't ours to delete. Walking the keys keeps the erase
- * confined to PerfectFit. Returns how many keys were removed.
+ * confined to Trim. Returns how many keys were removed.
  */
 export function clearAppLocalStorage(): number {
   const ours: string[] = [];
@@ -273,7 +279,7 @@ function experimentalCard(): HTMLElement {
     h('h2', {}, 'Experimental features'),
     h('div', { class: 'callout callout-warn' },
       h('p', { class: 'co-title' }, 'Unfinished instrumentation'),
-      h('p', {}, 'The slicer profile installer is experimental. PerfectFit backs up affected slicer files before any installation, and unverified slicer versions stay export-only.')),
+      h('p', {}, 'The slicer profile installer is experimental. Trim backs up affected slicer files before any installation, and unverified slicer versions stay export-only.')),
     mk('slicerProfileGeneration', 'Slicer profile generation', 'Create filament profiles from completed calibrations (clone a base profile, patch calibrated values).'),
     mk('automaticProfileInstallation', 'Automatic profile installation', 'Allow direct installation into verified slicer versions (desktop app only). Export always remains available.'),
     mk('advancedProfileSelection', 'Advanced profile selection', 'Show every detected profile with filters, raw JSON, and override options.'),
@@ -330,7 +336,7 @@ export async function restoreSlicerBackup(host: HTMLElement, b: bridge.RawBackup
   const name = slicerDisplayName(b.slicer_id as IntegrationSlicerId);
   const ok = await confirmDialog({
     title: 'Restore this backup?',
-    body: `Restores the ${name} files covered by “${b.installed_profile_name}” exactly as they were when this backup was made (${b.file_count} file(s)). Files this backup recorded as not-yet-existing will be removed. Close ${name} first — PerfectFit will refuse to restore while it is open.`,
+    body: `Restores the ${name} files covered by “${b.installed_profile_name}” exactly as they were when this backup was made (${b.file_count} file(s)). Files this backup recorded as not-yet-existing will be removed. Close ${name} first — Trim will refuse to restore while it is open.`,
     confirmLabel: 'Restore'
   });
   if (!ok) return;
@@ -363,9 +369,9 @@ export async function restoreSlicerBackup(host: HTMLElement, b: bridge.RawBackup
 export function slicerBackupsCard(): HTMLElement {
   const card = h('div', { class: 'card' },
     h('h2', {}, 'Slicer profile backups'),
-    h('p', { class: 'field-help' }, 'Backups of your SLICER\'s preset files (Orca/Bambu filament, printer, and process profiles) — separate from the app data backup above. Before installing a profile, PerfectFit backs up the affected slicer files with checksums; you can also snapshot your entire user preset library at any time. Restore puts the original files back exactly as they were.'));
+    h('p', { class: 'field-help' }, 'Backups of your SLICER\'s preset files (Orca/Bambu filament, printer, and process profiles) — separate from the app data backup above. Before installing a profile, Trim backs up the affected slicer files with checksums; you can also snapshot your entire user preset library at any time. Restore puts the original files back exactly as they were.'));
   if (!bridge.isDesktop()) {
-    card.append(h('p', { class: 'field-help' }, 'Available in the PerfectFit desktop app.'));
+    card.append(h('p', { class: 'field-help' }, 'Available in the Trim desktop app.'));
     return card;
   }
   const host = h('div', {});
@@ -429,7 +435,7 @@ export function slicerBackupsCard(): HTMLElement {
             onClick: async () => {
               const ok = await confirmDialog({
                 title: 'Delete this backup?',
-                body: 'The backed-up slicer files will no longer be restorable from PerfectFit.',
+                body: 'The backed-up slicer files will no longer be restorable from Trim.',
                 confirmLabel: 'Delete backup', danger: true
               });
               if (!ok) return;

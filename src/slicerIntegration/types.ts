@@ -46,6 +46,13 @@ export interface SlicerCapabilities {
 export interface UserDataLocation {
   /** Stable id used to address this location in scan/install commands. */
   id: string;
+  /**
+   * Install flavour this folder belongs to ('bambu' vs 'bambu-beta'). Two
+   * flavours of one family both have a `default` account folder, so the
+   * account id alone does not identify a directory — every scan/install/backup
+   * call carries this so the write cannot land in the other install.
+   */
+  variantId: string;
   /** Absolute directory, e.g. …\OrcaSlicer\user\default */
   path: string;
   /** Account id ("default" for the local, non-cloud directory). */
@@ -60,11 +67,33 @@ export interface UserDataLocation {
 
 export interface SlicerInstallation {
   id: string;
+  /** Family key — 'bambu' for both the release and the Beta. */
   slicerId: IntegrationSlicerId;
+  /** Install flavour key, e.g. 'bambu-beta'. Unique per data directory. */
+  variantId: string;
+  /** Flavour display name, e.g. 'Bambu Studio (Beta)'. */
   displayName: string;
+  /** False for a non-default flavour such as a beta build. */
+  isDefaultVariant: boolean;
   version: string | null;
   executablePath: string | null;
   dataDirectory: string | null;
+  /**
+   * Last-write time of this install's config file (unix seconds), or null when
+   * it could not be read. The signal for which install is actually in use.
+   */
+  confModifiedAt: number | null;
+  /**
+   * `sync_user_preset` from the config: the slicer synchronizes user presets
+   * with its cloud account. null when the config could not be read.
+   */
+  cloudSyncEnabled: boolean | null;
+  /**
+   * Display name of a sibling install of the same family whose config was
+   * written more recently. Set means a preset written here will not appear in
+   * the install the user is running — the UI must say so before installing.
+   */
+  supersededBy: string | null;
   userDataLocations: UserDataLocation[];
   source: 'automatic' | 'manual';
   confidence: 'verified' | 'likely' | 'unknown';

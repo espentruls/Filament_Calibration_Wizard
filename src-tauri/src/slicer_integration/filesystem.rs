@@ -1,6 +1,6 @@
 //! Read-only profile scanning. Never writes to slicer directories.
 
-use super::{descriptor, discovery, security};
+use super::discovery;
 use serde::Serialize;
 use std::path::Path;
 
@@ -100,9 +100,9 @@ fn scan_dir_depth(
 pub fn scan_slicer_profiles(
     slicer_id: String,
     account_id: String,
+    variant_id: Option<String>,
 ) -> Result<Vec<RawProfileFile>, String> {
-    let s = descriptor(&slicer_id)?;
-    let user_filament = discovery::filament_dir(&slicer_id, &account_id)?;
+    let user_filament = discovery::filament_dir(&slicer_id, variant_id.as_deref(), &account_id)?;
     let mut out = Vec::new();
 
     scan_dir(&user_filament, "user", Some(&account_id), None, true, &mut out);
@@ -112,8 +112,13 @@ pub fn scan_slicer_profiles(
     }
 
     // System vendor libraries: system/{Vendor}/filament/*.json
-    let data_root = security::platform_data_root()?;
-    let system_root = data_root.join(s.data_dir_name).join("system");
+    //
+    // Resolved from the install flavour the USER presets came from, never from
+    // the family default: pairing one flavour's user directory with another's
+    // system library would stamp the wrong preset-library version into every
+    // generated preset (the two Bambu Studio installs on the machine this was
+    // verified against ship library versions 02.07.00.08 and 02.08.00.04).
+    let system_root = discovery::variant_root_for_path(&slicer_id, &user_filament)?.join("system");
     if let Ok(rd) = std::fs::read_dir(&system_root) {
         for entry in rd.flatten() {
             let vendor_dir = entry.path();

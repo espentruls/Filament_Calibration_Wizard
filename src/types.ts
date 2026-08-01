@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// Core domain types for PerfectFit Filament Calibration Wizard
+// Core domain types for Trim Filament Calibration Wizard
 // ---------------------------------------------------------------------------
 
 export type SlicerId = 'orca' | 'bambu';
@@ -161,7 +161,7 @@ export type ChamberAdvice = 'hot' | 'ambient' | 'unknown';
 
 /**
  * Per-material chamber guidance. GUIDANCE, never a calibration step: a chamber
- * has no measurable optimum the way a temperature tower does, so PerfectFit
+ * has no measurable optimum the way a temperature tower does, so Trim
  * neither tests it nor writes it into a slicer preset. It only ever says what to
  * set, and refuses to say anything it cannot source.
  */
@@ -174,7 +174,7 @@ export interface MaterialChamberGuidance {
    */
   vendorC?: number;
   /**
-   * The highest chamber temperature PerfectFit will suggest for this material
+   * The highest chamber temperature Trim will suggest for this material
    * (°C). Absent means "no sourced ceiling", and no number is offered at all.
    * Every value carries its source in `src/data/materials.ts`.
    */
@@ -263,6 +263,13 @@ export interface CalibrationProject {
    * absent on older projects). Present once the user backed up or dismissed.
    */
   presetBackup?: PresetBackupRecord;
+  /**
+   * Present only when the user was warned that this filament and this nozzle
+   * are a poor pair and chose to calibrate anyway. Absent means either "no
+   * warning was raised" or "no warning needed acknowledging" — never "the app
+   * approved it".
+   */
+  compatibilityOverride?: CompatibilityOverrideRecord;
 
   // --- Automated calibration session (schema v5; all optional) -------------
   // Present only once an automated session is started (behind the disabled
@@ -396,6 +403,79 @@ export interface EvaluationItem {
   severity: 'good' | 'adjust' | 'bad';
 }
 
+// --- nozzle / filament compatibility ---------------------------------------
+
+/**
+ * How a (physical nozzle, filament) pair reads.
+ *
+ * Severity ONLY. None of these levels is permission to act and none of them
+ * stops anything: the user owns the hardware and is the authority on it, so
+ * every level short of `clear` is a warning with an override. The tiers mirror
+ * the slicer's own vocabulary so the wording in Trim and the wording in
+ * the slicer cannot drift apart:
+ *
+ *   'blocked'  — the preset data says the combination is unusable on this nozzle.
+ *   'critical' — marked highly not recommended.
+ *   'caution'  — marked not recommended: usable, with a higher failure rate.
+ *   'clear'    — the data was read AND it carries a compatibility record saying
+ *                this pair is available. Never inferred from silence.
+ *   'unknown'  — nothing could be read. This is the honest default, and it is
+ *                NOT an all-clear: a preset that carries no compatibility record
+ *                is silent, not approving.
+ */
+export type CompatibilityLevel = 'blocked' | 'critical' | 'caution' | 'clear' | 'unknown';
+
+/** One traceable statement behind a verdict. Never a bare assertion. */
+export interface CompatibilityEvidence {
+  /** Where it came from: a preset key and its value, a preset name, or a rule. */
+  source: string;
+  /** The statement itself, sentence case. */
+  detail: string;
+  /** False when read from data; true when Trim deduced it. */
+  inferred: boolean;
+}
+
+export interface CompatibilityVerdict {
+  level: CompatibilityLevel;
+  /** One sentence, sentence case. */
+  headline: string;
+  evidence: CompatibilityEvidence[];
+  /** True when the level rests on deduction rather than on data we read. */
+  inferred: boolean;
+  /**
+   * Always false, and typed as the literal so no caller can flip it. A
+   * compatibility verdict warns; it never refuses to run a calibration.
+   */
+  blocksCalibration: false;
+  /** True when the user should have to acknowledge before proceeding. */
+  needsAcknowledgement: boolean;
+}
+
+/**
+ * The user's decision to calibrate a pair Trim warned about.
+ *
+ * Stored on the project so later guidance stays honest: a value calibrated past
+ * a compatibility warning is still the user's value, but a report that never
+ * mentions the warning would read as if the app had approved the combination.
+ */
+export interface CompatibilityOverrideRecord {
+  at: string;
+  /** The level that was overridden — the state of the world at that moment. */
+  level: CompatibilityLevel;
+  /** The headline shown at the time, verbatim. */
+  headline: string;
+  /** The evidence lines shown at the time, verbatim. */
+  evidence: string[];
+  /** Which physical nozzle, and what it was called. */
+  nozzleIndex: number;
+  nozzleLabel?: string;
+  material: MaterialId;
+  /** The preset the verdict was read from, when there was one. */
+  presetName?: string;
+  /** True when the overridden verdict was inferred rather than read. */
+  inferred: boolean;
+}
+
 export interface SlicerDestination {
   scope: 'filament' | 'printer' | 'process' | 'per-object' | 'calibration-only';
   /** Human path per slicer, filled from slicer content files. */
@@ -470,6 +550,11 @@ export interface StoredPhoto {
 // --- Backup format ---------------------------------------------------------
 
 export interface BackupFile {
+  /**
+   * Format marker, not a product name. Frozen at the pre-3.0 value so files
+   * exported by 1.x and 2.x still import after the rename to Trim — see
+   * `APP_MARKER` in src/export/backup.ts.
+   */
   app: 'perfectfit-filament-calibration-wizard';
   schemaVersion: number;
   exportedAt: string;

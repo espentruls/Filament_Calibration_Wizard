@@ -258,9 +258,9 @@ export function startApp(): void {
       // logo row. Trailing it would orphan it onto a third line, left-aligned,
       // where it reads like a fifth nav item.
       h('div', { class: 'app-header-inner' },
-        h('a', { class: 'app-logo', href: '#/', title: 'PerfectFit — filament calibration' },
+        h('a', { class: 'app-logo', href: '#/', title: 'Trim — filament calibration' },
           h('span', { class: 'dot', 'aria-hidden': 'true' }, '•'),
-          h('span', { class: 'placard placard-lit', style: 'font-size:.8rem' }, 'PerfectFit'),
+          h('span', { class: 'placard placard-lit', style: 'font-size:.8rem' }, 'Trim'),
           h('span', { class: 'readout-label' }, 'Filament calibration')),
         h('div', { class: 'header-spacer' }),
         lighting.root,

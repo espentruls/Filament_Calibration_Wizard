@@ -104,7 +104,7 @@ export async function renderCard(root: HTMLElement, id: string): Promise<void> {
 
       h('hr', { class: 'rule-ticks', style: 'margin:.4rem 0' }),
       h('p', { class: 'field-help', style: 'margin:0' },
-        `Slicer: ${p.slicer.slicer === 'orca' ? 'Orca Slicer' : 'Bambu Studio'} ${p.slicer.version} · PerfectFit calibration card`)
+        `Slicer: ${p.slicer.slicer === 'orca' ? 'Orca Slicer' : 'Bambu Studio'} ${p.slicer.version} · Trim calibration card`)
     )
   );
 }

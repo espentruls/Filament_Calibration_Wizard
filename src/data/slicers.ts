@@ -14,6 +14,32 @@ const BAMBU_GEAR_OFF_CAVEAT =
 const BAMBU_K_SCALE_WARNING =
   'Never compare automatic and manual K numbers: automatic K on eddy-current machines (the X2D/H2D family) is intentionally HIGHER than manual pattern K — the two scales are not interchangeable.';
 
+/**
+ * The printer's own pre-print flow calibration has to be off while a MANUAL
+ * flow test prints, or the two fight and the plate means nothing.
+ *
+ * Already stated in `CALIBRATIONS['flow-pass1'].versionNotes` and carried by
+ * Orca's flow-pass1 entry; it applies just as much to the fine pass and the
+ * re-check, which print the same kind of plate, and to Bambu Studio, where the
+ * printer in question is always a Bambu one.
+ */
+const FLOW_CALIBRATION_OFF =
+  'Set the printer\'s own "Flow Calibration" option in the send-to-print dialog to off before printing this plate. A machine that calibrates flow on top of a manual flow test fights the test, and the printed blocks stop meaning what their labels say.';
+
+const ORCA_FLOW_CALIBRATION_OFF = 'Bambu printers only: ' + FLOW_CALIBRATION_OFF;
+
+/**
+ * The one feedback edge in the wizard's order, in Bambu's own words.
+ *
+ * Bambu list a changed maximum volumetric speed among the reasons to run a Flow
+ * Dynamics Calibration — and the max-flow step comes three steps AFTER pressure
+ * advance, so finishing it puts the calibrated K value up for re-confirmation.
+ * The dependency graph only points backwards, so this has to be said in the
+ * instructions the user actually reads at that moment.
+ */
+const MVS_INVALIDATES_K =
+  'Before you move on: Bambu list "When the maximum volumetric speed or print temperature is changed in the filament settings" among their own reasons to run a Flow Dynamics Calibration — and changing the maximum volumetric speed is precisely what you just did. Re-confirm the pressure advance (K) value for this filament and nozzle before the verification print, so the profile you verify is the profile you will print with.';
+
 const BAMBU_BUG_10404 =
   'KNOWN BUG (BambuStudio #10404): a filament preset whose "Bowden Extruder" retraction override is left unset ("nil") silently falls back to the MAIN 0.8 mm default on the auxiliary nozzle — under-retracting it. Always tick Length and set an explicit value for the bowden path.';
 
@@ -163,7 +189,8 @@ export const SLICER_CONTENT: SlicerVersionContent[] = [
           'YOLO: a plate of eleven blocks appears, each labeled with an absolute modifier from −0.05 to +0.05 in 0.01 steps. Pass 1 (Coarse): nine blocks labeled −20 to +20 in 5% steps.',
           'Slice and print the plate.',
           'Pick the best block using the evaluation guide, then let this app compute the new flow ratio.',
-          'Bambu printers only: in the print dialog, UNCHECK the machine\'s own "Flow Calibration" option — it would recalibrate on top of the test.'
+          'Bambu printers only: in the print dialog, UNCHECK the machine\'s own "Flow Calibration" option — it would recalibrate on top of the test.',
+          'Already calibrated this filament\'s flow ratio by hand? Enter that saved ratio as the current one above rather than resetting it — the test is computed from it, so an existing result becomes the starting point instead of being thrown away.'
         ],
         saveTo: {
           path: 'Filament settings → Filament tab',
@@ -171,7 +198,7 @@ export const SLICER_CONTENT: SlicerVersionContent[] = [
           scope: 'filament',
           note: 'Save the profile after entering the value; Pass 2 / YOLO verification builds on the SAVED value.'
         },
-        disableFirst: ['Bambu printers: the "Flow Calibration" checkbox in the send-to-print dialog'],
+        disableFirst: [ORCA_FLOW_CALIBRATION_OFF],
         gotchas: [
           'YOLO modifiers are absolute (+0.01), legacy Pass 1/2 modifiers are percentages (+5). Don\'t mix the two formulas — this app applies the right one for the method you pick.',
           ORCA_RESONANCE_AVOIDANCE_NOTE
@@ -193,6 +220,7 @@ export const SLICER_CONTENT: SlicerVersionContent[] = [
           scope: 'filament',
           note: 'Overwrite the Pass-1 value with this final one and save the user preset again.'
         },
+        disableFirst: [ORCA_FLOW_CALIBRATION_OFF],
         gotchas: [ORCA_RESONANCE_AVOIDANCE_NOTE]
       },
       'pressure-advance': {
@@ -235,6 +263,7 @@ export const SLICER_CONTENT: SlicerVersionContent[] = [
           scope: 'filament',
           note: 'Only update the value if a block other than 0 won; then save the user preset again.'
         },
+        disableFirst: [ORCA_FLOW_CALIBRATION_OFF],
         gotchas: [ORCA_RESONANCE_AVOIDANCE_NOTE]
       },
       retraction: {
@@ -283,6 +312,7 @@ export const SLICER_CONTENT: SlicerVersionContent[] = [
         },
         gotchas: [
           'This test measures a best-case scenario. The official guidance is to reduce the measured value by 10–20% for real prints — this app applies your configured margin automatically.',
+          MVS_INVALIDATES_K,
           ORCA_RESONANCE_AVOIDANCE_NOTE
         ]
       },
@@ -391,7 +421,8 @@ export const SLICER_CONTENT: SlicerVersionContent[] = [
           'Open the title-bar Calibration menu → Flow rate → Coarse (Bambu Studio labels the submenu entries simply "Coarse" and "Fine"; Orca calls the whole thing "Flow ratio" instead). Manual mode prints blocks with modifiers around ±20% in 5% steps. Bambu Studio does not offer Orca\'s YOLO flow method.',
           'X1/P1 with lidar also offer automatic flow calibration — this wizard covers the MANUAL path so you stay in control of the judgment.',
           'Slice and print; pick the smoothest block.',
-          'New ratio = old × (100 + modifier) / 100 — computed for you below.'
+          'New ratio = old × (100 + modifier) / 100 — computed for you below.',
+          'If you already ran this calibration by hand, your saved flow ratio is the baseline the coarse pass builds on — enter it as the current ratio rather than resetting it. Bambu\'s Coarse pass is this step and its Fine pass is the next one, so a hand-run pair covers both; if you would rather not reprint them, mark both steps skipped from the project screen and let the later flow re-check confirm the number.'
         ],
         saveTo: {
           path: 'Filament settings → Filament tab',
@@ -399,6 +430,7 @@ export const SLICER_CONTENT: SlicerVersionContent[] = [
           scope: 'filament',
           note: 'Save the user preset before running the fine pass.'
         },
+        disableFirst: [FLOW_CALIBRATION_OFF],
         gotchas: [
           'Bambu Studio Developer mode is the preferred fix when Flow Rate is hidden, because it exposes both coarse and fine Flow Rate tests with the Bambu printer still selected.',
           BAMBU_NON_BAMBU_FALLBACK
@@ -419,6 +451,7 @@ export const SLICER_CONTENT: SlicerVersionContent[] = [
           scope: 'filament',
           note: 'Overwrite the coarse value with the final one and save.'
         },
+        disableFirst: [FLOW_CALIBRATION_OFF],
         gotchas: [
           'Same visibility caveat as the coarse pass: Developer mode is preferred because Pass 2 depends on the saved Bambu filament profile staying selected.',
           BAMBU_NON_BAMBU_FALLBACK
@@ -432,6 +465,7 @@ export const SLICER_CONTENT: SlicerVersionContent[] = [
           BAMBU_DEVELOPER_MODE_BEST_PATH,
           'Open the title-bar Calibration menu → Pressure advance for the manual test (lidar-equipped X1/P1 can instead run Automatic Flow Dynamics from the Calibration tab, but manual keeps you in control and works for every material).',
           'Dual-nozzle machines (X2D): the calibration dialog shows a nozzle selector — pick the nozzle this project calibrates and run the test once per nozzle. Automatic Flow Dynamics covers the MAIN hotend only; the auxiliary (bowden-fed) nozzle must be calibrated manually here, using range 0–1 in 0.02 steps (typical aux results land between 0.5 and 1.0, e.g. ~0.72 for PETG, versus 0–0.1 on direct drive).',
+          'Arriving with a K value already stored for this filament? Look at it before you replace it. Stored Flow Dynamics results are keyed to filament AND nozzle, so check which nozzle the existing result was measured on before assuming it covers the one this project targets, and check whether it came from the automatic calibration or from this manual test. ' + BAMBU_K_SCALE_WARNING,
           'The manual test prints a series of labeled lines at increasing K values.',
           'Pick the line with the most uniform width — no bulges at speed changes, no thin breaks.',
           'Enter the K value in the result step; it is usually labeled directly on the plate.'
@@ -466,6 +500,7 @@ export const SLICER_CONTENT: SlicerVersionContent[] = [
           scope: 'filament',
           note: 'Only update if a non-zero block won; then save the user preset.'
         },
+        disableFirst: [FLOW_CALIBRATION_OFF],
         gotchas: [BAMBU_NON_BAMBU_FALLBACK]
       },
       retraction: {
@@ -510,7 +545,11 @@ export const SLICER_CONTENT: SlicerVersionContent[] = [
           scope: 'filament',
           note: 'Enter the production (margin-applied) value.'
         },
-        gotchas: [BAMBU_NON_BAMBU_FALLBACK]
+        gotchas: [
+          BAMBU_NON_BAMBU_FALLBACK,
+          MVS_INVALIDATES_K,
+          'Bambu\'s own reason for keeping headroom: they warn that "An incorrect maximum volumetric speed can lead to nozzle clogging". The height where the tower failed is a measurement, not a speed to print at.'
+        ]
       },
       shrinkage: {
         available: true, builtIn: false,

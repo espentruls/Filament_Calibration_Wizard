@@ -11,7 +11,7 @@ try {
     main.setAttribute('style', 'padding:2rem;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif');
 
     const title = document.createElement('h1');
-    title.textContent = 'PerfectFit could not start';
+    title.textContent = 'Trim could not start';
     const body = document.createElement('p');
     body.textContent = 'The app window opened, but startup failed before the wizard could render.';
     const detail = document.createElement('pre');
@@ -21,7 +21,7 @@ try {
     main.append(title, body, detail);
     root.replaceChildren(main);
   }
-  console.error('PerfectFit startup failed', err);
+  console.error('Trim startup failed', err);
 }
 
 // PWA service worker — for real web deployments only. Inside Tauri the app is

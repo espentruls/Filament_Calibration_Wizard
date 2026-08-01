@@ -2,6 +2,28 @@ pub mod slicer_integration;
 
 use slicer_integration::{backup, discovery, filesystem, install, processes};
 
+/// The bundle identifier this app ships under, as a Rust-side constant.
+///
+/// It must equal `identifier` in tauri.conf.json, and `the_identifier_matches_the_shipped_config`
+/// fails the build if it drifts — because on Windows and Linux this string
+/// decides where ALL of the app's data lives, not just where its caches do.
+///
+/// Tauri forces the webview's data directory to `LocalData/<identifier>` on
+/// those two platforms (tauri 2.11.5, `src/manager/webview.rs`: "in `windows`,
+/// we need to force a data_directory"). So `%LOCALAPPDATA%\<identifier>` holds
+/// `EBWebView/Default/IndexedDB` and `.../Local Storage` — every project,
+/// printer, photo, setting and autosave the user has — and `{data_dir}/<identifier>`
+/// holds the slicer preset backups.
+///
+/// The consequence, for whoever proposes the NEXT identifier change: changing
+/// this string moves all of that, and the app comes up empty with the old data
+/// stranded in a folder it no longer looks in. The IndexedDB origin
+/// (`http://tauri.localhost`) does not depend on the identifier, so the stores
+/// themselves are portable — but nothing moves them. 3.0.0 could change it
+/// freely only because 2.0.0 had never been installed by anyone; that will not
+/// be true a second time, and a data migration has to ship with the change.
+const APP_IDENTIFIER: &str = "io.github.espentruls.trim";
+
 /// Remove service-worker registrations and HTTP caches left behind by previous
 /// installs. A cache-first service worker registered by an older version keeps
 /// serving that version's index.html, whose hashed bundle no longer exists
@@ -11,11 +33,11 @@ use slicer_integration::{backup, discovery, filesystem, install, processes};
 #[cfg(target_os = "windows")]
 fn purge_stale_webview_caches() {
   let Ok(local) = std::env::var("LOCALAPPDATA") else { return };
-  // Must stay in step with `identifier` in tauri.conf.json: WebView2 keeps its
-  // profile in %LOCALAPPDATA%\<identifier>\EBWebView, so a stale value here
-  // silently purges a folder belonging to some other build.
+  // WebView2 keeps its profile in %LOCALAPPDATA%\<identifier>\EBWebView, so a
+  // stale identifier here silently purges a folder belonging to some other
+  // build. `APP_IDENTIFIER` is the single copy of it, under test.
   let profile = std::path::Path::new(&local)
-    .join("io.github.espentruls.perfectfit-x2d")
+    .join(APP_IDENTIFIER)
     .join("EBWebView")
     .join("Default");
   for dir in ["Service Worker", "Cache", "Code Cache"] {
@@ -82,4 +104,24 @@ pub fn run() {
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  /// `purge_stale_webview_caches` recursively deletes three directories under
+  /// `%LOCALAPPDATA%\<APP_IDENTIFIER>`. If that constant ever disagrees with the
+  /// shipped config, those deletes land in a folder belonging to some other
+  /// build — which is a different application's data, not this one's.
+  #[test]
+  fn the_identifier_matches_the_shipped_config() {
+    let conf: serde_json::Value =
+      serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+    assert_eq!(
+      conf["identifier"].as_str().unwrap(),
+      APP_IDENTIFIER,
+      "APP_IDENTIFIER has drifted from tauri.conf.json"
+    );
+  }
 }

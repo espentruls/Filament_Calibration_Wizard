@@ -222,7 +222,7 @@ export async function renderDashboard(root: HTMLElement): Promise<void> {
   if (active.length === 0) {
     root.append(
       h('div', { class: 'card', style: 'text-align:center' },
-        h('h2', { style: 'margin:.2rem 0 0' }, projects.length ? 'No active projects' : 'Welcome to PerfectFit'),
+        h('h2', { style: 'margin:.2rem 0 0' }, projects.length ? 'No active projects' : 'Welcome to Trim'),
         // An empty panel is the honest picture: nothing measured, nothing lit.
         h('div', { class: 'six-pack', 'aria-hidden': 'true' },
           EMPTY_SIX_PACK.map(g => gaugeEl(g, { settle: false }))),
@@ -482,5 +482,5 @@ function nozzlePanels(
 
 function exportFileName(p: CalibrationProject): string {
   const base = `${p.filament.manufacturer}-${p.filament.material}-${p.filament.color}`.replace(/[^a-z0-9-]+/gi, '_');
-  return `perfectfit-${base || 'project'}.json`;
+  return `trim-${base || 'project'}.json`;
 }

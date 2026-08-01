@@ -1,7 +1,7 @@
 //! Process detection and launching. Detection uses verified process image
 //! names per slicer (never window titles). We never terminate anything.
 
-use super::{descriptor, security};
+use super::security;
 use std::path::Path;
 use std::process::Command;
 
@@ -46,14 +46,19 @@ fn running_processes() -> Result<Vec<String>, String> {
     }
 }
 
+/// Is any install flavour of this slicer family running?
+///
+/// Detection is family-wide: Bambu Studio and its Beta share one binary and one
+/// process image name (verified 2026-08-01), so a process match cannot tell the
+/// flavours apart. Refusing to write while any of them is open is the
+/// conservative reading, and the only safe one — an open slicer holds preset
+/// files and rewrites them when it exits.
 pub fn is_slicer_running(slicer_id: &str) -> Result<bool, String> {
-    let s = descriptor(slicer_id)?;
+    let names = super::family_process_names(slicer_id)?;
     let procs = running_processes()?;
-    Ok(procs.iter().any(|p| {
-        s.process_names
-            .iter()
-            .any(|n| p == &n.to_ascii_lowercase())
-    }))
+    Ok(procs
+        .iter()
+        .any(|p| names.iter().any(|n| p == &n.to_ascii_lowercase())))
 }
 
 #[tauri::command]
@@ -64,27 +69,38 @@ pub fn detect_running_slicer_process(slicer_id: String) -> Result<bool, String> 
 /// Launch a detected slicer executable (never an arbitrary path).
 #[tauri::command]
 pub fn open_slicer(slicer_id: String) -> Result<(), String> {
-    let s = descriptor(&slicer_id)?;
+    // Family-wide: try every install flavour's executable candidates, so a
+    // machine that only has the beta build still opens.
+    let variants = super::variants_for(&slicer_id);
+    if variants.is_empty() {
+        return Err(format!("Unknown slicer id: {slicer_id}"));
+    }
     for root in security::program_roots() {
-        #[cfg(target_os = "windows")]
-        for cand in s.windows_exe_candidates {
-            let p = root.join(cand);
-            if p.is_file() {
-                Command::new(&p)
-                    .spawn()
-                    .map_err(|e| format!("Failed to launch: {e}"))?;
-                return Ok(());
+        for s in &variants {
+            #[cfg(target_os = "windows")]
+            for cand in s.windows_exe_candidates {
+                let p = root.join(cand);
+                if p.is_file() {
+                    Command::new(&p)
+                        .spawn()
+                        .map_err(|e| format!("Failed to launch: {e}"))?;
+                    return Ok(());
+                }
             }
-        }
-        #[cfg(target_os = "macos")]
-        for cand in s.macos_app_candidates {
-            let p = root.join(cand);
-            if p.exists() {
-                Command::new("open")
-                    .arg(&p)
-                    .spawn()
-                    .map_err(|e| format!("Failed to launch: {e}"))?;
-                return Ok(());
+            #[cfg(target_os = "macos")]
+            for cand in s.macos_app_candidates {
+                let p = root.join(cand);
+                if p.exists() {
+                    Command::new("open")
+                        .arg(&p)
+                        .spawn()
+                        .map_err(|e| format!("Failed to launch: {e}"))?;
+                    return Ok(());
+                }
+            }
+            #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+            {
+                let _ = (&root, s);
             }
         }
     }
@@ -92,7 +108,7 @@ pub fn open_slicer(slicer_id: String) -> Result<(), String> {
 }
 
 /// Open a directory in the OS file manager. Restricted to slicer data
-/// directories and the PerfectFit backup root.
+/// directories and the Trim backup root.
 pub fn open_directory_checked(path: &Path, allowed_roots: &[std::path::PathBuf]) -> Result<(), String> {
     if !path.is_dir() {
         return Err(format!("Not a directory: {}", path.display()));
@@ -173,7 +189,9 @@ pub fn open_external_url(url: String) -> Result<(), String> {
 #[tauri::command]
 pub fn open_profile_directory(path: String) -> Result<(), String> {
     let data_root = security::platform_data_root()?;
-    let allowed: Vec<std::path::PathBuf> = super::SLICERS
+    // One allowed root per install flavour, so a beta install's preset folder
+    // opens as readily as the release one.
+    let allowed: Vec<std::path::PathBuf> = super::SLICER_VARIANTS
         .iter()
         .map(|s| data_root.join(s.data_dir_name))
         .collect();

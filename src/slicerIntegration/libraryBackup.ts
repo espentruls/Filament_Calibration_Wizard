@@ -34,16 +34,20 @@ export async function backupDetectedPresetLibraries(
   const notes: string[] = [];
   for (const s of detected) {
     if (onlySlicer && s.slicer_id !== onlySlicer) continue;
+    const label = s.variant_label || s.slicer_id;
     if (!s.user_locations.length) {
-      notes.push(`${s.slicer_id}: no user preset folders found (has the slicer been started once?).`);
+      notes.push(`${label}: no user preset folders found (has the slicer been started once?).`);
       continue;
     }
     for (const loc of s.user_locations) {
       try {
+        // Named per install flavour: a family can have several installs (Bambu
+        // Studio and its Beta both have a `default` folder), and each is
+        // snapshotted separately rather than one standing in for the other.
         backups.push(await bridge.backupSlicerUserPresets(
-          s.slicer_id as IntegrationSlicerId, loc.account_id, projectId));
+          s.slicer_id as IntegrationSlicerId, loc.account_id, projectId, s.variant_id));
       } catch (e) {
-        notes.push(`${s.slicer_id} (${loc.account_id}): ${String(e)}`);
+        notes.push(`${label} (${loc.account_id}): ${String(e)}`);
       }
     }
   }

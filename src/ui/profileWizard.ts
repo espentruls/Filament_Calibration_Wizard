@@ -15,7 +15,7 @@ import type {
   ProfileValidationResult, ScoredProfile, SlicerInstallation, UserDataLocation
 } from '../slicerIntegration/types';
 import * as bridge from '../slicerIntegration/bridge';
-import { detectInstallations, scanProfiles, currentPlatform } from '../slicerIntegration/scanner';
+import { detectInstallations, scanProfiles, currentPlatform, chooseDefaultLocation } from '../slicerIntegration/scanner';
 import { getAdapter } from '../slicerIntegration/adapters';
 import { recommendProfiles } from '../slicerIntegration/recommendations';
 import { buildPatchesFromProject, generateProfile } from '../slicerIntegration/generator';
@@ -117,7 +117,7 @@ export async function renderProfileWizard(root: HTMLElement, projectId: string):
     h('h1', { style: 'margin:.2rem 0' }, 'Create slicer profile'),
     h('p', { class: 'field-help' },
       h('span', { class: 'badge badge-warn' }, 'Experimental installer'), ' ',
-      'PerfectFit will back up the affected slicer files before installation. Profile formats can change between slicer versions, so support is verified per version. Export always works.'),
+      'Trim will back up the affected slicer files before installation. Profile formats can change between slicer versions, so support is verified per version. Export always works.'),
     stageNav(st)
   );
 
@@ -166,7 +166,7 @@ async function renderSlicerStage(
     card.append(
       h('div', { class: 'callout' },
         h('p', { class: 'co-title' }, 'Browser mode'),
-        h('p', {}, 'Automatic slicer detection and installation require the PerfectFit desktop app. In the browser you can still load an exported profile below, apply your calibration to it, and download the result for manual import.'))
+        h('p', {}, 'Automatic slicer detection and installation require the Trim desktop app. In the browser you can still load an exported profile below, apply your calibration to it, and download the result for manual import.'))
     );
     card.append(manualSelectionBlock(st, project, rerender));
     return;
@@ -235,9 +235,15 @@ async function renderSlicerStage(
       h('div', { style: 'flex:1' },
         h('h4', {}, inst.displayName, ' ',
           h('span', { class: 'badge badge-info' }, inst.version ?? 'version unknown'),
-          preferred.includes(inst.slicerId) ? h('span', { class: 'badge badge-accent', style: 'margin-left:.3rem' }, 'matches this project') : null),
+          preferred.includes(inst.slicerId) ? h('span', { class: 'badge badge-accent', style: 'margin-left:.3rem' }, 'matches this project') : null,
+          // One slicer can be installed twice — a release build and a beta keep
+          // separate preset folders. Both are listed; this says which one the
+          // config files show as being used.
+          inst.supersededBy ? h('span', { class: 'badge badge-warn', style: 'margin-left:.3rem' }, 'not the install in use') : null),
         h('p', { class: 'eval-meaning' },
           `Scan: ${inst.capabilities.canScanProfiles ? 'yes' : 'no'} · Generate: yes · Export: yes · Direct install: ${canInstall ? 'verified' : 'not yet verified'}`),
+        inst.supersededBy ? h('p', { class: 'field-help' },
+          `${inst.supersededBy} was used more recently than this one. A preset written into this folder will not appear in the version you are running now.`) : null,
         !verified?.directInstallVerified ? h('p', { class: 'field-help' },
           'This version has not yet been verified for automatic installation. You can still scan profiles, generate, and export for manual import.') : null,
         locations.length > 1 ? h('p', { class: 'field-help' }, 'Multiple preset locations found — pick the one your slicer actually uses (marked “active”).') : null,
@@ -247,11 +253,19 @@ async function renderSlicerStage(
         h('button', {
           class: 'btn btn-sm btn-primary', onClick: () => {
             st.installation = inst;
+            // Never fall back to "the first folder found": when the slicer's
+            // config does not name an active preset folder, guessing is how a
+            // preset lands in a directory the slicer never reads. Ask instead.
             st.location = st.location && locations.some(l => l.id === st.location!.id)
               ? st.location
-              : (locations.find(l => l.active) ?? locations[0] ?? null);
+              : chooseDefaultLocation(inst);
             st.scan = null;
-            if (!st.location) { toast('This slicer has no user preset folder yet. Open the slicer once, then retry.', 'error'); return; }
+            if (!st.location) {
+              toast(locations.length
+                ? 'Pick the preset folder to use — this slicer\'s config does not name an active one.'
+                : 'This slicer has no user preset folder yet. Open the slicer once, then retry.', 'error');
+              return;
+            }
             st.stage = 'profiles';
             rerender();
           }
@@ -270,14 +284,14 @@ async function renderSlicerStage(
         await navigator.clipboard.writeText(report);
         toast('Diagnostic report copied to clipboard.', 'success');
       } catch {
-        download('perfectfit-diagnostics.txt', report, 'text/plain');
+        download('trim-diagnostics.txt', report, 'text/plain');
       }
     }
   }, 'Copy diagnostic report');
   const diagSave = h('button', {
     class: 'btn btn-ghost btn-sm', onClick: async () => {
       const platform = await currentPlatform();
-      download('perfectfit-diagnostics.txt', buildDiagnosticReport({ appVersion: '1.1.0-experimental', platform, installations: st.installations ?? [] }), 'text/plain');
+      download('trim-diagnostics.txt', buildDiagnosticReport({ appVersion: '1.1.0-experimental', platform, installations: st.installations ?? [] }), 'text/plain');
     }
   }, 'Save diagnostic report');
   root.append(
@@ -343,7 +357,7 @@ async function renderProfilesStage(
   const card = h('div', { class: 'card' },
     h('h2', {}, `Select a base profile — ${st.installation.displayName}`),
     h('p', { class: 'field-help' },
-      'PerfectFit clones the base profile and changes only the values you calibrated. Everything else (cooling, speeds, unknown future settings) is preserved. The base profile itself is never modified.'));
+      'Trim clones the base profile and changes only the values you calibrated. Everything else (cooling, speeds, unknown future settings) is preserved. The base profile itself is never modified.'));
   root.append(card);
 
   if (!st.scan) {
@@ -395,7 +409,7 @@ async function renderProfilesStage(
 
   if (!st.advanced) {
     card.append(h('p', { class: 'field-help' },
-      'Suggested baselines are stock (system) profiles for your material, compatible with the selected printer. PerfectFit clones a clean stock profile and applies only your calibrated values.'));
+      'Suggested baselines are stock (system) profiles for your material, compatible with the selected printer. Trim clones a clean stock profile and applies only your calibrated values.'));
     if (rec.usedFallback) {
       card.append(h('div', { class: 'callout callout-warn' },
         h('p', { class: 'co-title' }, 'No stock profile matched — showing closest compatible profiles'),
@@ -536,7 +550,7 @@ function calibratedNozzleOf(
     index,
     feed: listed?.feed ?? fallback,
     label: listed?.label ?? null,
-    // PerfectFit does not yet record which hotend variant a nozzle has, and
+    // Trim does not yet record which hotend variant a nozzle has, and
     // Bambu ships different values for Standard vs High Flow. Standard is the
     // shipped default; the slot picker below names the variant it selected so
     // a high-flow owner can move it.
@@ -552,7 +566,7 @@ function calibratedNozzleOf(
  * dual-nozzle printers each slot is a tool" — which on a Bambu Lab X2D is
  * exactly backwards. There, four slots span two feed paths, and the auxiliary
  * is physical nozzle 2 while its values live in slot 3. A user who believed the
- * old sentence would "correct" PerfectFit's pre-selection from slot 3 to slot 2
+ * old sentence would "correct" Trim's pre-selection from slot 3 to slot 2
  * and be pointing at a MAIN-nozzle variant.
  *
  * So the wording is derived from the resolved legend rather than asserted, and
@@ -560,7 +574,7 @@ function calibratedNozzleOf(
  */
 export function slotMeaningParagraph(legend: SlotLegend | null, slots: number): string {
   if (legend?.mixedFeed) {
-    return `This profile carries ${slots} value slots, and they are EXTRUDER VARIANTS spanning two different feed paths (${legend.names.join(', ')}) — not nozzle numbers. On this machine slot order is not nozzle order: the bowden auxiliary is physical nozzle 2, but its values live in the Bowden slots, which come after both Direct Drive ones. PerfectFit picks the slot by NAME from that legend, never by nozzle index. Slots you do not pick keep their existing values.`;
+    return `This profile carries ${slots} value slots, and they are EXTRUDER VARIANTS spanning two different feed paths (${legend.names.join(', ')}) — not nozzle numbers. On this machine slot order is not nozzle order: the bowden auxiliary is physical nozzle 2, but its values live in the Bowden slots, which come after both Direct Drive ones. Trim picks the slot by NAME from that legend, never by nozzle index. Slots you do not pick keep their existing values.`;
   }
   if (legend) {
     return `This profile carries ${slots} value slots, named by the preset itself: ${legend.names.join(', ')}. They are extruder VARIANTS — a feed path plus a hotend class — so pick the one describing the hardware you calibrated with, which is not necessarily the one matching your nozzle's number. Slots you do not pick keep their existing values.`;
@@ -593,13 +607,13 @@ export function applyToAllAvailability(
   if (legend?.mixedFeed) {
     return {
       available: false,
-      reason: 'Applying to all value slots is not available on this preset: its slots span two different feed paths, and a calibration measured on one of them is not transferable to the other. A bowden retraction distance on a direct-drive path drags soft plastic into the cold zone; PerfectFit refuses that write however it is asked for.'
+      reason: 'Applying to all value slots is not available on this preset: its slots span two different feed paths, and a calibration measured on one of them is not transferable to the other. A bowden retraction distance on a direct-drive path drags soft plastic into the cold zone; Trim refuses that write however it is asked for.'
     };
   }
   if (!slotResolved) {
     return {
       available: false,
-      reason: 'Applying to all value slots is not available while PerfectFit cannot tell which slot belongs to this nozzle — writing to more slots does not answer which hardware the value belongs to.'
+      reason: 'Applying to all value slots is not available while Trim cannot tell which slot belongs to this nozzle — writing to more slots does not answer which hardware the value belongs to.'
     };
   }
   return { available: true };
@@ -637,7 +651,7 @@ function renderConfigureStage(
   if (allPatches.length === 0) {
     card.append(h('div', { class: 'callout callout-warn' },
       h('p', { class: 'co-title' }, 'No calibrated values yet'),
-      h('p', {}, 'No completed calibration steps produced values to apply. Finish at least one calibration step first — PerfectFit never patches defaults or guesses.')));
+      h('p', {}, 'No completed calibration steps produced values to apply. Finish at least one calibration step first — Trim never patches defaults or guesses.')));
   } else {
     card.append(h('h3', {}, 'Calibrated values to apply'),
       h('p', { class: 'field-help' }, 'Only values from completed calibration steps are listed. Untick anything you don\'t want in the generated profile.'));
@@ -684,7 +698,7 @@ function renderConfigureStage(
     // are unlabelled and the user has to say which hardware they calibrated.
     const slotLabel = (i: number) => slotOptionLabel(usableLegend, i);
     // Nothing is pre-selected when the mapping could not be determined: a slot
-    // shown as chosen would be a claim PerfectFit cannot make.
+    // shown as chosen would be a claim Trim cannot make.
     const toolSel = h('select', {}, [
       ...(slotUnresolved
         ? [h('option', { value: '', selected: true, disabled: true }, 'Not determined — see the note below')]
@@ -714,11 +728,11 @@ function renderConfigureStage(
       ? h('p', { class: 'field-help' },
           `Pre-selected slot ${slotPick.slot + 1}, ${slotPick.variantName} — the variant this preset uses for ${nozzleWords}, the nozzle this project calibrated. `,
           slotPick.candidates.length > 1
-            ? `This preset also carries ${slotPick.candidates.filter(i => i !== slotPick.slot).map(i => `“${slotPick.legend.names[i]}”`).join(' and ')} for the same feed path — they are different HOTENDS on it, and PerfectFit assumes a STANDARD one. Change it here if yours is high flow.`
+            ? `This preset also carries ${slotPick.candidates.filter(i => i !== slotPick.slot).map(i => `“${slotPick.legend.names[i]}”`).join(' and ')} for the same feed path — they are different HOTENDS on it, and Trim assumes a STANDARD one. Change it here if yours is high flow.`
             : 'Confirm it matches your hardware.')
       : slotPick.kind === 'positional' && project.nozzleIndex !== undefined
         ? h('p', { class: 'field-help' },
-            `This preset does not say what its value slots mean, so PerfectFit could not match one to ${nozzleWords}. Slot ${st.targetExtruder + 1} is pre-selected by position only — confirm it is the hardware you calibrated before generating.`)
+            `This preset does not say what its value slots mean, so Trim could not match one to ${nozzleWords}. Slot ${st.targetExtruder + 1} is pre-selected by position only — confirm it is the hardware you calibrated before generating.`)
         : null;
 
     card.append(h('h3', {}, 'Per-variant values'),
@@ -736,7 +750,7 @@ function renderConfigureStage(
   // project never calibrated.
   if (slotUnresolved && slotPick.kind === 'unresolved') {
     card.append(h('div', { class: 'callout callout-bad' },
-      h('p', { class: 'co-title' }, 'PerfectFit cannot tell which value slot belongs to this nozzle'),
+      h('p', { class: 'co-title' }, 'Trim cannot tell which value slot belongs to this nozzle'),
       h('p', {}, slotPick.reason),
       h('p', {}, slotPick.code === 'FEED_UNKNOWN'
         ? 'Open the printer profile for this project and set the feed type (direct drive or bowden) for each nozzle, then come back.'
@@ -798,7 +812,7 @@ function renderConfigureStage(
         const name = st.newName.trim();
         if (!name) { toast('Enter a profile name.', 'error'); return; }
         if (slotUnresolved) {
-          toast('PerfectFit cannot tell which value slot belongs to the nozzle this project calibrated — see the note above.', 'error');
+          toast('Trim cannot tell which value slot belongs to the nozzle this project calibrated — see the note above.', 'error');
           return;
         }
         const patches = allPatches.filter(p => st.enabledPatchKeys!.has(p.presetKey));
@@ -1073,24 +1087,44 @@ function renderResultStage(
   // Install
   card.append(h('h3', {}, '2. Install automatically'));
   if (!bridge.isDesktop()) {
-    card.append(h('p', { class: 'field-help' }, 'Automatic installation requires the PerfectFit desktop app.'));
+    card.append(h('p', { class: 'field-help' }, 'Automatic installation requires the Trim desktop app.'));
   } else if (!st.installation || !st.location) {
     card.append(h('p', { class: 'field-help' }, 'No slicer/location selected (manual file mode) — use export instead.'));
   } else if (!canInstall) {
     card.append(h('p', { class: 'field-help' },
       `Automatic installation is disabled for ${st.installation.displayName} ${st.installation.version ?? ''}: this version has not been verified for direct install yet. Use export — it is just as good, minus one manual import step.`));
   } else {
+    // Writing into an install that is not the one being used produces a fully
+    // green "installed and verified" for a file the running slicer will never
+    // read. The install is still offered — a genuine side-by-side setup is a
+    // real thing — but only after the user says out loud that they meant it.
+    const superseded = st.installation.supersededBy;
+    const installBtn = h('button', {
+      class: 'btn btn-primary', onClick: () => void doInstall(false)
+    }, '⚙ Install into slicer') as HTMLButtonElement;
+    installBtn.disabled = !!superseded && !st.acknowledged.has('STALE_INSTALL');
+    let staleBlock: HTMLElement | null = null;
+    if (superseded) {
+      const cb = h('input', { type: 'checkbox', checked: st.acknowledged.has('STALE_INSTALL') }) as HTMLInputElement;
+      cb.addEventListener('change', () => {
+        if (cb.checked) st.acknowledged.add('STALE_INSTALL'); else st.acknowledged.delete('STALE_INSTALL');
+        installBtn.disabled = !cb.checked;
+      });
+      staleBlock = h('div', { class: 'callout callout-warn' },
+        h('p', { class: 'co-title' }, 'This is not the install you are running'),
+        h('p', {}, `${superseded} was used more recently than ${st.installation.displayName}. They keep separate preset folders, so a preset written here will not appear in ${superseded}.`),
+        h('label', { class: 'check-item' }, cb,
+          h('div', {}, h('strong', {}, `Install into ${st.installation.displayName} anyway`))));
+    }
     card.append(
       h('p', { class: 'field-help' },
         `Destination: ${st.location.path}\\filament\\${gen.fileStem}.json — a timestamped backup is created first, the file is written to a temp file, verified, atomically moved, and re-verified. ${st.installation.displayName} must be closed.`),
-      h('div', { class: 'btn-row' },
-        h('button', {
-          class: 'btn btn-primary', onClick: () => void doInstall(false)
-        }, '⚙ Install into slicer')));
+      ...(staleBlock ? [staleBlock] : []),
+      h('div', { class: 'btn-row' }, installBtn));
   }
 
-  // Save in PerfectFit
-  card.append(h('h3', {}, '3. Save inside PerfectFit'),
+  // Save in Trim
+  card.append(h('h3', {}, '3. Save inside Trim'),
     h('p', { class: 'field-help' }, 'Keep the generated profile in this calibration project to export or install later.'),
     h('div', { class: 'btn-row' },
       h('button', {

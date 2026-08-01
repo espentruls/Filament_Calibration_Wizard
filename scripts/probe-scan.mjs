@@ -14,7 +14,7 @@ const nozzle = Number(nozzleArg);
 const appdata = process.env.APPDATA;
 if (!appdata) { console.error('APPDATA not set — run this on Windows.'); process.exit(1); }
 const root = join(appdata, dataDirName);
-console.log(`\n=== PerfectFit scan probe ===\nData dir: ${root}\nPrinter: "${printerName}" · nozzle ${nozzle}\n`);
+console.log(`\n=== Trim scan probe ===\nData dir: ${root}\nPrinter: "${printerName}" · nozzle ${nozzle}\n`);
 if (!existsSync(root)) { console.error(`NOT FOUND: ${root}`); process.exit(1); }
 
 const jsonsIn = d => { try { return readdirSync(d).filter(f => f.toLowerCase().endsWith('.json')).map(f => join(d, f)); } catch { return []; } };
