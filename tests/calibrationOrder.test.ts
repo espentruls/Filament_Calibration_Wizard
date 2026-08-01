@@ -233,3 +233,32 @@ describe('arriving with Bambu Studio\'s calibrations already run by hand', () =>
     }
   });
 });
+
+describe('the printer can cross-apply a K value between nozzles by itself', () => {
+  // The wizard's central invariant — a value calibrated for one nozzle never
+  // lands on another — has been broken four times in this codebase's own code.
+  // Bambu document an H2C setting that does it in the PRINTER, downstream of
+  // anything this app controls, and it ships enabled. Silence there would let a
+  // user do careful per-nozzle work that the machine then quietly undoes.
+  const paText = slicerText('bambu', 'pressure-advance');
+
+  it('tells the user the default matches on nozzle TYPE, not the specific nozzle', () => {
+    expect(paText).toMatch(/type of filament and nozzle/i);
+    expect(paText).toMatch(/enabled by default/i);
+    expect(paText).toMatch(/nozzle TYPE, not/);
+  });
+
+  it('states both positions of the switch, so the user can decide either way', () => {
+    expect(paText).toMatch(/[Dd]isabled/);
+    expect(paText).toMatch(/exactly the ones recorded|exactly the same/i);
+  });
+
+  it('does not instruct the user to change it — which behaviour is right is their call', () => {
+    expect(paText).not.toMatch(/you must (disable|turn off)/i);
+    expect(paText).not.toMatch(/always (disable|turn off) (this|that)/i);
+  });
+
+  it('is labelled vendor-documented rather than verified, per the honesty commitment', () => {
+    expect(paText).toMatch(/not verified on hardware/i);
+  });
+});

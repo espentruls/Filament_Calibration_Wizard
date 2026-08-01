@@ -15,6 +15,26 @@ const BAMBU_K_SCALE_WARNING =
   'Never compare automatic and manual K numbers: automatic K on eddy-current machines (the X2D/H2D family) is intentionally HIGHER than manual pattern K — the two scales are not interchangeable.';
 
 /**
+ * The printer can cross-apply a K value between nozzles by itself.
+ *
+ * This wizard's central invariant is that a value calibrated for one nozzle
+ * never lands on another. Bambu's flow-dynamics wiki documents an H2C setting,
+ * "Whether PA parameters apply to the same type of filament and nozzle", that
+ * is ENABLED BY DEFAULT and matches on nozzle TYPE rather than on the specific
+ * nozzle — so a manually calibrated K can take effect on a different nozzle of
+ * the same type. That is the printer performing the exact substitution the
+ * invariant forbids, downstream of anything this app controls.
+ *
+ * Stated, not acted on. The app does not tell anyone to change it: which
+ * behaviour is wanted depends on whether the two nozzles are running the same
+ * filament, and that is the owner's call. Vendor-documented only — unverified
+ * on hardware, and said so, because this product distinguishes documented from
+ * tested.
+ */
+const BAMBU_H2C_PA_TYPE_MATCHING =
+  'Multi-nozzle Bambu machines (documented for the H2C): a printer setting called "Whether PA parameters apply to the same type of filament and nozzle" is enabled by default, and it matches on nozzle TYPE, not on the specific nozzle. With it enabled, Bambu document that a manually configured K value takes effect whenever the filament type and nozzle type match what the PA file recorded — so a K you calibrated for one nozzle can apply to another nozzle of the same type. Disabled, Bambu document that it applies only when the filament and nozzle are exactly the ones recorded. If you are calibrating each nozzle separately and want the values to stay separate, that switch is the one that decides it. Vendor-documented; not verified on hardware by this project.';
+
+/**
  * The printer's own pre-print flow calibration has to be off while a MANUAL
  * flow test prints, or the two fight and the plate means nothing.
  *
@@ -482,6 +502,7 @@ export const SLICER_CONTENT: SlicerVersionContent[] = [
           'Lidar-equipped X1/P1 can also run automatic Flow Dynamics on the machine.',
           BAMBU_GEAR_OFF_CAVEAT,
           BAMBU_K_SCALE_WARNING,
+          BAMBU_H2C_PA_TYPE_MATCHING,
           BAMBU_X2D_AUX_CONSTRAINTS
         ]
       },
