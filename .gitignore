@@ -23,3 +23,6 @@ dist/
 # Playwright MCP scratch output — captured browser logs, snapshots, screenshots
 # of whatever was on screen at the time. `git add -A` would commit the lot.
 .playwright-mcp/
+
+# Private research notes about real accounts - never publish
+/docs/BAMBU_PRESET_RE_BRIEF.md

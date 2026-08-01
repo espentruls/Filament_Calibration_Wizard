@@ -518,7 +518,7 @@ describe('clone-and-patch round trips (all slicer fixtures)', () => {
     const adapter = getAdapter('orca');
     const raw = fixtureRaw('orca-user-delta-pla.json', {
       dir_kind: 'user',
-      info: 'sync_info = \nuser_id = 1f187aab\nsetting_id = ba3183ad\nbase_id = EPLAEOSG00\nupdated_time = 1781473826\n'
+      info: 'sync_info = \nuser_id = 1234567890\nsetting_id = ba3183ad\nbase_id = EPLAEOSG00\nupdated_time = 1781473826\n'
     });
     const parsed = adapter.parseProfile(
       { kind: 'detected', fileName: raw.file_name, json: raw.json, infoText: raw.info, filePath: raw.path },

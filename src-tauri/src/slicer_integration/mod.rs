@@ -85,7 +85,7 @@ pub const SLICER_VARIANTS: &[SlicerVariant] = &[
     },
     // Bambu Studio Beta. Verified 2026-08-01 by read-only inspection of a real
     // install: data dir %APPDATA%\BambuStudioBeta, config BambuStudio.conf
-    // (app.version 02.08.01.55, app.preset_folder 2572316032,
+    // (app.version 02.08.01.55, app.preset_folder 1234567890,
     // app.sync_user_preset True), executable C:\Program Files\Bambu
     // Studio\bambu-studio.exe with FileVersion 02.08.01.55 and image name
     // bambu-studio.exe — i.e. the Beta REPLACED the release binary in the same

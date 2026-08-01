@@ -21,7 +21,7 @@ describe('slicer adapters — parsing real fixtures', () => {
 
   it('classifies account dirs as cloud with a sync warning (bambu)', () => {
     const adapter = getAdapter('bambu');
-    const raw = fixtureRaw('bambu-user-full-pctg-dualnozzle.json', { account_id: '3964423668' });
+    const raw = fixtureRaw('bambu-user-full-pctg-dualnozzle.json', { account_id: '1234567890' });
     const parsed = adapter.parseProfile(
       { kind: 'detected', fileName: raw.file_name, json: raw.json, infoText: null, filePath: raw.path },
       raw

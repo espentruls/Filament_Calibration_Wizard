@@ -41,8 +41,8 @@ subdirectory. Empty string means `default`. Verified 2026-07-19:
 
 | Slicer | `app.preset_folder` observed | Active dir |
 |---|---|---|
-| OrcaSlicer | `1f187aab-0335-47bc-9634-e0946f9f1726` | UUID dir |
-| Bambu Studio | `3964423668` | numeric account dir |
+| OrcaSlicer | `00000000-0000-0000-0000-000000000000` | UUID dir |
+| Bambu Studio | `<account-id>` | numeric account dir |
 | Snapmaker Orca | `""` | `default` |
 | ElegooSlicer | `""` | `default` |
 | Orca-Flashforge | `""` | `default` |
@@ -163,7 +163,7 @@ slicer (removing the cloud copy) and reinstalled.
 - Version tested: **02.07.01.62**.
 - Executable: `C:\Program Files\Bambu Studio\bambu-studio.exe`; process `bambu-studio.exe`.
 - User data: `%APPDATA%\BambuStudio\`; **two account dirs plus `default` observed**;
-  active dir = `app.preset_folder` (`3964423668`).
+  active dir = `app.preset_folder` (`<account-id>`).
 - User presets observed as full snapshots (139 keys, `inherits: ""`), dual-element
   arrays for dual-nozzle H2S, `"nil"` sentinels, `filament_id` present.
   Note: Bambu Studio can also produce delta presets when the user saves a derived
@@ -229,7 +229,7 @@ are in the table.
 | Data directory | `%APPDATA%\BambuStudioBeta\` |
 | Config file | `BambuStudio.conf` — **not** `BambuStudioBeta.conf` |
 | `app.version` | `02.08.01.55` |
-| `app.preset_folder` | `2572316032` (signed in) |
+| `app.preset_folder` | `<account-id>` (signed in) |
 | `app.sync_user_preset` | `True` |
 | Vendor library | `system\BBL.json` version `02.08.00.04`; only the `BBL` vendor |
 | Executable | `C:\Program Files\Bambu Studio\bambu-studio.exe`, FileVersion `02.08.01.55` |
@@ -288,7 +288,7 @@ naming both candidates, rather than guessing.
 
 `sync_user_preset = True` and the account folder is bulk-rewritten. On
 2026-08-01 all 501 preset `.json`/`.info` pairs in
-`user\2572316032\filament` carried write times inside a three-second window
+`user\<account-id>\filament` carried write times inside a three-second window
 right after launch; a later read of the same folder found **one** preset left
 (the user's own hand-saved one). A preset installed into an account folder is
 live data the slicer owns. The mitigations are unchanged and correct: warn on a

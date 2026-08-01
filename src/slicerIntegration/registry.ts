@@ -252,7 +252,7 @@ export const VERIFIED_VERSIONS: VerifiedSlicerVersion[] = [
     profileGenerationVerified: true,
     directInstallVerified: true,
     verificationDate: '2026-07-19',
-    notes: ['Full manual E2E pass on Bambu Studio 02.07.01.62, Windows 11, in the real cloud-linked account dir (signed in as user_3964423668): transactional install + verified backup, preset appears under Custom presets with correct values (Type PCTG, flow 1.03), dual-nozzle array preserved (tool 0 patched, tool 1 untouched: temp ["213","260"]), model slices cleanly, backup restore returns the account directory byte-identical to baseline. Cloud caveat: the slicer may later sync/duplicate/re-id presets in an account dir — surfaced as a user warning, not a blocker.']
+    notes: ['Full manual E2E pass on Bambu Studio 02.07.01.62, Windows 11, in the real cloud-linked account dir: transactional install + verified backup, preset appears under Custom presets with correct values (Type PCTG, flow 1.03), dual-nozzle array preserved (tool 0 patched, tool 1 untouched: temp ["213","260"]), model slices cleanly, backup restore returns the account directory byte-identical to baseline. Cloud caveat: the slicer may later sync/duplicate/re-id presets in an account dir — surfaced as a user warning, not a blocker.']
   },
   {
     slicerId: 'bambu',
@@ -262,7 +262,7 @@ export const VERIFIED_VERSIONS: VerifiedSlicerVersion[] = [
     profileGenerationVerified: false,
     directInstallVerified: false,
     verificationDate: '2026-08-01',
-    notes: ['Directory layout, config schema, system/BBL library layout and user preset/.info schema verified by read-only inspection of a real Bambu Studio Beta 02.08.01.55 install on Windows 11 (data dir BambuStudioBeta, config BambuStudio.conf, account 2572316032, BBL library 02.08.00.04). No preset has been generated or installed against this version, so direct install stays gated: scan, generate and export still work, automatic installation does not.']
+    notes: ['Directory layout, config schema, system/BBL library layout and user preset/.info schema verified by read-only inspection of a real Bambu Studio Beta 02.08.01.55 install on Windows 11 (data dir BambuStudioBeta, config BambuStudio.conf, BBL library 02.08.00.04). No preset has been generated or installed against this version, so direct install stays gated: scan, generate and export still work, automatic installation does not.']
   },
   {
     slicerId: 'snapmaker-orca',

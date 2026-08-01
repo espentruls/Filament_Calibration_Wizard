@@ -31,7 +31,7 @@ import type { RawDetectedSlicer, RawUserDataLocation } from '../../src/slicerInt
 // Shapes mirror what was read (read-only) off a real Windows machine on
 // 2026-08-01: a stale BambuStudio folder (config 02.07.01.62, empty
 // preset_folder, sync off, empty user/default) beside a live BambuStudioBeta
-// folder (BambuStudio.conf inside it, 02.08.01.55, preset_folder 2572316032,
+// folder (BambuStudio.conf inside it, 02.08.01.55, preset_folder 1234567890,
 // sync on).
 
 const RELEASE_CONF_AT = 1784353910; // 2026-07-18
@@ -73,12 +73,12 @@ const BETA_ROW: RawDetectedSlicer = rawRow({
   data_dir: 'C:\\Users\\x\\AppData\\Roaming\\BambuStudioBeta',
   conf_version: '02.08.01.55',
   conf_modified_at: BETA_CONF_AT,
-  preset_folder: '2572316032',
+  preset_folder: '1234567890',
   sync_user_preset: true,
   user_locations: [
     loc({
-      account_id: '2572316032',
-      path: 'C:\\Users\\x\\AppData\\Roaming\\BambuStudioBeta\\user\\2572316032',
+      account_id: '1234567890',
+      path: 'C:\\Users\\x\\AppData\\Roaming\\BambuStudioBeta\\user\\1234567890',
       active: true,
       filament_profile_count: 1
     }),
@@ -291,9 +291,9 @@ describe('rankInstallsByRecency', () => {
 
 describe('chooseDefaultLocation', () => {
   it('returns the location the slicer config names as active', () => {
-    const active = uiLocation({ id: 'bambu-beta:2572316032', accountId: '2572316032', active: true, cloudLinked: true });
+    const active = uiLocation({ id: 'bambu-beta:1234567890', accountId: '1234567890', active: true, cloudLinked: true });
     const other = uiLocation({ id: 'bambu-beta:default' });
-    expect(chooseDefaultLocation(install({ userDataLocations: [other, active] }))?.accountId).toBe('2572316032');
+    expect(chooseDefaultLocation(install({ userDataLocations: [other, active] }))?.accountId).toBe('1234567890');
   });
 
   it('returns null rather than guessing when nothing is active', () => {
@@ -342,9 +342,9 @@ describe('detectInstallations', () => {
     const [beta] = await detectInstallations();
     const active = beta.userDataLocations.filter(l => l.active);
     expect(active.length).toBe(1);
-    expect(active[0].accountId).toBe('2572316032');
+    expect(active[0].accountId).toBe('1234567890');
     expect(active[0].cloudLinked).toBe(true);
-    expect(chooseDefaultLocation(beta)?.accountId).toBe('2572316032');
+    expect(chooseDefaultLocation(beta)?.accountId).toBe('1234567890');
   });
 
   it('passes the stale-install warning through to the user', async () => {

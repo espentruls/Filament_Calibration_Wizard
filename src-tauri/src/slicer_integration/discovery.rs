@@ -575,7 +575,7 @@ pub fn get_platform_info() -> PlatformInfo {
 // Bambu Studio release directory (config version 02.07.01.62, empty
 // preset_folder, empty user/default) beside a live Bambu Studio Beta directory
 // (BambuStudio.conf inside BambuStudioBeta\, version 02.08.01.55,
-// preset_folder 2572316032, sync_user_preset True).
+// preset_folder 1234567890, sync_user_preset True).
 // ---------------------------------------------------------------------------
 #[cfg(test)]
 mod tests {
@@ -643,9 +643,9 @@ mod tests {
         write_conf(
             &dir,
             "BambuStudio.conf",
-            r#"{"app":{"version":"02.08.01.55","preset_folder":"2572316032","sync_user_preset":"True"}}"#,
+            r#"{"app":{"version":"02.08.01.55","preset_folder":"1234567890","sync_user_preset":"True"}}"#,
         );
-        make_account(&dir, "2572316032", 3);
+        make_account(&dir, "1234567890", 3);
         make_account(&dir, "default", 0);
         dir
     }
@@ -684,7 +684,7 @@ mod tests {
             .find(|r| r.variant_id == "bambu-beta")
             .expect("beta must be detected");
         assert_eq!(beta.conf_version.as_deref(), Some("02.08.01.55"));
-        assert_eq!(beta.preset_folder.as_deref(), Some("2572316032"));
+        assert_eq!(beta.preset_folder.as_deref(), Some("1234567890"));
         assert_eq!(beta.sync_user_preset, Some(true));
     }
 
@@ -697,7 +697,7 @@ mod tests {
         let active: Vec<&RawUserDataLocation> =
             beta.user_locations.iter().filter(|l| l.active).collect();
         assert_eq!(active.len(), 1);
-        assert_eq!(active[0].account_id, "2572316032");
+        assert_eq!(active[0].account_id, "1234567890");
         assert_eq!(active[0].filament_profile_count, 3);
         // …and the empty local folder is offered but never marked active.
         let default = beta
