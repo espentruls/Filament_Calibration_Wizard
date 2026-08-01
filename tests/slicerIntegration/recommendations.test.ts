@@ -214,15 +214,26 @@ describe('deterministic recommendation', () => {
 });
 
 describe('profile naming', () => {
-  it('builds the default PerfectFit name pattern', () => {
+  // This string ships. It becomes the preset's name in the user's slicer
+  // library, so it is the most publicly visible piece of branding the app
+  // produces - it outlives the app on their disk. It said "PerfectFit" until
+  // 3.0.0, which meant presets landed under the upstream project's name.
+  it('builds the default Trim name pattern', () => {
     expect(defaultProfileName({
       manufacturer: 'Overture', material: 'PETG', color: 'Black',
       printerName: 'Snapmaker U1', nozzle: 0.4
-    })).toBe('PerfectFit - Overture PETG Black @ Snapmaker U1 0.4');
+    })).toBe('Trim - Overture PETG Black @ Snapmaker U1 0.4');
+  });
+
+  it('never reintroduces the pre-3.0.0 brand into a generated name', () => {
+    expect(defaultProfileName({
+      manufacturer: 'Generic', material: 'ABS', color: '',
+      printerName: 'Bambu Lab X2D', nozzle: 0.4
+    })).not.toMatch(/PerfectFit/);
   });
 
   it('sanitizes only genuinely invalid characters', () => {
-    expect(sanitizeProfileName('PerfectFit - Overture PETG Black @ 0.4')).toBe('PerfectFit - Overture PETG Black @ 0.4');
+    expect(sanitizeProfileName('Trim - Overture PETG Black @ 0.4')).toBe('Trim - Overture PETG Black @ 0.4');
     expect(sanitizeProfileName('Bad/Name:With*Chars?')).toBe('BadNameWithChars');
     expect(sanitizeProfileName('Trailing dot.')).toBe('Trailing dot');
   });

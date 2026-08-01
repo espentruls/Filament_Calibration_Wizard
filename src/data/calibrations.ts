@@ -22,7 +22,7 @@ export const DEFAULT_ORDER: CalibrationId[] = [
 // Material-conditioned guidance data
 //
 // Everything below is GUIDANCE. None of it is measured by a test, carried in
-// FinalValues, or written into a slicer preset — PerfectFit never calibrates a
+// FinalValues, or written into a slicer preset — Trim never calibrates a
 // chamber temperature and never patches chamber_temperatures. The values exist
 // so the wizard can say something true and material-specific instead of a
 // generic sentence that is right for ABS and harmful for PLA.
@@ -54,7 +54,7 @@ export interface DryingSchedule {
 }
 
 /**
- * Drying schedules PerfectFit is willing to quote, with the ceiling that makes
+ * Drying schedules Trim is willing to quote, with the ceiling that makes
  * them safe.
  *
  * Deliberately sparse: an entry exists only where the numbers were read out of
@@ -360,7 +360,7 @@ export const CALIBRATIONS: Record<CalibrationId, CalibrationDef> = {
       { title: 'The transition zone', look: 'On towers/patterns, find where corners change from bulging (low) to gapped (high).', meaning: 'The best value sits at the cleanest point between those two failure modes — sharp corners, even width, no gaps.', severity: 'good' }
     ],
     resultPrecision: 3,
-    slicerDestination: { scope: 'filament', note: 'Filament settings → Filament → Advanced → Enable pressure advance + value. In Orca-family slicers this reaches the printer directly (Orca emits M900 K / SET_PRESSURE_ADVANCE from it). In Bambu Studio on a Bambu machine the field is ignored — the machine\'s Flow Dynamics owns PA — so PerfectFit can instead bake the value into the filament start G-code as M900 (opt-in on the Generate-profile screen).' },
+    slicerDestination: { scope: 'filament', note: 'Filament settings → Filament → Advanced → Enable pressure advance + value. In Orca-family slicers this reaches the printer directly (Orca emits M900 K / SET_PRESSURE_ADVANCE from it). In Bambu Studio on a Bambu machine the field is ignored — the machine\'s Flow Dynamics owns PA — so Trim can instead bake the value into the filament start G-code as M900 (opt-in on the Generate-profile screen).' },
     versionNotes: [
       'Orca v2.x: Calibration → Pressure advance offers Line, Pattern (adapted from Ellis\' generator), and Tower, each with direct-drive and Bowden defaults. Bambu Studio\'s Develop-mode menu also calls its manual test "Pressure advance" — the automatic "Flow Dynamics" wizard is a separate thing, on the Calibration TAB rather than in that menu.',
       'Orca also offers Adaptive PA (per-flow-rate table) for high-speed printers — out of scope for this wizard\'s v1.',
@@ -480,7 +480,7 @@ export const CALIBRATIONS: Record<CalibrationId, CalibrationDef> = {
       { title: 'Drool that is not travel stringing', look: 'Blobs and threads that appear during ordinary printing rather than between features, or a nozzle that keeps extruding for several seconds after the command stops.', meaning: 'Retraction cannot fix either. Continued extrusion after the command stops is the signature of steam pressure inside the melt — dry the spool. Ooze during printing is a temperature problem first. After those, the remaining slicer levers are travel speed (less dwell time for a thread to form), wipe (0.4–0.8 mm, about one nozzle width, is enough — more just smears), and z-hop LAST, which usually makes stringing worse because the lift draws a thread that cools in air and is never re-absorbed.', severity: 'adjust' }
     ],
     resultPrecision: 2,
-    slicerDestination: { scope: 'printer', note: 'Printer settings → Extruder → Retraction (length, speed). NOTE: retraction lives in the PRINTER profile, not the filament profile — Orca can also override it per-filament under Filament → Setting overrides. The other ooze levers live elsewhere and are settings to CHECK, not values PerfectFit computes: travel speed and wipe / wipe distance in the process profile, z-hop in the printer profile. PerfectFit deliberately does not write them — there is no measurement behind them.' },
+    slicerDestination: { scope: 'printer', note: 'Printer settings → Extruder → Retraction (length, speed). NOTE: retraction lives in the PRINTER profile, not the filament profile — Orca can also override it per-filament under Filament → Setting overrides. The other ooze levers live elsewhere and are settings to CHECK, not values Trim computes: travel speed and wipe / wipe distance in the process profile, z-hop in the printer profile. Trim deliberately does not write them — there is no measurement behind them.' },
     versionNotes: [
       'Orca v2.x defaults: 0→2 mm step 0.1 (direct drive); the wiki suggests 1→6 mm step 0.2 for Bowden.',
       'Find the best height, then read the exact length from the G-code preview: search for the Calib_Retraction_tower comment (the plain "retract" lines can be misleading with wipe settings).',

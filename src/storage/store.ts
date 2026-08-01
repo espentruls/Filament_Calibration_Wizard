@@ -39,7 +39,7 @@ export function uid(): string {
 // --- settings (localStorage) ----------------------------------------------
 
 // NOT branding — these are the keys the user's data is stored under. The app
-// was renamed from "PerfectFit X2D" to "Trim" in 3.0.0 and the `perfectfit.`
+// was renamed from "Trim X2D" to "Trim" in 3.0.0 and the `perfectfit.`
 // prefix deliberately stayed: localStorage is addressed by key, so renaming
 // these would lose every existing user's settings and their in-progress
 // autosave. `APP_STORAGE_PREFIX` in src/ui/settings.ts must keep matching them.

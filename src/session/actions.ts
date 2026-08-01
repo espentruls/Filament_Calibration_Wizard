@@ -149,7 +149,7 @@ export function buildActionPlan(
     const save = producerInstructions?.saveTo;
     if (!producer || !hasDestination(save)) {
       gaps.push(
-        `The shipped ${content.slicerLabel} ${content.version} instructions do not name a place to save ${value.label}, so PerfectFit shows the value without a menu path rather than guessing one.`
+        `The shipped ${content.slicerLabel} ${content.version} instructions do not name a place to save ${value.label}, so Trim shows the value without a menu path rather than guessing one.`
       );
       continue;
     }
@@ -197,7 +197,7 @@ export function buildActionPlan(
     });
     if (!dest) {
       gaps.push(
-        `The shipped ${content.slicerLabel} ${content.version} instructions do not name where chamber temperature is set, so PerfectFit gives the number without a menu path rather than guessing one.`
+        `The shipped ${content.slicerLabel} ${content.version} instructions do not name where chamber temperature is set, so Trim gives the number without a menu path rather than guessing one.`
       );
     }
   }
@@ -205,7 +205,7 @@ export function buildActionPlan(
   // --- no shipped instructions for this test -------------------------------
   if (!instructions) {
     gaps.push(
-      `The shipped instructions for ${content.slicerLabel} ${content.version} have no entry for the ${CALIBRATIONS[stepId].name} test, so PerfectFit has no verified menu path to show for it.`
+      `The shipped instructions for ${content.slicerLabel} ${content.version} have no entry for the ${CALIBRATIONS[stepId].name} test, so Trim has no verified menu path to show for it.`
     );
     return plan(nozzle, stepId, content, undefined, actions, gaps);
   }
@@ -265,7 +265,7 @@ export function buildActionPlan(
     });
     if (nozzle.auxiliary && !column) {
       gaps.push(
-        `The shipped instructions for this test do not name a per-extruder column, so PerfectFit cannot say which nozzle column ${nozzle.label} uses here. Check the slicer's own extruder selector before entering the value.`
+        `The shipped instructions for this test do not name a per-extruder column, so Trim cannot say which nozzle column ${nozzle.label} uses here. Check the slicer's own extruder selector before entering the value.`
       );
     }
   }

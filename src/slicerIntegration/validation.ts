@@ -177,7 +177,7 @@ export function validateGeneratedProfile(
       errors.push(err('FILAMENT_ID_COLLISION', 'filament_id must differ from the base profile (the slicer hides id collisions).'));
     }
     if (generated.slicerId === 'bambu' && !Array.isArray(reparsed.filament_extruder_variant)) {
-      errors.push(err('EXTRUDER_VARIANT_MISSING', 'Bambu presets must declare filament_extruder_variant (the slicer does not show presets without it). PerfectFit could not establish what this preset\'s value slots mean, and will not invent a legend that could mislabel one nozzle\'s slot as another\'s — pick a base preset that declares its slot legend.'));
+      errors.push(err('EXTRUDER_VARIANT_MISSING', 'Bambu presets must declare filament_extruder_variant (the slicer does not show presets without it). Trim could not establish what this preset\'s value slots mean, and will not invent a legend that could mislabel one nozzle\'s slot as another\'s — pick a base preset that declares its slot legend.'));
     }
 
     // Array shape: no per-extruder array may change length vs the base.
@@ -304,13 +304,13 @@ export function validateGeneratedProfile(
       errors.push(err('RETRACT_IMPLAUSIBLE', `Retraction length${where} ${retract} mm is outside the plausible range (0–15 mm).`));
     } else if (flexible && retract > FLEXIBLE_RETRACTION_MAX_MM) {
       errors.push(err('RETRACT_OVER_FLEXIBLE_CAP',
-        `Retraction length${where} ${retract} mm exceeds the ${FLEXIBLE_RETRACTION_MAX_MM} mm limit PerfectFit applies to flexible filament (${materialLabel}). Long retractions pull soft filament into the cold zone and jam the extruder — lower it, or calibrate this filament as a rigid material only if you know the extruder tolerates it.`));
+        `Retraction length${where} ${retract} mm exceeds the ${FLEXIBLE_RETRACTION_MAX_MM} mm limit Trim applies to flexible filament (${materialLabel}). Long retractions pull soft filament into the cold zone and jam the extruder — lower it, or calibrate this filament as a rigid material only if you know the extruder tolerates it.`));
     }
   });
   each('filament_retraction_speed', (speed, where) => {
     if (speed < RETRACTION_SPEED_MIN_MMS || speed > RETRACTION_SPEED_MAX_MMS) {
       errors.push(err('RETRACT_SPEED_IMPLAUSIBLE',
-        `Retraction speed${where} ${speed} mm/s is outside the range PerfectFit calibrates (${RETRACTION_SPEED_MIN_MMS}–${RETRACTION_SPEED_MAX_MMS} mm/s).`));
+        `Retraction speed${where} ${speed} mm/s is outside the range Trim calibrates (${RETRACTION_SPEED_MIN_MMS}–${RETRACTION_SPEED_MAX_MMS} mm/s).`));
     }
   });
 

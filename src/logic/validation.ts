@@ -98,7 +98,7 @@ export function validateFlowRatio(value: number): ValidationIssue[] {
 // Some filaments do not belong on some nozzles. On the machine this fork exists
 // for, the auxiliary nozzle is bowden-fed and the vendor's own preset library
 // marks flexibles as unusable there and several other materials as merely
-// tolerated. PerfectFit reads that out of the installed presets rather than
+// tolerated. Trim reads that out of the installed presets rather than
 // carrying a list of its own, because a list goes stale the moment the vendor
 // ships a new bundle and because a list cannot explain itself.
 //
@@ -538,7 +538,7 @@ export function nozzleFilamentVerdict(q: NozzleCompatibilityQuery): Compatibilit
     evidence.push({
       inferred: true,
       source: 'material property: flexible + bowden feed',
-      detail: `${mat} is flexible and ${nozzle} is bowden-fed. PerfectFit deduces this from the material and the feed path — it did not read it from a preset. Soft filament buckles in the tube instead of advancing, which grinds the filament and jams the feed path.`
+      detail: `${mat} is flexible and ${nozzle} is bowden-fed. Trim deduces this from the material and the feed path — it did not read it from a preset. Soft filament buckles in the tube instead of advancing, which grinds the filament and jams the feed path.`
     });
   }
 
@@ -581,7 +581,7 @@ function compatibilityHeadline(
       return `The installed preset data marks ${mat} as unusable on ${nozzle}. You can calibrate it anyway — this is your printer — but expect it to fail.`;
     case 'critical':
       return inferred
-        ? `PerfectFit found no compatibility record for this pair and treats ${mat} on ${nozzle} as high-risk. That is its own reading, not the slicer's.`
+        ? `Trim found no compatibility record for this pair and treats ${mat} on ${nozzle} as high-risk. That is its own reading, not the slicer's.`
         : `The installed preset data marks ${mat} as highly not recommended on ${nozzle}.`;
     case 'caution':
       return inferred
@@ -590,7 +590,7 @@ function compatibilityHeadline(
     case 'clear':
       return `The installed preset data lists ${mat} as available on ${nozzle}.`;
     case 'unknown':
-      return `PerfectFit could not determine whether ${mat} works on ${nozzle}. Nothing was found to read, which is not the same as approval.`;
+      return `Trim could not determine whether ${mat} works on ${nozzle}. Nothing was found to read, which is not the same as approval.`;
   }
 }
 
@@ -604,6 +604,6 @@ export function compatibilityOverrideNote(rec: CompatibilityOverrideRecord | und
   if (!rec) return null;
   const nozzle = rec.nozzleLabel ?? `nozzle ${rec.nozzleIndex + 1}`;
   const where = rec.presetName ? ` (read from ${rec.presetName})` : '';
-  const basis = rec.inferred ? 'PerfectFit inferred it' : 'it was read from the installed preset data';
+  const basis = rec.inferred ? 'Trim inferred it' : 'it was read from the installed preset data';
   return `${rec.material} on ${nozzle} was flagged as ${rec.level}${where} — ${basis} — and you chose to calibrate it anyway. Every value in this project is therefore for a combination the data warns about; judge the results with that in mind.`;
 }

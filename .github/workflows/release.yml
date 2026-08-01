@@ -209,7 +209,7 @@ jobs:
             `.dmg` will not open at all, the quarantine flag has to be removed with a
             one-line `xattr` command — that command, what it does and does not do, and
             the full click-by-click steps with the exact dialogs are in
-            [Install on Mac.md](https://github.com/espentruls/Filament_Calibration_Wizard/blob/main/Install%20on%20Mac.md).
+            [Install on Mac.md](https://github.com/espentruls/Trim/blob/main/Install%20on%20Mac.md).
 
             **Linux.** The `.AppImage` needs the execute bit: `chmod +x` it first.
 
@@ -264,7 +264,7 @@ jobs:
             direct-drive main nozzle; and first-layer nozzle temperature was never checked
             against the printer's maximum, so 500 °C into a 240 °C printer validated
             clean. Full list in
-            [CHANGELOG.md](https://github.com/espentruls/Filament_Calibration_Wizard/blob/main/CHANGELOG.md).
+            [CHANGELOG.md](https://github.com/espentruls/Trim/blob/main/CHANGELOG.md).
 
             This is on top of the ten verified defects carried over from the review of
             upstream 1.1.3 — including one that blocked profile install and export for

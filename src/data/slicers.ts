@@ -308,7 +308,7 @@ export const SLICER_CONTENT: SlicerVersionContent[] = [
           'If the tower is clean from the very bottom, set a small nonzero value (0.2–0.4 mm direct drive) rather than 0.',
           'If the top is STILL stringy, dry the filament and check the nozzle for leaks — more retraction won\'t fix moisture.',
           NO_COASTING_NOTE,
-          'Travel speed, wipe and z-hop live in the process/printer profile, not here. They are settings to CHECK when ooze survives a good retraction value — PerfectFit does not compute them, because it has no measurement behind them.',
+          'Travel speed, wipe and z-hop live in the process/printer profile, not here. They are settings to CHECK when ooze survives a good retraction value — Trim does not compute them, because it has no measurement behind them.',
           ORCA_RESONANCE_AVOIDANCE_NOTE
         ]
       },
@@ -546,7 +546,7 @@ export const SLICER_CONTENT: SlicerVersionContent[] = [
           BAMBU_NON_BAMBU_FALLBACK,
           BAMBU_BUG_10404,
           NO_COASTING_NOTE,
-          'Travel speed and wipe live in the process profile and z-hop in the printer profile — settings to CHECK when ooze survives a good retraction value, not values PerfectFit computes. On the X2D there is little left to win there: the stock process profile already travels at 1000 mm/s and the machine already wipes 2 mm with a 0.4 mm "Auto Lift" z-hop.'
+          'Travel speed and wipe live in the process profile and z-hop in the printer profile — settings to CHECK when ooze survives a good retraction value, not values Trim computes. On the X2D there is little left to win there: the stock process profile already travels at 1000 mm/s and the machine already wipes 2 mm with a 0.4 mm "Auto Lift" z-hop.'
         ]
       },
       'max-volumetric-speed': {
@@ -558,7 +558,7 @@ export const SLICER_CONTENT: SlicerVersionContent[] = [
           'Open the title-bar Calibration menu, then the "More..." submenu, and choose Max flowrate. (This is where Bambu Studio and Orca genuinely differ: in Orca, Max flowrate is a top-level Calibration entry with no "More..." submenu at all.)',
           'Slice and print the generated max-flow test; note where surface quality, layer bonding, or extruder sounds first degrade.',
           'Use the last good flow as the raw result, then enter a conservative production value with safety margin in the filament preset.',
-          'Developer mode also exposes VFA calibration in Bambu Studio, alongside Max flowrate in the same "More..." submenu. PerfectFit does not currently score VFA as a separate wizard step, but you can run it from there when diagnosing speed-related ringing or vertical fine artifacts.'
+          'Developer mode also exposes VFA calibration in Bambu Studio, alongside Max flowrate in the same "More..." submenu. Trim does not currently score VFA as a separate wizard step, but you can run it from there when diagnosing speed-related ringing or vertical fine artifacts.'
         ],
         saveTo: {
           path: 'Filament settings → Filament tab',

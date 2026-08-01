@@ -704,7 +704,13 @@ describe('Bambu Studio: bake pressure advance into start g-code (M900)', () => {
 
   it('preserves existing start g-code and replaces a prior baked line on regenerate', () => {
     const parsed = parseFixture('bambu-user-full-pctg-dualnozzle.json', 'bambu');
-    // Simulate regenerating from a profile that already carries a stale bake.
+    // Simulate regenerating from a profile that already carries a stale bake,
+    // written by the app BEFORE the 3.0.0 rename - so it carries the legacy
+    // "; PerfectFit pressure advance" marker, not the current one. If the
+    // stripper only matched the current marker this would silently stack a
+    // second M900 on top of the stale one, handing the printer two conflicting
+    // K values in a single start G-code. That is why the legacy marker is still
+    // matched (never written) in generator.ts.
     (parsed.profile.rawProfile as Record<string, unknown>).filament_start_gcode =
       ['; my custom start\nM900 K9.9 L1000 M10 ; PerfectFit pressure advance'];
     const generated = generateProfile({

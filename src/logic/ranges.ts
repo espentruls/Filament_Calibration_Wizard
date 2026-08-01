@@ -14,7 +14,7 @@ export interface RangeSuggestion {
 }
 
 /**
- * The longest retraction PerfectFit will suggest, compute, display or install
+ * The longest retraction Trim will suggest, compute, display or install
  * for a flexible filament. Long retractions drag soft filament into the cold
  * zone: grinding, a plugged heatbreak, and on many extruders a jam that needs
  * the hotend taken apart.
@@ -76,7 +76,7 @@ export function nozzleTopology(printer?: PrinterProfile): NozzleTopology {
   if (!printer) {
     return {
       kind: 'unknown', count: 0, nozzles: [], perNozzle: false,
-      note: 'No printer profile is selected, so PerfectFit cannot say how many nozzles this machine has.'
+      note: 'No printer profile is selected, so Trim cannot say how many nozzles this machine has.'
     };
   }
   const nozzles = printer.nozzles ?? [];
@@ -86,7 +86,7 @@ export function nozzleTopology(printer?: PrinterProfile): NozzleTopology {
     return {
       kind: 'multi', count: nozzles.length, nozzles, perNozzle: true,
       note: disagrees
-        ? `This profile lists ${nozzles.length} nozzles but records ${declared} extruder(s). The nozzle list is what PerfectFit calibrates against — correct whichever is wrong in the printer profile.`
+        ? `This profile lists ${nozzles.length} nozzles but records ${declared} extruder(s). The nozzle list is what Trim calibrates against — correct whichever is wrong in the printer profile.`
         : null
     };
   }
@@ -100,7 +100,7 @@ export function nozzleTopology(printer?: PrinterProfile): NozzleTopology {
   if (typeof declared === 'number' && declared > 1) {
     return {
       kind: 'unknown', count: declared, nozzles: [], perNozzle: false,
-      note: `This profile records ${declared} extruders but lists no nozzles, so PerfectFit cannot tell them apart or say how each one is fed. Add them under Nozzles in the printer profile to calibrate one nozzle at a time.`
+      note: `This profile records ${declared} extruders but lists no nozzles, so Trim cannot tell them apart or say how each one is fed. Add them under Nozzles in the printer profile to calibrate one nozzle at a time.`
     };
   }
   return { kind: 'single', count: 1, nozzles: [], perNozzle: false, note: null };
@@ -135,7 +135,7 @@ export function flexibleRetractionCaution(
   if (retractionMm === undefined || !Number.isFinite(retractionMm)) return null;
   if (!getMaterial(materialId).flexible) return null;
   if (retractionMm <= FLEXIBLE_RETRACTION_MAX_MM) return null;
-  return `Above the ${FLEXIBLE_RETRACTION_MAX_MM} mm limit PerfectFit applies to flexible filament — long retractions pull soft filament into the cold zone and jam the extruder. Use the lowest acceptable distance at or under ${FLEXIBLE_RETRACTION_MAX_MM} mm.`;
+  return `Above the ${FLEXIBLE_RETRACTION_MAX_MM} mm limit Trim applies to flexible filament — long retractions pull soft filament into the cold zone and jam the extruder. Use the lowest acceptable distance at or under ${FLEXIBLE_RETRACTION_MAX_MM} mm.`;
 }
 
 /**
@@ -172,7 +172,7 @@ export function suggestTempRange(materialId: string, printer?: PrinterProfile): 
  * What to do with the build chamber for this material on this machine.
  *
  * Chamber temperature is GUIDANCE, not a calibration: there is no measurable
- * optimum to search for, so PerfectFit never adds a step for it and never writes
+ * optimum to search for, so Trim never adds a step for it and never writes
  * it into a preset. What it does do is refuse to let one instruction ("run the
  * chamber hot") be applied to a material it damages.
  *
@@ -193,7 +193,7 @@ export interface ChamberSuggestion {
   warnings: string[];
   /**
    * True when the MATERIAL's own ceiling held the number below what the machine
-   * could have done — i.e. PerfectFit is deliberately not using the whole range.
+   * could have done — i.e. Trim is deliberately not using the whole range.
    */
   clamped: boolean;
 }
@@ -274,10 +274,10 @@ export function suggestChamberTemp(materialId: string, printer?: PrinterProfile)
       : '';
     const reason = machineMax === undefined
       ? 'this printer profile does not state a chamber limit'
-      : 'PerfectFit has no sourced ceiling for this material';
+      : 'Trim has no sourced ceiling for this material';
     return {
       advice: 'hot', clamped: false,
-      headline: `${m.label} wants the chamber as warm as the machine allows, but ${reason} — so PerfectFit names no number here.${ceiling}${vendor}`,
+      headline: `${m.label} wants the chamber as warm as the machine allows, but ${reason} — so Trim names no number here.${ceiling}${vendor}`,
       warnings: [g.why]
     };
   }
@@ -335,7 +335,7 @@ export function suggestRetractionRange(extruder: ExtruderType, material: Materia
   const auxBowden = nozzle?.feed === 'bowden';
   let s: RangeSuggestion;
   if (material.flexible) {
-    s = { start: 0, end: FLEXIBLE_RETRACTION_MAX_MM, step: 0.1, warnings: [`Keep retraction minimal for flexible filament — long retractions jam extruders. PerfectFit will not install a flexible retraction above ${FLEXIBLE_RETRACTION_MAX_MM} mm.`] };
+    s = { start: 0, end: FLEXIBLE_RETRACTION_MAX_MM, step: 0.1, warnings: [`Keep retraction minimal for flexible filament — long retractions jam extruders. Trim will not install a flexible retraction above ${FLEXIBLE_RETRACTION_MAX_MM} mm.`] };
     if (auxBowden) s.warnings.push('The auxiliary nozzle is not rated for flexible filaments — calibrate TPU on the main (direct drive) nozzle instead.');
   } else if (auxBowden) {
     // Bowden-fed auxiliary nozzle (X2D-style remote extruder). The printer

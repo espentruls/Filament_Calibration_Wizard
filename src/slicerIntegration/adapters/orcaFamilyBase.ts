@@ -50,7 +50,7 @@ export function makeOrcaFamilyAdapter(args: {
         if (data.instantiation === 'false') return null; // abstract intermediate node
       }
       if (sourceType === 'project') {
-        parsed.profile.warnings.push('Cached filament-library preset (filament/base). Usable as a clone source; PerfectFit will not modify it.');
+        parsed.profile.warnings.push('Cached filament-library preset (filament/base). Usable as a clone source; Trim will not modify it.');
       }
       if (sourceType === 'cloud' && quirks?.cloudSyncWarning) {
         parsed.profile.warnings.push(quirks.cloudSyncWarning);

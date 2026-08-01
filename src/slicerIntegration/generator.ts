@@ -16,10 +16,12 @@ import {
 } from './orcaFamily';
 
 /** Marker so a re-generated profile replaces (not stacks) our injected line. */
-const PA_GCODE_MARKER = '; PerfectFit pressure advance';
+const PA_GCODE_MARKER = '; Trim pressure advance';
+/** Pre-3.0.0 marker. Only ever matched, never written. See injectFilamentStartGcode. */
+const LEGACY_PA_GCODE_MARKER = '; PerfectFit pressure advance';
 
 /**
- * Field mapping from PerfectFit calibration results to Orca-family preset
+ * Field mapping from Trim calibration results to Orca-family preset
  * keys (verified against real presets from all five slicers — see
  * docs/SLICER_PROFILE_RESEARCH.md "Calibrated-field mapping").
  *
@@ -244,14 +246,24 @@ function firstStartGcode(data: Record<string, unknown>): string | null {
 
 /**
  * Append `line` to every element of filament_start_gcode, first removing any
- * previously injected PerfectFit line (so regenerating replaces rather than
+ * previously injected Trim line (so regenerating replaces rather than
  * stacks). Creates the key if absent. Preserves the array shape (per-extruder
  * variant slots) the base profile uses.
+ *
+ * Strips the LEGACY marker too. The app wrote `; PerfectFit pressure advance`
+ * before the 3.0.0 rename, and this marker is not decoration — it is the only
+ * thing that makes regeneration replace the M900 line instead of stacking a
+ * second one on top. A profile generated before the rename still carries the
+ * old text, so matching only the new marker would silently leave the stale
+ * M900 in place and append another, handing the printer two conflicting K
+ * values in one start G-code.
  */
 function injectFilamentStartGcode(data: Record<string, unknown>, line: string): void {
   const existing = data['filament_start_gcode'];
   const strip = (s: string) =>
-    s.split('\n').filter(l => !l.includes(PA_GCODE_MARKER)).join('\n').replace(/\n+$/, '');
+    s.split('\n')
+      .filter(l => !l.includes(PA_GCODE_MARKER) && !l.includes(LEGACY_PA_GCODE_MARKER))
+      .join('\n').replace(/\n+$/, '');
   if (Array.isArray(existing) && existing.length > 0 && existing.every(x => typeof x === 'string')) {
     data['filament_start_gcode'] = (existing as string[]).map(s => {
       const base = strip(s);

@@ -183,7 +183,7 @@ export interface ScoredProfile {
 
 /** One calibrated value to patch into the clone. */
 export interface CalibratedFieldPatch {
-  /** PerfectFit-side identifier, e.g. 'nozzleTemp'. */
+  /** Trim-side identifier, e.g. 'nozzleTemp'. */
   sourceKey: string;
   /** Target preset key, e.g. 'nozzle_temperature'. */
   presetKey: string;

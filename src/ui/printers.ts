@@ -108,7 +108,7 @@ export function unpublishedLimitsNote(spec: PrinterSpecification | null | undefi
   if (!missing.length) return null;
   const parts = missing.map(l => `${l.label} (${l.fallback} ${l.unit})`).join(' and ');
   return `This database record does not publish ${missing.length === 1 ? 'one limit' : 'these limits'}: ${parts}. `
-    + 'Those figures are PerfectFit\'s conservative fallback — NOT FROM THE DATABASE and not a specification for this machine. '
+    + 'Those figures are Trim\'s conservative fallback — NOT FROM THE DATABASE and not a specification for this machine. '
     + 'Check the value against your own hotend/bed rating and correct it: PTFE-lined hotends are often rated 240–250 °C, and every temperature suggestion in the app is capped by whatever is in this field.';
 }
 
@@ -179,7 +179,7 @@ export async function renderPrinters(root: HTMLElement): Promise<void> {
           specRow('Max flow', p.maxVolumetricFlow, 'mm³/s')))),
       unbackedLimits.length
         ? h('p', { class: 'field-help', style: 'color:var(--warn)' },
-            `⚠ ${unbackedLimits.map(l => l.label).join(' and ')} ${unbackedLimits.length === 1 ? 'is' : 'are'} not published in the database for this printer — the value shown is PerfectFit's conservative fallback, not a spec. Edit the profile and set your hardware's own rating.`)
+            `⚠ ${unbackedLimits.map(l => l.label).join(' and ')} ${unbackedLimits.length === 1 ? 'is' : 'are'} not published in the database for this printer — the value shown is Trim's conservative fallback, not a spec. Edit the profile and set your hardware's own rating.`)
         : null,
       // Two panels are for two PHYSICAL nozzles. A one-entry nozzle list is a
       // single-nozzle machine and gets the ordinary placard above instead.
@@ -423,7 +423,7 @@ function openEditor(root: HTMLElement, existing: PrinterProfile | null): void {
     if (!unbacked || Number(limitInputs[key].value) !== f.fallback) {
       el.style.display = 'none'; el.textContent = ''; return;
     }
-    el.textContent = `⚠ Not from the database — ${f.fallback} ${f.unit} is PerfectFit's conservative fallback for this field, not a published spec for this printer. `
+    el.textContent = `⚠ Not from the database — ${f.fallback} ${f.unit} is Trim's conservative fallback for this field, not a published spec for this printer. `
       + 'Every temperature the app suggests is capped by this number, so check it against your hardware\'s own rating and correct it.';
     el.style.display = '';
   };

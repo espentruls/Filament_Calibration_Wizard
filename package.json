@@ -10,12 +10,12 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/espentruls/Filament_Calibration_Wizard.git"
+    "url": "git+https://github.com/espentruls/Trim.git"
   },
   "bugs": {
-    "url": "https://github.com/espentruls/Filament_Calibration_Wizard/issues"
+    "url": "https://github.com/espentruls/Trim/issues"
   },
-  "homepage": "https://github.com/espentruls/Filament_Calibration_Wizard#readme",
+  "homepage": "https://github.com/espentruls/Trim#readme",
   "type": "module",
   "scripts": {
     "dev": "vite",

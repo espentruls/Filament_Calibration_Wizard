@@ -10,8 +10,10 @@ language the interface already speaks.
 The old name claimed a printer. The app works with single-nozzle machines,
 dual-nozzle ones (Bambu Lab X2D), and multi-nozzle ones (H2D, H2C), and
 per-nozzle calibration — not the X2D specifically — is what distinguishes it, so
-naming one model was wrong. H2D and H2C layouts are modelled from published
-specifications and have not been tested on the actual machines.
+naming one model was wrong. Only the X2D's nozzle layout ships as a template: the
+H2D and H2C are in the printer database as machine specs only, so their nozzles
+and feed paths have to be entered by hand, and neither has been tested on the
+actual machine.
 
 This is still a fork of
 [PerfectFit](https://github.com/tayloraaron078-tech/Filament_Calibration_Wizard)
@@ -30,8 +32,8 @@ files data under. That is a user-visible break, and the number says so.
 | Bundle identifier | `io.github.espentruls.perfectfit-x2d` | `io.github.espentruls.trim` |
 
 **This build does not carry anything over from 2.0.0, and does not need to.**
-2.0.0 was published but never installed by anyone, so there is no 2.0.0 data
-anywhere to move. Trim starts fresh. Nothing from an older install is deleted
+2.0.0 was tagged but no release was ever published from it, so there is nothing
+installed anywhere to migrate. Trim starts fresh. Nothing from an older install is deleted
 either — because the two identities can coexist, Trim installs alongside a 2.0.0
 build rather than over it, and anything that build had written stays on disk
 under the old identifier, untouched.
@@ -53,7 +55,7 @@ The IndexedDB origin (`http://tauri.localhost`) does NOT depend on the
 identifier, so those stores are perfectly portable. Nothing moves them, though.
 Change the identifier again and the app comes up empty with the user's data
 stranded in a folder it no longer looks in. 3.0.0 got away with it only because
-nothing was installed on 2.0.0; the next change needs a data migration shipped
+2.0.0 was never released; the next change needs a data migration shipped
 with it. The constant is `APP_IDENTIFIER` in `src-tauri/src/lib.rs`, where this
 is written down again, and a test fails if it drifts from tauri.conf.json.
 

@@ -344,7 +344,7 @@ export function resolveTargetSlot(args: {
     if (usable.mixedFeed) {
       return {
         kind: 'unresolved', code: 'FEED_UNKNOWN', legend: usable,
-        reason: `This preset's value slots are per feed path (${usable.names.join(', ')}), but PerfectFit could not determine which feed path nozzle ${args.nozzleIndex + 1}${nozzleName} uses — the printer profile for this project does not describe that nozzle. Slot order is not nozzle order on this machine, so there is no safe guess. Add the nozzle's feed type to the printer profile, or pick the slot by hand below.`
+        reason: `This preset's value slots are per feed path (${usable.names.join(', ')}), but Trim could not determine which feed path nozzle ${args.nozzleIndex + 1}${nozzleName} uses — the printer profile for this project does not describe that nozzle. Slot order is not nozzle order on this machine, so there is no safe guess. Add the nozzle's feed type to the printer profile, or pick the slot by hand below.`
       };
     }
     return { kind: 'positional', slot: positional, legend: usable };
@@ -760,10 +760,10 @@ export function cloneAndPatch(args: {
     const foreignFeeds = [...new Set(foreign.map(({ v }) => feedWord(v.feed!)))].join(' and ');
     if (foreign.length && nozzleFeed) {
       wrongSlotReason = (label, key, valueNote) =>
-        `${label} (${key}) was NOT written: “apply to all value slots” would put ${valueNote} into ${foreignList}, which belong to the ${foreignFeeds} feed path, but this project calibrated the ${feedWord(nozzleFeed)}-fed nozzle ${calibratedNozzle + 1}${nozzleName}. A ${feedWord(nozzleFeed)} calibration is not transferable to ${foreignFeeds} hardware — the retraction distance and pressure advance a bowden path needs are several times what a direct-drive path can survive. Untick “apply to all value slots” so PerfectFit writes only the slot that belongs to this nozzle, or set ${key} by hand in the slicer.`;
+        `${label} (${key}) was NOT written: “apply to all value slots” would put ${valueNote} into ${foreignList}, which belong to the ${foreignFeeds} feed path, but this project calibrated the ${feedWord(nozzleFeed)}-fed nozzle ${calibratedNozzle + 1}${nozzleName}. A ${feedWord(nozzleFeed)} calibration is not transferable to ${foreignFeeds} hardware — the retraction distance and pressure advance a bowden path needs are several times what a direct-drive path can survive. Untick “apply to all value slots” so Trim writes only the slot that belongs to this nozzle, or set ${key} by hand in the slicer.`;
     } else if (foreign.length) {
       wrongSlotReason = (label, key, valueNote) =>
-        `${label} (${key}) was NOT written: this preset's value slots are per feed path (${usableLegend.names.join(', ')}), “apply to all value slots” would write ${valueNote} into every one of them, and PerfectFit could not determine which feed path nozzle ${calibratedNozzle + 1}${nozzleName} uses — the project's printer profile does not describe that nozzle. Add the nozzle's feed type to the printer profile and re-generate, or set ${key} by hand in the slicer.`;
+        `${label} (${key}) was NOT written: this preset's value slots are per feed path (${usableLegend.names.join(', ')}), “apply to all value slots” would write ${valueNote} into every one of them, and Trim could not determine which feed path nozzle ${calibratedNozzle + 1}${nozzleName} uses — the project's printer profile does not describe that nozzle. Add the nozzle's feed type to the printer profile and re-generate, or set ${key} by hand in the slicer.`;
     }
   } else if (!applyToAllExtruders && extruders > 1 && usableLegend && chosenVariant) {
     const candidates = nozzleFeed
@@ -777,10 +777,10 @@ export function cloneAndPatch(args: {
         `${label} (${key}) was NOT written: value slot ${idx + 1} of this preset is “${chosenVariant.name}”, which belongs to the ${feedWord(chosenVariant.feed!)} feed path, but this project calibrated the ${feedWord(nozzleFeed)}-fed nozzle ${calibratedNozzle + 1}${nozzleName}. Writing ${valueNote} there would put a ${feedWord(nozzleFeed)} calibration on ${feedWord(chosenVariant.feed!)} hardware. ${suggestion}, or set ${key} by hand in the slicer for that slot.`;
     } else if (nozzleFeed && !chosenVariant.feed) {
       wrongSlotReason = (label, key, valueNote) =>
-        `${label} (${key}) was NOT written: PerfectFit does not recognize value slot ${idx + 1} of this preset (“${chosenVariant.name}”), so it cannot prove that slot belongs to the ${feedWord(nozzleFeed)}-fed nozzle ${calibratedNozzle + 1}${nozzleName}. ${valueNote} was withheld rather than written to unidentified hardware. ${suggestion}, or set ${key} by hand in the slicer.`;
+        `${label} (${key}) was NOT written: Trim does not recognize value slot ${idx + 1} of this preset (“${chosenVariant.name}”), so it cannot prove that slot belongs to the ${feedWord(nozzleFeed)}-fed nozzle ${calibratedNozzle + 1}${nozzleName}. ${valueNote} was withheld rather than written to unidentified hardware. ${suggestion}, or set ${key} by hand in the slicer.`;
     } else if (!nozzleFeed && usableLegend.mixedFeed) {
       wrongSlotReason = (label, key, valueNote) =>
-        `${label} (${key}) was NOT written: this preset's value slots are per feed path (${usableLegend.names.join(', ')}) and PerfectFit could not determine which feed path nozzle ${calibratedNozzle + 1}${nozzleName} uses — the project's printer profile does not describe that nozzle. Slot order is not nozzle order on this machine, so writing ${valueNote} into slot ${idx + 1} “${chosenVariant.name}” could not be shown to be correct. Add the nozzle's feed type to the printer profile and re-generate, or set ${key} by hand in the slicer.`;
+        `${label} (${key}) was NOT written: this preset's value slots are per feed path (${usableLegend.names.join(', ')}) and Trim could not determine which feed path nozzle ${calibratedNozzle + 1}${nozzleName} uses — the project's printer profile does not describe that nozzle. Slot order is not nozzle order on this machine, so writing ${valueNote} into slot ${idx + 1} “${chosenVariant.name}” could not be shown to be correct. Add the nozzle's feed type to the printer profile and re-generate, or set ${key} by hand in the slicer.`;
     } else if (!usableLegend.mixedFeed && physicalNozzles > 1) {
       // Every slot describes the SAME feed path, so the legend distinguishes
       // hotend variants — not nozzles. On a machine with two physical nozzles
@@ -800,7 +800,7 @@ export function cloneAndPatch(args: {
   let cannotNameSlotsReason: ((label: string, key: string, valueNote: string) => string) | null = null;
   if (base.profile.slicerId === 'bambu' && !canNameEverySlot && !Array.isArray(src.filament_extruder_variant)) {
     cannotNameSlotsReason = (label, key, valueNote) =>
-      `${label} (${key}) was NOT written: this base preset carries ${extruders} value slots but PerfectFit could not establish what each slot means — it declares no filament_extruder_variant legend, and it pulls none in from an “include” template PerfectFit knows. Slot count is not evidence: on a Bambu Lab X2D a two-slot preset spans two FEED PATHS, so writing ${valueNote} into an unidentified slot could put a bowden calibration on a direct-drive nozzle this project never calibrated. Pick a base preset that declares its slot legend (Bambu's X2D 0.4 nozzle presets do), or set ${key} by hand in the slicer.`;
+      `${label} (${key}) was NOT written: this base preset carries ${extruders} value slots but Trim could not establish what each slot means — it declares no filament_extruder_variant legend, and it pulls none in from an “include” template Trim knows. Slot count is not evidence: on a Bambu Lab X2D a two-slot preset spans two FEED PATHS, so writing ${valueNote} into an unidentified slot could put a bowden calibration on a direct-drive nozzle this project never calibrated. Pick a base preset that declares its slot legend (Bambu's X2D 0.4 nozzle presets do), or set ${key} by hand in the slicer.`;
   }
 
   const withholdAll = baseCannotAddressNozzle
@@ -1035,7 +1035,7 @@ export function defaultProfileName(args: {
   manufacturer: string; material: string; color?: string;
   printerName?: string; nozzle?: number;
 }): string {
-  const core = ['PerfectFit -', args.manufacturer, args.material, args.color].filter(Boolean).join(' ');
+  const core = ['Trim -', args.manufacturer, args.material, args.color].filter(Boolean).join(' ');
   const suffix = args.printerName ? ` @ ${args.printerName}${args.nozzle ? ` ${args.nozzle}` : ''}` : '';
   return sanitizeProfileName(core + suffix);
 }

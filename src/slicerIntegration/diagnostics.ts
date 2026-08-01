@@ -25,7 +25,7 @@ export interface DiagnosticsInput {
 
 export function buildDiagnosticReport(input: DiagnosticsInput): string {
   const lines: string[] = [];
-  lines.push('PerfectFit Profile Installer — Diagnostic Report');
+  lines.push('Trim Profile Installer — Diagnostic Report');
   lines.push(`Generated: ${new Date().toISOString()}`);
   lines.push(`App version: ${input.appVersion}`);
   lines.push(`Mode: ${isDesktop() ? 'desktop (Tauri)' : 'browser/PWA'}`);

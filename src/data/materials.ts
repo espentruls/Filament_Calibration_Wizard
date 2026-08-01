@@ -18,12 +18,12 @@ import type { MaterialPreset } from '../types';
  *     every PLA, PETG, PCTG, TPU, PVA and PP preset. It is shown as a reference
  *     point, never used as the suggestion.
  *
- *   `maxC` — the hottest chamber PerfectFit will ever suggest. Where a glass
+ *   `maxC` — the hottest chamber Trim will ever suggest. Where a glass
  *     transition is published it is Tg − 10 °C, which is the vendor's own
  *     heat-creep rule ("keep the enclosure at least 10 degrees below the glass
  *     transition temperature"): PLA Tg 45 → 35, TPU 30 → 20, PETG 60 → 50,
  *     PCTG 90 → 80, ABS/ASA 100 → 90. Where no Tg is published here, the
- *     vendor's own setpoint is the ceiling instead — PerfectFit does not go
+ *     vendor's own setpoint is the ceiling instead — Trim does not go
  *     above a shipped value without evidence.
  *
  * The classification is the load-bearing half, not the number. "Chamber as hot
@@ -185,7 +185,7 @@ export const MATERIALS: MaterialPreset[] = [
     hygroscopic: true, enclosureRecommended: true,
     chamber: {
       advice: 'hot', vendorC: 60, maxC: 60,
-      why: 'Nylon warps badly and a warm chamber holds it flat. The slicer vendor ships 60 °C for the whole PA family, and PerfectFit does not suggest above a shipped setpoint without evidence.'
+      why: 'Nylon warps badly and a warm chamber holds it flat. The slicer vendor ships 60 °C for the whole PA family, and Trim does not suggest above a shipped setpoint without evidence.'
     },
     warnings: [
       'Wet nylon is uncalibratable — dry it (typically 70–80 °C for 8–12 h) before any test.',
@@ -202,7 +202,7 @@ export const MATERIALS: MaterialPreset[] = [
     hygroscopic: true, enclosureRecommended: true,
     chamber: {
       advice: 'hot', vendorC: 60, maxC: 60,
-      why: 'Carbon-filled nylon still warps and still wants a warm chamber. The slicer vendor ships 60 °C for the whole PA family, and PerfectFit does not suggest above a shipped setpoint without evidence.'
+      why: 'Carbon-filled nylon still warps and still wants a warm chamber. The slicer vendor ships 60 °C for the whole PA family, and Trim does not suggest above a shipped setpoint without evidence.'
     },
     warnings: [
       'Abrasive: requires a hardened steel (or better) nozzle. Brass will wear out quickly.',
@@ -219,7 +219,7 @@ export const MATERIALS: MaterialPreset[] = [
     hygroscopic: true, enclosureRecommended: true,
     chamber: {
       advice: 'hot', vendorC: 60, maxC: 60,
-      why: 'Glass-filled nylon warps like plain nylon and wants the same warm chamber. The slicer vendor ships 60 °C for the whole PA family, and PerfectFit does not suggest above a shipped setpoint without evidence.'
+      why: 'Glass-filled nylon warps like plain nylon and wants the same warm chamber. The slicer vendor ships 60 °C for the whole PA family, and Trim does not suggest above a shipped setpoint without evidence.'
     },
     warnings: [
       'Very abrasive: hardened nozzle required.',
@@ -236,7 +236,7 @@ export const MATERIALS: MaterialPreset[] = [
     hygroscopic: true, enclosureRecommended: true,
     chamber: {
       advice: 'hot', vendorC: 60, maxC: 60,
-      why: 'Polycarbonate warps hard and a warm chamber is close to mandatory. Its glass transition is high (around 120 °C), but the slicer vendor ships 60 °C for it and PerfectFit does not suggest above a shipped setpoint without evidence.'
+      why: 'Polycarbonate warps hard and a warm chamber is close to mandatory. Its glass transition is high (around 120 °C), but the slicer vendor ships 60 °C for it and Trim does not suggest above a shipped setpoint without evidence.'
     },
     warnings: [
       'Requires an all-metal hotend rated well above 280 °C and usually a 100 °C+ bed — check both limits.',
@@ -253,7 +253,7 @@ export const MATERIALS: MaterialPreset[] = [
     hygroscopic: true, enclosureRecommended: true,
     chamber: {
       advice: 'hot', vendorC: 60, maxC: 60,
-      why: 'PPA is a high-temperature nylon and warps accordingly; a warm chamber is expected. The slicer vendor ships 60 °C for it, and PerfectFit does not suggest above a shipped setpoint without evidence.'
+      why: 'PPA is a high-temperature nylon and warps accordingly; a warm chamber is expected. The slicer vendor ships 60 °C for it, and Trim does not suggest above a shipped setpoint without evidence.'
     },
     warnings: [
       'Exceeds the temperature limits of most consumer printers — verify every limit before attempting.',
@@ -270,7 +270,7 @@ export const MATERIALS: MaterialPreset[] = [
     hygroscopic: true, enclosureRecommended: true,
     chamber: {
       advice: 'hot',
-      why: 'PPS needs an actively heated chamber, but no vendor setpoint is shipped for it and no glass transition is recorded here — so PerfectFit offers no number. Take it from the manufacturer datasheet.'
+      why: 'PPS needs an actively heated chamber, but no vendor setpoint is shipped for it and no glass transition is recorded here — so Trim offers no number. Take it from the manufacturer datasheet.'
     },
     warnings: [
       'Only for machines rated for 300 °C+ nozzle, heated chamber recommended. Most printers cannot print PPS.',

@@ -7,7 +7,7 @@ This guide is for people who just want to install the released **Trim** Mac app 
 - Use the Mac download, not the Windows `.exe`, Linux `.deb`, or Linux `.AppImage` files.
 - The Mac release is a universal `.dmg`, which means the same download works on both Apple Silicon Macs (M1/M2/M3/M4) and Intel Macs.
 - Only download Trim from the official repository releases page:
-  <https://github.com/espentruls/Filament_Calibration_Wizard/releases>
+  <https://github.com/espentruls/Trim/releases>
 - **The `.dmg` is not notarized and the app is not code-signed.** There is no paid Apple
   Developer certificate behind this project. macOS will therefore complain — it may say the
   developer cannot be verified, or that the `.dmg` is **damaged and can't be opened**. That
@@ -18,7 +18,7 @@ This guide is for people who just want to install the released **Trim** Mac app 
 ## Step-by-step install
 
 1. Open the releases page:
-   <https://github.com/espentruls/Filament_Calibration_Wizard/releases>
+   <https://github.com/espentruls/Trim/releases>
 2. Click the newest release at the top of the page.
 3. Find the **Assets** section for that release.
    - If the assets are hidden, click **Assets** to expand them.
@@ -133,7 +133,7 @@ Try this in order:
 4. Build the app yourself instead of downloading it. With [Node.js](https://nodejs.org) and [Rust](https://rustup.rs) installed:
 
    ```bash
-   git clone https://github.com/espentruls/Filament_Calibration_Wizard.git
+   git clone https://github.com/espentruls/Trim.git
    cd Filament_Calibration_Wizard
    npm install
    npm run tauri build

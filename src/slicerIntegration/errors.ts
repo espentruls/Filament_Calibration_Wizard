@@ -17,7 +17,7 @@ interface ErrorTemplate {
 const TEMPLATES: Record<ProfileInstallErrorCode, ErrorTemplate> = {
   SLICER_NOT_FOUND: {
     title: 'Slicer not found',
-    whatHappened: 'PerfectFit could not find this slicer on your computer.',
+    whatHappened: 'Trim could not find this slicer on your computer.',
     anythingChanged: 'Nothing was changed.',
     nextSteps: ['Locate the slicer manually from the slicer selection screen.', 'Export the profile and import it in the slicer yourself.'],
     exportAvailable: true
@@ -38,7 +38,7 @@ const TEMPLATES: Record<ProfileInstallErrorCode, ErrorTemplate> = {
   },
   MULTIPLE_USER_DATA_LOCATIONS: {
     title: 'Multiple preset locations found',
-    whatHappened: 'This slicer has more than one user preset location (for example a cloud account and a local folder), and PerfectFit is not confident which one is active.',
+    whatHappened: 'This slicer has more than one user preset location (for example a cloud account and a local folder), and Trim is not confident which one is active.',
     anythingChanged: 'Nothing was changed.',
     nextSteps: ['Pick the destination location explicitly on the install screen.'],
     exportAvailable: true
@@ -87,14 +87,14 @@ const TEMPLATES: Record<ProfileInstallErrorCode, ErrorTemplate> = {
   },
   BACKUP_FAILED: {
     title: 'Backup failed',
-    whatHappened: 'PerfectFit could not create a verified backup of the files it was about to change, so installation was stopped before touching anything.',
+    whatHappened: 'Trim could not create a verified backup of the files it was about to change, so installation was stopped before touching anything.',
     anythingChanged: 'Nothing was changed.',
     nextSteps: ['Check disk space and permissions.', 'Export the profile instead.'],
     exportAvailable: true
   },
   WRITE_PERMISSION_DENIED: {
     title: 'No permission to write',
-    whatHappened: 'The slicer preset folder is not writable by PerfectFit.',
+    whatHappened: 'The slicer preset folder is not writable by Trim.',
     anythingChanged: 'Nothing was changed.',
     nextSteps: ['Check folder permissions.', 'Export the profile and import it manually.'],
     exportAvailable: true
@@ -122,21 +122,21 @@ const TEMPLATES: Record<ProfileInstallErrorCode, ErrorTemplate> = {
   },
   UNSUPPORTED_MULTI_TOOL_PROFILE: {
     title: 'Multi-tool profile not supported yet',
-    whatHappened: 'This profile has per-tool settings that this version of PerfectFit cannot safely modify.',
+    whatHappened: 'This profile has per-tool settings that this version of Trim cannot safely modify.',
     anythingChanged: 'Nothing was changed.',
     nextSteps: ['Export the generated values and apply them in the slicer manually.', 'Choose a single-tool base profile.'],
     exportAvailable: true
   },
   NOT_DESKTOP: {
     title: 'Desktop app required',
-    whatHappened: 'Automatic detection and installation need the PerfectFit desktop app. In the browser, slicer folders cannot be accessed.',
+    whatHappened: 'Automatic detection and installation need the Trim desktop app. In the browser, slicer folders cannot be accessed.',
     anythingChanged: 'Nothing was changed.',
-    nextSteps: ['Download the generated profile and import it in your slicer.', 'Or use the PerfectFit desktop app for automatic installation.'],
+    nextSteps: ['Download the generated profile and import it in your slicer.', 'Or use the Trim desktop app for automatic installation.'],
     exportAvailable: true
   },
   UNKNOWN: {
     title: 'Unexpected error',
-    whatHappened: 'Something went wrong that PerfectFit did not anticipate.',
+    whatHappened: 'Something went wrong that Trim did not anticipate.',
     anythingChanged: 'If installation had started, it was rolled back where possible; check the backup list in Settings.',
     nextSteps: ['Try again.', 'Export the profile instead.', 'Copy the diagnostic report and file an issue.'],
     exportAvailable: true

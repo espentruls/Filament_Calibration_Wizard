@@ -89,7 +89,7 @@ Trim uses Tauri with a web frontend and Rust backend.
 ### Clone and run the project
 
 ```bash
-git clone https://github.com/espentruls/Filament_Calibration_Wizard.git
+git clone https://github.com/espentruls/Trim.git
 cd Filament_Calibration_Wizard
 npm install
 npm run tauri dev

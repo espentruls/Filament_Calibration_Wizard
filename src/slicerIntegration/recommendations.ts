@@ -22,7 +22,7 @@ function normEq(a: string | null | undefined, b: string | null | undefined): boo
 }
 
 // --- printer matching -------------------------------------------------------
-// PerfectFit printer names are user-defined and rarely equal the slicer's
+// Trim printer names are user-defined and rarely equal the slicer's
 // printer-preset names, so match on shared distinctive tokens (model numbers
 // like "h2s", "u1", "giga") rather than exact strings.
 
