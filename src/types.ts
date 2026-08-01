@@ -144,6 +144,45 @@ export interface PrinterDatabase {
 
 // --- Material presets ------------------------------------------------------
 
+/**
+ * What a material wants from the build chamber.
+ *
+ *   'hot'     — run the chamber as warm as the machine allows. High-Tg materials
+ *               (ABS, ASA, PA, PC) warp without it; a warm chamber lowers the
+ *               thermal gradient and improves layer bonding.
+ *   'ambient' — chamber heating stays OFF. Below roughly Tg − 10 °C is the whole
+ *               rule: a hot chamber heat-soaks the filament path and softens the
+ *               filament ABOVE the melt zone, which is heat creep — jams, ground
+ *               filament, and a hotend that has to come apart. This is the case
+ *               where "just set it to the max" does damage.
+ *   'unknown' — nothing is sourced for this material. Say so; suggest nothing.
+ */
+export type ChamberAdvice = 'hot' | 'ambient' | 'unknown';
+
+/**
+ * Per-material chamber guidance. GUIDANCE, never a calibration step: a chamber
+ * has no measurable optimum the way a temperature tower does, so PerfectFit
+ * neither tests it nor writes it into a slicer preset. It only ever says what to
+ * set, and refuses to say anything it cannot source.
+ */
+export interface MaterialChamberGuidance {
+  advice: ChamberAdvice;
+  /**
+   * The chamber setpoint the slicer vendor ships for this material (°C), where
+   * one is known. Shown as a reference point — never used as the suggestion,
+   * because a machine's own maximum decides that.
+   */
+  vendorC?: number;
+  /**
+   * The highest chamber temperature PerfectFit will suggest for this material
+   * (°C). Absent means "no sourced ceiling", and no number is offered at all.
+   * Every value carries its source in `src/data/materials.ts`.
+   */
+  maxC?: number;
+  /** One sentence, sentence case, giving the reason. Shown to the user. */
+  why: string;
+}
+
 export interface MaterialPreset {
   id: MaterialId;
   label: string;
@@ -165,6 +204,12 @@ export interface MaterialPreset {
   hygroscopic?: boolean;
   /** Needs enclosure / warns about warping. */
   enclosureRecommended?: boolean;
+  /**
+   * What to do with the build chamber. Required, not optional: a material that
+   * says nothing about the chamber is exactly how "set it to the max" gets
+   * applied to PLA. Materials where it does not matter say so.
+   */
+  chamber: MaterialChamberGuidance;
   warnings: string[];
 }
 

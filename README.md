@@ -331,7 +331,10 @@ the one feature that writes outside the app's own storage — read it before you
   moves it into place, re-verifies, refuses to run while the slicer is open, and will not
   replace an existing preset unless you explicitly confirm replacement (backups are restorable
   from the app). Preset formats are version-volatile, so support is verified per slicer
-  version. Both behaviours can be turned off in **Settings → Experimental features**
+  version — and, today, on **Windows only**: every entry in the verified-version registry is
+  Windows-verified, so on macOS and Linux the wizard reports direct install as unverified and
+  points you at the export-and-import path instead. Both behaviours can be turned off in
+  **Settings → Experimental features**
   (`Slicer profile generation`, `Automatic profile installation`).
 - Photos are stored and exported but not analyzed (AI photo evaluation is a designed-for,
   not-built v1 exclusion, like accounts, cloud sync, and printer control).

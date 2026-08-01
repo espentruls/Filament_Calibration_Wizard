@@ -11,7 +11,8 @@ import type {
   CalibratedFieldPatch, GeneratedFilamentProfile, ParsedFilamentProfile, ProfileGenerationRequest
 } from './types';
 import {
-  buildInfoSidecar, cloneAndPatch, fingerprintProfile, formatPresetNumber, infoValue, serializePreset
+  buildInfoSidecar, cloneAndPatch, fingerprintProfile, formatPresetNumber, infoValue,
+  resolveSlotLegend, serializePreset
 } from './orcaFamily';
 
 /** Marker so a re-generated profile replaces (not stacks) our injected line. */
@@ -93,9 +94,15 @@ export function buildPatchesFromProject(project: CalibrationProject): Calibrated
 }
 
 /**
- * Which tool/extruder index the wizard should pre-select for a multi-extruder
- * base profile: the project's calibrated nozzle, clamped to the profile shape
- * (single-extruder bases always get 0).
+ * Positional fallback ONLY: the project's calibrated nozzle clamped to the
+ * profile's slot count.
+ *
+ * This is not a nozzle→slot mapping and must not be used as one. A Bambu
+ * preset's slots are extruder VARIANTS, so on a Bambu Lab X2D this returns
+ * slot 2 ("Direct Drive High Flow", a MAIN-nozzle variant) for the bowden
+ * auxiliary nozzle. Use `resolveTargetSlot()` from orcaFamily, which reads the
+ * preset's own legend by name; this function survives only for presets that
+ * carry no legend at all, where there is nothing to read.
  */
 export function defaultTargetExtruder(
   project: Pick<CalibrationProject, 'nozzleIndex'>,
@@ -124,7 +131,19 @@ export function generateProfile(
     // physical nozzle was calibrated. Pass it explicitly: a preset too narrow
     // to address that nozzle must withhold the values, not write them into the
     // slot every nozzle reads.
-    calibratedNozzleIndex: request.project.nozzleIndex ?? 0
+    calibratedNozzleIndex: request.project.nozzleIndex ?? 0,
+    // …and the same reasoning one level deeper: a preset can be wide enough and
+    // still index its slots by feed path rather than by nozzle. The feed proves
+    // the chosen slot is the calibrated nozzle's; without it such a preset
+    // refuses the write instead of trusting the index.
+    calibratedNozzleFeed: request.calibratedNozzleFeed,
+    calibratedHotendFlow: request.calibratedHotendFlow,
+    calibratedNozzleLabel: request.calibratedNozzleLabel,
+    // …and once more for the shape neither of those can see: a legend that
+    // names only hotend variants of ONE feed path (the H2D's two-slot direct
+    // list) does not distinguish two PHYSICAL nozzles, so on such a machine no
+    // slot belongs to the calibrated nozzle alone.
+    physicalNozzleCount: request.physicalNozzleCount
   });
 
   // Bambu Studio only: bake pressure advance into the filament start g-code.
@@ -139,9 +158,34 @@ export function generateProfile(
   // pressure_advance (the base preset cannot address the calibrated nozzle),
   // an M900 in start g-code would hand that K to whichever nozzle runs the
   // preset — the exact cross-nozzle write that was just prevented.
+  //
+  // The same rule again for a shape the withholding above cannot see: on a
+  // preset whose slots are per feed path (the X2D's Direct Drive / Bowden
+  // legend) the array write succeeds at the bowden slot, but
+  // filament_start_gcode has no per-slot form at all — it is one string for the
+  // whole filament, so a baked M900 runs on whichever nozzle prints it. That
+  // hands the auxiliary's K (0.5–1.0) to the direct-drive main nozzle, whose
+  // own band is 0–0.1: the cross-nozzle write the slot mapping just prevented,
+  // arriving through the other channel. Bambu emits M900 only in single-extruder
+  // machine templates and never on a multi-extruder machine, so there is no
+  // verified guarded form to fall back to — the honest answer is to refuse and
+  // say why.
   const paPatch = request.patches.find(p => p.presetKey === 'pressure_advance');
   const paWithheld = (skippedFields ?? []).some(s => s.presetKey === 'pressure_advance');
-  if (request.bakePressureAdvanceGcode && request.slicerId === 'bambu' && paPatch && !paWithheld) {
+  const baseLegend = resolveSlotLegend(parsedBase);
+  // Keyed on the PRESET's shape alone. `applyToAllExtruders` is a statement
+  // about value slots and cannot make start g-code per-slot — the file has one
+  // filament_start_gcode however many slots it has — so it must not be able to
+  // switch this refusal off. (It used to, which meant one checkbox delivered
+  // the auxiliary's K to the direct-drive main nozzle through this channel.)
+  const multiFeedBase = !!baseLegend?.mixedFeed;
+  if (request.bakePressureAdvanceGcode && request.slicerId === 'bambu' && paPatch && multiFeedBase) {
+    skippedFields.push({
+      presetKey: 'filament_start_gcode',
+      label: 'Pressure advance (baked into start g-code for Bambu Studio)',
+      reason: `The M900 K line was NOT added to the filament start g-code: this preset serves more than one feed path (${baseLegend!.names.join(', ')}), and filament start g-code is stored once for the whole filament — it has no per-slot form. A baked M900 therefore runs on every nozzle that prints this filament, so nozzle ${(request.project.nozzleIndex ?? 0) + 1}'s K would also be applied to the other nozzle. Ticking “apply to all value slots” does not change that: start g-code has no slots to apply to. Set K for this nozzle in Bambu Studio instead (Flow Dynamics, per filament and nozzle).`
+    });
+  } else if (request.bakePressureAdvanceGcode && request.slicerId === 'bambu' && paPatch && !paWithheld) {
     const before = firstStartGcode(data);
     const k = formatPresetNumber(paPatch.value);
     const line = `M900 K${k} L1000 M10 ${PA_GCODE_MARKER}`;

@@ -2229,6 +2229,245 @@ table.data tbody tr:last-child td { border-bottom: 0; }
 }
 
 /* ===========================================================================
+   24b. GUIDED SESSION — PROGRESS STRIP (plan as a route)
+   ---------------------------------------------------------------------------
+   Two representations of one plan, built from a single pass over the session's
+   steps. The FULL route is an instrument card in the page flow: every step
+   engraved by name, measured steps lit and carrying the value they logged, the
+   open step raised in a lit bay, pending steps dark. Once that card scrolls up
+   under the app header, a CONDENSED bar pins in its place — the same waypoints
+   as marks, the open step named on the left with its number and status, and how
+   many steps remain.
+
+   There is no time or ETA anywhere on this strip. The app records no
+   print-duration data, so the only honest "how much is left" is a step count —
+   never a fabricated clock. Everything below is drawn from existing tokens; no
+   new colour, no second stylesheet.
+   =========================================================================== */
+
+:root { --gs-pin-top: 64px; }   /* the app-header's height, kept exact from JS */
+
+/* --- the full route, in the page flow ----------------------------------- */
+.gs-plan-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--s-4); flex-wrap: wrap;
+}
+.gs-route {
+  display: flex; align-items: flex-start; gap: 0;
+  margin: var(--s-4) 0 var(--s-3);
+}
+/* each step is a button so it is keyboard-operable and selects like the cluster.
+   Reset the control chrome; the leg lays its own name/mark/value out in a column */
+.gs-leg {
+  flex: 1 1 0; min-width: 0;
+  display: flex; flex-direction: column;
+  padding: 0 .2rem;
+  background: none; border: 0; font: inherit; color: inherit;
+  text-align: center; cursor: pointer;
+}
+.gs-leg.is-current { flex: 1.6 1 0; }
+
+/* the index cursor — the marker the nozzle plates and cluster already use */
+.gs-cursor {
+  display: block; text-align: center; line-height: 1;
+  font-size: var(--fs-legend-sm); color: var(--luminous);
+  visibility: hidden;
+}
+.gs-leg.is-current .gs-cursor { visibility: visible; }
+
+/* the step name, engraved above the route line; all names reserve two lines so
+   every waypoint mark lands on one continuous line whatever the name runs to */
+.gs-name {
+  font-family: var(--font-placard);
+  font-size: var(--fs-legend-sm);
+  font-weight: 700; text-transform: uppercase;
+  letter-spacing: var(--track-legend);
+  line-height: 1.25;
+  color: var(--luminous-dim);
+  min-height: 2.4em;
+  display: flex; align-items: flex-end; justify-content: center;
+}
+.gs-leg.is-done .gs-name,
+.gs-leg.is-current .gs-name { color: var(--luminous); }
+
+/* the route line and its waypoint diamond */
+.gs-mark { position: relative; height: 1.35rem; margin: .35rem 0 .1rem; }
+.gs-mark::before {
+  content: ""; position: absolute; left: 0; right: 0; top: 50%;
+  height: var(--hair); background: var(--hairline);
+}
+.gs-leg:first-child .gs-mark::before { left: 50%; }
+.gs-leg:last-child  .gs-mark::before { right: 50%; }
+.gs-leg.is-done .gs-mark::before { background: var(--green-line); }
+.gs-mark::after {
+  content: ""; position: absolute; left: 50%; top: 50%;
+  width: .5rem; height: .5rem; margin: -.25rem 0 0 -.25rem;
+  transform: rotate(45deg);
+  background: var(--panel);
+  border: var(--hair) solid var(--hairline-strong);
+}
+.gs-leg.is-done .gs-mark::after {
+  background: var(--radio-green); border-color: var(--radio-green);
+}
+.gs-leg.is-current .gs-mark::after {
+  width: .72rem; height: .72rem; margin: -.36rem 0 0 -.36rem;
+  background: var(--luminous); border-color: var(--luminous);
+  box-shadow: var(--shadow-hardware);
+}
+/* an optional step wears a hollow, dashed mark until it is measured */
+.gs-leg.is-optional:not(.is-done) .gs-mark::after { border-style: dashed; }
+
+/* the value logged at a waypoint — an em dash where nothing is measured */
+.gs-val {
+  text-align: center;
+  font-family: var(--font-numeric);
+  font-variant-numeric: tabular-nums lining-nums;
+  font-weight: 700;
+  font-size: var(--fs-readout-sm);
+  line-height: 1.1;
+  color: var(--radio-green);
+}
+.gs-val i {
+  font-style: normal;
+  font-family: var(--font-placard);
+  font-size: var(--fs-legend-sm);
+  letter-spacing: var(--track-caps);
+  text-transform: uppercase;
+  color: var(--luminous-dim);
+  margin-left: .2em;
+}
+.gs-leg:not(.is-done):not(.is-current) .gs-val { color: var(--luminous-faint); }
+.gs-status {
+  text-align: center;
+  font-family: var(--font-placard);
+  font-size: var(--fs-legend-sm);
+  text-transform: uppercase;
+  letter-spacing: var(--track-legend);
+  color: var(--luminous-dim);
+  margin-top: .3rem;
+}
+
+/* the open step: a lit placard bay under the route line */
+.gs-leg.is-current .gs-bay {
+  display: flex; flex-direction: column; gap: .25rem;
+  background: var(--green-wash);
+  border: var(--hair) solid var(--green-line);
+  border-radius: var(--radius-sm);
+  padding: .4rem .5rem .45rem;
+  margin-top: .1rem;
+}
+.gs-leg.is-current .gs-val { color: var(--luminous); }
+.gs-leg.is-current .gs-bay .gs-status { color: var(--luminous); margin-top: 0; }
+
+.gs-foot {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: var(--s-4); flex-wrap: wrap;
+}
+
+/* --- the pinned condensed bar ------------------------------------------- */
+/* A zero-height sticky wrapper: it holds no flow space in either state, so the
+   bar cannot shift the page when it appears — the jump is impossible by
+   construction rather than tuned away. The bar overflows the wrapper and paints
+   over the body scrolling beneath it. Its visibility is a plain class toggle
+   from one IntersectionObserver, never a scroll-linked animation. */
+.gs-pin {
+  position: sticky;
+  top: var(--gs-pin-top);
+  z-index: 15;                    /* under .app-header (20), over the page */
+  height: 0;
+}
+.gs-plan-sentinel { height: 1px; }   /* marks where the full route ends */
+
+.gs-slim { display: none; }
+.gs-pin.is-condensed .gs-slim { display: block; }
+.gs-slim {
+  background-color: var(--panel);
+  background-image: linear-gradient(180deg, var(--lum-wash), transparent 70%), var(--texture);
+  border-bottom: var(--hair) solid var(--bezel-edge);
+  box-shadow: var(--elev-header);
+}
+.gs-slim-inner {
+  max-width: var(--maxw);
+  margin: 0 auto;
+  padding: .5rem var(--s-4);
+  display: flex; align-items: center; gap: var(--s-4);
+}
+
+/* the left block D carries and G/E/F lacked: which step, its name, its status */
+.gs-now { display: flex; align-items: baseline; gap: var(--s-2); flex: none; margin: 0; }
+.gs-now-idx {
+  font-family: var(--font-numeric);
+  font-variant-numeric: tabular-nums lining-nums;
+  font-weight: 700;
+  font-size: var(--fs-legend);
+  color: var(--luminous);
+  white-space: nowrap;
+}
+.gs-now-name, .gs-now-state {
+  font-family: var(--font-placard);
+  font-size: var(--fs-legend);
+  font-weight: 700; text-transform: uppercase;
+  letter-spacing: var(--track-legend);
+  color: var(--luminous);
+  white-space: nowrap;
+}
+.gs-now-state { color: var(--luminous-dim); }
+
+.gs-pin-sep { flex: none; width: var(--hair); align-self: stretch; background: var(--hairline); }
+
+/* the waypoints, compressed to marks only — the G/E/F treatment the owner liked */
+.gs-pin-route { display: flex; align-items: center; flex: none; }
+.gs-pin-mark {
+  position: relative; width: 1.75rem; height: 2rem; flex: none;
+  background: none; border: 0; padding: 0; cursor: pointer;
+}
+.gs-pin-mark::before {
+  content: ""; position: absolute; left: 0; right: 0; top: 50%;
+  height: var(--hair); background: var(--hairline);
+}
+.gs-pin-mark:first-child::before { left: 50%; }
+.gs-pin-mark:last-child::before  { right: 50%; }
+.gs-pin-mark.is-done::before { background: var(--green-line); }
+.gs-pin-mark::after {
+  content: ""; position: absolute; left: 50%; top: 50%;
+  width: .42rem; height: .42rem; margin: -.21rem 0 0 -.21rem;
+  transform: rotate(45deg);
+  background: var(--panel);
+  border: var(--hair) solid var(--hairline-strong);
+}
+.gs-pin-mark.is-done::after { background: var(--radio-green); border-color: var(--radio-green); }
+.gs-pin-mark.is-current::after {
+  width: .68rem; height: .68rem; margin: -.34rem 0 0 -.34rem;
+  background: var(--luminous); border-color: var(--luminous);
+  box-shadow: var(--shadow-hardware);
+}
+.gs-pin-mark.is-optional:not(.is-done)::after { border-style: dashed; }
+
+.gs-slim-right {
+  font-family: var(--font-placard);
+  font-size: var(--fs-legend);
+  text-transform: uppercase;
+  letter-spacing: var(--track-legend);
+  color: var(--luminous-dim);
+  white-space: nowrap;
+}
+
+/* the step card clears the pinned bar if anything ever scrolls it into view */
+.gs-step-card { scroll-margin-top: calc(var(--gs-pin-top) + var(--s-4)); }
+
+@media (max-width: 720px) {
+  /* the full route keeps legible legs and scrolls sideways in its own box, so
+     the page body never scrolls horizontally */
+  .gs-route { overflow-x: auto; }
+  .gs-leg { flex: 0 0 5.25rem; }
+  .gs-leg.is-current { flex: 0 0 8rem; }
+  /* the pinned bar keeps the block that matters — which step, and how many left
+     — and drops the marks rather than wrapping onto a second pinned line */
+  .gs-pin-route, .gs-pin-sep { display: none; }
+  .gs-slim-inner { justify-content: space-between; }
+}
+
+/* ===========================================================================
    25. RESPONSIVE
    =========================================================================== */
 

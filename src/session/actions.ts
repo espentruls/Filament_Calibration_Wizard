@@ -27,7 +27,7 @@
 import type { CalibrationId, ExtruderType, SlicerTestInstructions } from '../types';
 import { CALIBRATIONS } from '../data/calibrations';
 import { getSlicerContent } from '../data/slicers';
-import { resolveStepValues, stepsProducing, type ValueContext } from './values';
+import { resolveChamberAdvisory, resolveStepValues, stepsProducing, type ValueContext } from './values';
 import type {
   ActionSeverity,
   SessionAction,
@@ -93,6 +93,25 @@ function hasDestination(save: SlicerTestInstructions['saveTo'] | undefined): boo
 }
 
 /**
+ * Where the shipped slicer content says chamber temperature lives, if anywhere.
+ *
+ * Nothing in `slicers.ts` names a chamber field today, so this returns undefined
+ * and the plan records a gap. It is a lookup rather than a constant so that the
+ * day the shipped content gains one, the action starts carrying the real path
+ * instead of a path this module made up.
+ */
+function chamberDestination(
+  content: ReturnType<typeof getSlicerContent>
+): { path: string; field: string; stepId: CalibrationId } | undefined {
+  for (const [stepId, inst] of Object.entries(content.perTest) as [CalibrationId, SlicerTestInstructions][]) {
+    const save = inst?.saveTo;
+    if (!save || !hasDestination(save)) continue;
+    if (/chamber/i.test(save.field)) return { path: save.path, field: save.field, stepId };
+  }
+  return undefined;
+}
+
+/**
  * Build the ordered action list for one step on one nozzle.
  */
 export function buildActionPlan(
@@ -149,6 +168,38 @@ export function buildActionPlan(
       source: `slicers.ts · ${content.slicer} ${content.version} · ${producer} · saveTo`,
       fromStepId: producer
     });
+  }
+
+  // --- 1b. the build chamber ------------------------------------------------
+  // A machine setting, not a preset one, and the one place where "as hot as it
+  // goes" is right for ABS and damaging for PLA. It comes before the test's own
+  // steps because the chamber has to be at temperature before anything prints.
+  const chamber = resolveChamberAdvisory(ctx);
+  if (chamber.actionable && chamber.display) {
+    const dest = chamberDestination(content);
+    const off = chamber.advice === 'ambient';
+    push({
+      id: `${stepId}:chamber`,
+      kind: 'environment',
+      title: off
+        ? 'Turn chamber heating off before printing'
+        : 'Bring the chamber up to temperature before printing',
+      ...base,
+      path: dest?.path,
+      field: dest?.field,
+      value: chamber.display,
+      detail: [chamber.explanation, ...chamber.warnings].join(' '),
+      // Leaving a chamber hot for a low-Tg filament ends in a jam, so that half
+      // is a caution; a warm chamber for ABS is ordinary setup.
+      severity: off ? 'caution' : 'info',
+      source: `materials.ts · ${ctx.material.id} · chamber`,
+      fromStepId: stepId
+    });
+    if (!dest) {
+      gaps.push(
+        `The shipped ${content.slicerLabel} ${content.version} instructions do not name where chamber temperature is set, so PerfectFit gives the number without a menu path rather than guessing one.`
+      );
+    }
   }
 
   // --- no shipped instructions for this test -------------------------------

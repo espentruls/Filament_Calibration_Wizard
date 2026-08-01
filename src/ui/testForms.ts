@@ -1,6 +1,6 @@
 import { h, field, numberInput, issueList, clear } from './dom';
 import type {
-  CalibrationId, CalibrationProject, MaterialPreset, PrinterProfile, VerificationMark
+  CalibrationId, CalibrationProject, ExtruderType, MaterialPreset, PrinterProfile, VerificationMark
 } from '../types';
 import {
   flowYolo, flowPercent, paTower, paFromSample, retractionFromHeight,
@@ -10,10 +10,13 @@ import {
 } from '../logic/formulas';
 import {
   suggestTempRange, suggestPaRange, suggestRetractionRange, suggestMvsRange, suggestFlowMethodDefaults,
-  resolveNozzle, FLEXIBLE_RETRACTION_MAX_MM
+  suggestChamberTemp, printerCanHeatChamber, resolveNozzle, FLEXIBLE_RETRACTION_MAX_MM
 } from '../logic/ranges';
 import { validateNumber, validateTestRange, validateAgainstPrinter, validateFlowRatio, type ValidationIssue } from '../logic/validation';
-import { VERIFICATION_CATEGORIES } from '../data/calibrations';
+import {
+  VERIFICATION_CATEGORIES, vendorNozzleWindowFor,
+  DRYING_SCHEDULES, OOZE_LEVERS, OOZE_LEVER_EXCLUSIONS
+} from '../data/calibrations';
 import { loadSettings } from '../storage/store';
 
 export interface TestCtx {
@@ -204,6 +207,359 @@ function gaugeInstrument(opts: {
 }
 
 // ---------------------------------------------------------------------------
+// Material-conditioned coaching
+//
+// Pure functions: they take the project's material, printer and nozzle and
+// return text. Nothing here is read by collect() or compute(), nothing here
+// becomes a value, and nothing here is written to a slicer — these exist so
+// the wizard can say something true about THIS filament on THIS machine
+// instead of a generic sentence that is right for ABS and harmful for PLA.
+//
+// Every number traces to src/data/calibrations.ts (which names the Bambu
+// Studio file it was read from), to src/data/slicers.ts, or to a preset value
+// quoted in the comment above it. Where nothing answers, the text says so
+// rather than guessing.
+// ---------------------------------------------------------------------------
+
+export interface CoachCallout {
+  id: string;
+  /** 'warn' paints amber — reserved for a real caution, per the panel rules. */
+  tone: 'info' | 'warn';
+  title: string;
+  body: string[];
+}
+
+function calloutEl(c: CoachCallout): HTMLElement {
+  return h('div', { class: c.tone === 'warn' ? 'callout callout-warn' : 'callout' },
+    h('p', { class: 'co-title' }, c.title),
+    c.body.map(p => h('p', {}, p)));
+}
+
+/**
+ * What a wet or degraded spool looks like, and how to dry this one.
+ *
+ * Offered at the START of a session, because the whole point is that nothing
+ * calibrated on a wet spool survives drying it — a session run on a wet spool
+ * is not partially useful, it is entirely wasted.
+ *
+ * Silent for materials with no drying story, so the warning keeps its force.
+ */
+export function spoolConditionCallout(material: MaterialPreset): CoachCallout | null {
+  const schedule = DRYING_SCHEDULES[material.id];
+  if (!schedule && !material.hygroscopic) return null;
+
+  const body = [
+    'Extrude about 100 mm at printing temperature into open air and listen. Popping, crackling or sizzling means absorbed water is flashing to steam inside the melt — stop and dry the spool.',
+    'Then look at the strand. Bubbles, foam, or a matte rough surface where it should be glossy is the same verdict, and so is a strand that curls violently or spits sideways.',
+    'Now watch what happens when you stop commanding extrusion. If plastic keeps coming out by itself for several seconds after the command stops, that is the signature of steam pressure inside the melt specifically — not of a badly tuned retraction. It is generated downstream of the extruder, so no retraction value can retract it.'
+  ];
+
+  if (schedule) {
+    const alt = schedule.altTemperatureC !== undefined && schedule.altHours !== undefined
+      ? `, or ${schedule.altTemperatureC} °C for ${schedule.altHours} h if your dryer reaches it`
+      : '';
+    body.push(
+      `Drying ${material.label}: ${schedule.temperatureC} °C for ${schedule.hours} h${alt} — the schedule the filament vendor publishes for this material. Do not go above ${schedule.softeningC} °C: ${material.label} softens at ${schedule.softeningC} °C and heat-distorts at ${schedule.heatDistortionC} °C, so a hotter dryer welds the spool to itself.`
+    );
+  } else {
+    body.push(
+      `PerfectFit has no vendor drying schedule to quote for ${material.label}. Its own material notes carry one, and a schedule printed on the spool beats both.`
+    );
+  }
+
+  body.push(
+    'Finally, flex a length of the filament sharply. If it snaps rather than bends, the spool is UV- or heat-aged in a way no dryer reverses — calibrating it measures the damage, not the material.',
+    'Ten minutes here is the cheapest insurance in the wizard: nothing calibrated on a wet spool transfers to the same spool once it is dry.'
+  );
+
+  return {
+    id: 'spool-condition',
+    tone: 'info',
+    title: 'Old or unknown spool? Ten minutes here can save the session',
+    body
+  };
+}
+
+// "Can this machine heat its chamber?" is answered in one place only —
+// printerCanHeatChamber in ../logic/ranges, imported above. A local copy used
+// to live here and disagreed with it: a profile saying heatedChamber:false but
+// carrying a stale non-zero maxChamberTemp read true here and false there. The
+// canonical one is stricter and correct — an explicit "no heated chamber", or
+// an explicit ceiling of 0, is final.
+
+/**
+ * Chamber guidance, per material, plus the interaction that catches people out:
+ * a hot chamber cures warping and makes drool worse.
+ *
+ * "Set the chamber to max" is right for ABS and ASA and actively harmful for
+ * PLA and PETG — a warm chamber softens low-temperature filament above the
+ * melt zone, which is heat creep. So the advice is never global.
+ *
+ * The ADVICE comes from `MaterialPreset.chamber` and the NUMBER comes from
+ * `suggestChamberTemp`, which owns the machine clamp. Nothing here computes or
+ * caps a chamber temperature of its own: a chamber setpoint is a temperature a
+ * printer executes, and this project has already shipped the same class of
+ * defect three times by letting two code paths hold the same fact. This
+ * function contributes only the ooze trade-off, which is its own domain.
+ */
+export function chamberOozeCallout(
+  material: MaterialPreset, printer?: PrinterProfile
+): CoachCallout | null {
+  const advice = material.chamber.advice;
+  const suggestion = suggestChamberTemp(material.id, printer);
+
+  if (advice === 'unknown') {
+    return {
+      id: 'chamber-unknown', tone: 'info',
+      title: `Chamber: no chamber guidance for ${material.label}`,
+      body: [suggestion.headline, ...suggestion.warnings]
+    };
+  }
+
+  if (advice === 'ambient') {
+    if (!printerCanHeatChamber(printer)) return null;
+    return {
+      id: 'chamber-ambient', tone: 'warn',
+      title: `Chamber: leave it off for ${material.label}`,
+      body: [
+        'This printer has a heated chamber, and that is exactly why this needs saying: a warm chamber heat-soaks the whole filament path, so the filament softens ABOVE the melt zone instead of in it. That is heat creep — grinding, under-extrusion and jams — and it happens with the chamber working perfectly.',
+        suggestion.headline,
+        ...suggestion.warnings,
+        'Chamber heat is not a general-purpose quality setting. It buys warp resistance on high-temperature materials and costs reliability on everything else.'
+      ]
+    };
+  }
+
+  // advice === 'hot'
+  if (!printerCanHeatChamber(printer)) {
+    // Careful with the claim here. An absent chamber field means the PROFILE
+    // does not record one — it is not evidence the machine has none, and saying
+    // otherwise tells X2D owners (whose machine holds 60–65 °C, field-verified)
+    // a falsehood about their own hardware. Two states, worded apart.
+    const statesNone = printer?.heatedChamber === false || printer?.maxChamberTemp === 0;
+    return {
+      id: 'chamber-absent', tone: 'info',
+      title: statesNone
+        ? `Chamber: ${material.label} wants one, and this printer has none`
+        : `Chamber: ${material.label} wants one, and this profile does not record one`,
+      body: [
+        suggestion.headline,
+        ...(statesNone ? [] : ['If your printer does heat its chamber, fill in “Max chamber temp” and “Heated chamber” on its printer profile (Printers → edit → Advanced machine specs) and this step will name a number. Until then PerfectFit says nothing about a chamber it has no evidence exists.']),
+        `Printing without a heated chamber leaves you less room to drop the nozzle temperature than someone printing the same spool inside one. The normal cost of a cooler ${material.label} nozzle is weaker layer bonds, and a warm chamber is what pays that back — it keeps the layer below near its bonding window while the next one lands.`,
+        'So with no chamber recorded, treat the cool end of the tower with more suspicion, and snap-test before you commit to it.'
+      ]
+    };
+  }
+
+  const body: string[] = [suggestion.headline, ...suggestion.warnings];
+  body.push(
+    `For ${material.label} that is the whole of it — the chamber is guidance, not a calibration step. There is no meaningful search space between "off" and the machine's limit, so no tower is worth burning on it.`,
+    `That chamber is why ${material.label} is not warping on this printer — it cuts the thermal gradient that drives shrinkage stress. It is also why the ooze you do get ends up ON the part: in a warm chamber strings and blobs stay soft far longer, and tacky surfaces catch what would otherwise flick off cold.`,
+    'The lever that buys it back is nozzle temperature. Because the chamber keeps the previous layer near its bonding window, you have MORE room to run the nozzle cooler than someone printing the same spool in open air — and nozzle temperature is the dominant ooze lever there is.',
+    'Be clear about what that last point is: it follows from two documented facts (a heated chamber improves interlayer adhesion; nozzle temperature dominates ooze), but no vendor states it as advice. So pair it with the check.',
+    'The check: after lowering the nozzle, confirm layer adhesion on the final verification print. Weak layers do not show on a temperature tower — they show when a part snaps in service.'
+  );
+
+  return {
+    id: 'chamber-hot', tone: 'info',
+    // Same rule as the headline: only claim "as hot as this machine allows"
+    // when the machine's ceiling is what decided the number.
+    title: suggestion.clamped
+      ? `Chamber: run it warm — up to ${suggestion.suggestedC} °C, this material's ceiling — and expect more drool`
+      : 'Chamber: run it as hot as this machine allows — and expect more drool',
+    body
+  };
+}
+
+/**
+ * The vendor's own temperature window versus the temperature its preset runs.
+ *
+ * Two facts have to coexist: the preset default sits at the TOP of the
+ * documented window (so it is the first ooze suspect on a generic spool), and
+ * the bottom of the tower sits BELOW that window (where layer bonds fail
+ * invisibly). Saying only the first would trade visible ooze for invisible
+ * delamination, which is the worse failure.
+ *
+ * Null for materials PerfectFit has no vendor window for.
+ */
+export function temperatureOozeCallout(
+  material: MaterialPreset, rungs: number[]
+): CoachCallout | null {
+  const w = vendorNozzleWindowFor(material.id);
+  if (!w) return null;
+
+  const body = [
+    `The filament vendor's own ${material.label} preset runs ${w.bambuDefault} °C, and its documented window for ${material.label} is ${w.low}–${w.high} °C. The default therefore sits at the top of the vendor's own range, not in the middle of it.`,
+    `Generic unbranded spools are commonly specified a good deal cooler than a vendor's own modified formulation. If your spool has a printed temperature range, trust the spool over the preset.`,
+    `That makes ${w.bambuDefault} °C the prime suspect when this filament oozes — a suspicion for this tower to settle, not a verdict. Opinion genuinely splits: plenty of generic spools run clean at ${w.bambuDefault} °C, and others look scorched there.`
+  ];
+
+  const under = rungs.filter(r => Number.isFinite(r) && r < w.low).sort((a, b) => b - a);
+  if (under.length) {
+    const list = under.length === 1
+      ? `${under[0]} °C`
+      : `${under.slice(0, -1).join(', ')} and ${under[under.length - 1]} °C`;
+    body.push(
+      `${list} ${under.length === 1 ? 'sits' : 'sit'} below Bambu's documented minimum of ${w.low} °C for ${material.label}. Bracketing below the floor is useful — you want to see where it breaks — but layer bonds can be weak down there even where the surface looks clean, so snap-test any block from that part of the tower before choosing it. Delamination is invisible on a temperature tower and only shows up when a part breaks in use.`
+    );
+  }
+
+  return {
+    id: 'temp-ooze-suspect', tone: 'info',
+    title: `${w.bambuDefault} °C is the vendor default — and the first ooze suspect`,
+    body
+  };
+}
+
+/** Materials that ooze so little in good condition that visible drool is diagnostic. */
+const LOW_OOZE_MATERIALS = new Set(['ABS', 'ASA']);
+
+/**
+ * The ordered ooze lever list, material- and feed-aware.
+ *
+ * Lives on the retraction step, which every project has — single-nozzle
+ * included. The dual-nozzle ooze-control step covers the toolchange case only,
+ * and this callout says so rather than duplicating it.
+ */
+export function oozeLeverCallout(args: {
+  material: MaterialPreset;
+  printer?: PrinterProfile;
+  feed: ExtruderType;
+}): CoachCallout {
+  const { material, printer, feed } = args;
+  const body: string[] = [
+    'Ooze has an order of operations, and it is worth following downward rather than starting where the familiar setting is. Retraction is the third lever, not the first — reaching for it first is how people lose days.',
+    'First, which ooze is it? Blobs and colour smears at TOOLCHANGES are a different problem with different fixes — prime tower, ramming, extruder-change retraction — and belong to the Dual-Nozzle Ooze Control step. Drool during ordinary travel within a single filament is what the list below addresses.'
+  ];
+
+  if (LOW_OOZE_MATERIALS.has(material.id)) {
+    body.push(
+      `${material.label} is intrinsically a low-ooze material — it strings noticeably less than PETG, and about as much as dry PLA. Conspicuous drool from ${material.label} is therefore an out-of-band signal, and the two things that put it out of band are moisture and a nozzle above the material's real window. Retraction geometry is a third-order explanation here.`
+    );
+  }
+
+  body.push(...OOZE_LEVERS.map(l => `${l.rank}. ${l.name} — ${l.detail}`));
+
+  // The X2D's bowden numbers are a SHORT-tube toolhead-bowden figure and are
+  // not generic bowden advice: a long-PTFE machine (Ender-class) normally needs
+  // 4–6 mm at 40–50 mm/s, so quoting 2 mm at it would start the tower far below
+  // the useful band — and below what this same panel's own suggested range says.
+  // So the machine-specific paragraph is gated on the machine.
+  const isDualNozzleBowden = (printer?.nozzles?.length ?? 0) > 1 && feed === 'bowden';
+  if (isDualNozzleBowden) {
+    // Bambu Lab X2D 0.4 nozzle.json, arrays indexed by extruder VARIANT:
+    // retraction_length ["0.8","0.8","2","2"], retraction_speed and
+    // deretraction_speed ["30","30","20","20"] — the first two entries are the
+    // direct-drive variants, the last two the bowden ones.
+    body.push(
+      'On this machine\'s bowden feed path the numbers themselves are different: the X2D ships 2 mm at 20 mm/s retract and 20 mm/s deretract for its bowden variants, against 0.8 mm at 30 mm/s for the direct-drive ones. That is a SHORT tube from a toolhead-mounted remote stepper — start from the bowden figure, and change length before speed.'
+    );
+  } else if (feed === 'bowden') {
+    body.push(
+      'On a bowden feed path retraction has to pull back the filament compressed inside the tube as well as the melt, so the distance is larger and the useful band wider than on direct drive — the suggested range above is where to start. Change length before speed, and do not copy a number from a different machine: the right distance scales with tube length, so a short toolhead-mounted bowden runs a fraction of what a long frame-to-hotend tube needs.'
+    );
+  }
+
+  if (printer?.nozzles?.some(n => n.feed === 'bowden')) {
+    // Process 0.20mm Standard @BBL X2D: travel_speed ["1000", …].
+    // Machine fdm_bbl_3dp_002_common: wipe_distance ["2", …], z_hop ["0.4", …].
+    body.push(
+      'On the X2D specifically, levers 4 to 6 are close to exhausted before you touch them: the stock process profile already travels at 1000 mm/s, the machine already wipes 2 mm, and z-hop already sits at 0.4 mm on "Auto Lift". Temperature and retraction carry nearly all the weight on this printer.'
+    );
+  }
+
+  body.push(...OOZE_LEVER_EXCLUSIONS);
+
+  return {
+    id: 'ooze-levers', tone: 'info',
+    title: 'Fighting ooze? Work the levers in this order',
+    body
+  };
+}
+
+/** Materials whose aux-hotend use PerfectFit can positively source from the vendor. */
+const AUX_VENDOR_RECOMMENDED = new Set(['ABS', 'ASA']);
+
+/**
+ * Methodology notes for the flow steps.
+ *
+ * The load-bearing one is the first: every flow method here is judged by eye,
+ * which is precisely why shrinkage cannot bias the result. That is a property
+ * worth stating out loud, because a measured single-wall method — the obvious
+ * "improvement" — would silently import the material's shrinkage as a flow
+ * error and bake permanent over-extrusion into the profile.
+ */
+export function flowMethodCallouts(ctx: TestCtx): CoachCallout[] {
+  const out: CoachCallout[] = [];
+  const sel = resolveNozzle(ctx.project, ctx.printer);
+
+  out.push({
+    id: 'flow-visual', tone: 'info',
+    title: 'This test is judged by eye, not with calipers — and that is deliberate',
+    body: [
+      'Every flow method PerfectFit offers is scored on top-surface quality: gaps between lines, ridges, and how a fingernail drags. Nothing is measured with calipers, and that is exactly what keeps shrinkage out of the answer — shrinkage scales a whole part uniformly and does not change the ratio of deposited volume to swept volume inside a layer.',
+      'The alternative is a trap worth naming. Calibrate flow by measuring a single wall instead, and a cooled ABS wall reads roughly 0.3–0.7% thin from shrinkage alone. You would read that as under-extrusion, raise the flow ratio to correct it, and bake permanent over-extrusion into the profile — which then corrupts the shrinkage step downstream. If you ever use a measured method, divide the shrinkage back out first.'
+    ]
+  });
+
+  const shrink = ctx.project.finals.shrinkagePercent;
+  if (shrink !== undefined && Number.isFinite(shrink) && shrink !== 100) {
+    out.push({
+      id: 'flow-shrinkage-live', tone: 'warn',
+      title: 'A shrinkage compensation is already switched on',
+      body: [
+        `This project has ${shrink}% saved, so the slicer scales the geometry under these blocks by 100/${shrink} before printing them.`,
+        'Your surface judgement still stands — that is the whole benefit of judging by eye. But do not turn any caliper reading taken off these blocks into a flow correction without dividing the compensation back out, and leave the compensation alone between passes so the two are comparable.'
+      ]
+    });
+  }
+
+  if (ctx.material.chamber.advice === 'hot') {
+    out.push({
+      id: 'flow-enclosure-judging', tone: 'info',
+      title: `Judging ${ctx.material.label} blocks that cooled slowly`,
+      body: [
+        'A block that cools slowly self-levels. Its top reads glossier and smoother across a wider band of flow modifiers than the same block would in open air, which flattens the difference between neighbours and quietly biases a hurried judgement toward the high-flow end.',
+        'So judge at a shallow raking angle in strong light and by fingernail, never from directly above. If two adjacent blocks genuinely tie, take the LOWER one — under-extrusion is the louder defect on these materials, so a real tie means the lower block is safe.'
+      ]
+    });
+  }
+
+  // Everything below states facts about an AUXILIARY hotend on a dual-nozzle
+  // machine (the X2D's remote-fed right nozzle). A single-nozzle bowden printer
+  // has no auxiliary and no vendor compatibility list, so a profile that merely
+  // names one bowden nozzle must not be told any of it.
+  if (sel.feed === 'bowden' && sel.nozzle && (ctx.printer?.nozzles?.length ?? 0) > 1) {
+    if (ctx.material.flexible) {
+      out.push({
+        id: 'flow-aux-excluded', tone: 'warn',
+        title: `${ctx.material.label} is not supported on the auxiliary hotend`,
+        body: [
+          `Flexible filament is the one hard exclusion on the X2D's auxiliary nozzle — the longer feed path's resistance is too high for it — so a flow ratio measured there has nowhere legitimate to go. Calibrate ${ctx.material.label} on the main (direct drive) nozzle instead.`
+        ]
+      });
+    } else {
+      const body = [
+        `The flow ratio you are about to measure describes THIS feed path. A dual-nozzle filament preset stores it once per extruder variant, so the number belongs to the bowden variant this project targets — not to the machine as a whole, and never to the main nozzle.`,
+        `Expect slightly softer detail here than the main nozzle gives. Bambu attributes that to the auxiliary's remote extrusion structure: a longer feed path means weaker extrusion response and less detail control. It is inherent to the bowden path, not a calibration failure — do not chase it with flow ratio, or you will trade a real dimensional error for a cosmetic one you cannot win.`
+      ];
+      if (AUX_VENDOR_RECOMMENDED.has(ctx.material.id)) {
+        body.push(
+          `${ctx.material.label} itself belongs here: Bambu's X2D filament-compatibility guide puts it on the Recommended list for the auxiliary hotend. Flexible filament is the one material it excludes outright.`
+        );
+      }
+      out.push({
+        id: 'flow-aux', tone: 'info',
+        title: `This ratio belongs to ${sel.nozzle.label}`,
+        body
+      });
+    }
+  }
+
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // Temperature
 // ---------------------------------------------------------------------------
 
@@ -245,6 +601,9 @@ const temperatureController: TestController = {
     const end = numberInput({ value: prior?.end ?? sug.end, step: 5 });
     const step = numberInput({ value: prior?.step ?? sug.step, step: 1, min: 1 });
     const preview = h('div', {});
+    // The sub-floor caution names the actual rungs, so it is redrawn with the
+    // plan rather than written once from the material default.
+    const oozeHost = h('div', {});
     const refresh = () => {
       clear(preview);
       const r = generateRange(num(start.value), num(end.value), num(step.value), 0);
@@ -255,18 +614,29 @@ const temperatureController: TestController = {
       }
       const warned = issueList(r.warnings.map(w => ({ level: 'warning' as const, message: w })));
       if (warned) preview.append(warned);
+      clear(oozeHost);
+      const ooze = temperatureOozeCallout(ctx.material, r.values);
+      if (ooze) oozeHost.append(calloutEl(ooze));
     };
     [start, end, step].forEach(i => i.addEventListener('input', refresh));
     refresh();
 
+    // Spool condition first: it is the only thing here that can invalidate the
+    // whole session, and it is cheapest to act on before anything is printed.
+    const spool = spoolConditionCallout(ctx.material);
+    const chamber = chamberOozeCallout(ctx.material, ctx.printer);
+
     const el = h('div', {},
+      spool ? calloutEl(spool) : null,
       sug.warnings.length ? issueList(sug.warnings.map(w => ({ level: 'warning' as const, message: w }))) : null,
       h('div', { class: 'field-row' },
         field('Start temperature (°C)', start, 'The HOTTER end — Orca towers print hottest block first (bottom).'),
         field('End temperature (°C)', end, 'The cooler end.'),
         field('Step (°C)', step, 'Orca uses 5 °C per block.')
       ),
-      previewPanel('Tower plan', preview)
+      previewPanel('Tower plan', preview),
+      oozeHost,
+      chamber ? calloutEl(chamber) : null
     );
     return {
       el,
@@ -409,6 +779,17 @@ const temperatureController: TestController = {
     if (acc.length && (normal === Math.max(...acc) || normal === Math.min(...acc)) && acc.length > 2) {
       warnings.push('You chose an edge of your acceptable range — the middle is usually the safer default.');
     }
+    // Choosing below the vendor's documented floor is a legitimate answer for a
+    // generic spool and a real strength risk at the same time. The tower cannot
+    // show delamination, so the caution travels with the value instead.
+    const window = vendorNozzleWindowFor(ctx.material.id);
+    if (window && Number.isFinite(normal) && normal < window.low) {
+      warnings.push(
+        `${normal} °C sits below the ${window.low} °C minimum the filament vendor documents for ${ctx.material.label}. ` +
+        'That can genuinely be right for a generic spool — but weak layer bonds are invisible on a temperature tower, ' +
+        'so snap-test a block from that part of the tower, and re-confirm layer adhesion on the final verification print before trusting this profile.'
+      );
+    }
     return { calcs: [], computed, finalsPatch, enterInSlicer, warnings };
   }
 };
@@ -442,7 +823,10 @@ function flowController(pass: 1 | 2 | 'verify'): TestController {
             ? 'The printed blocks carry their modifiers; you\'ll pick one after printing.'
             : pass === 'verify'
               ? 'The re-check prints the same fine blocks (−9% to 0%, 1% steps) relative to your SAVED value — with Pressure Advance now active. If the 0% block wins, your flow ratio is confirmed.'
-              : 'Pass 2 blocks run −9% to 0% in 1% steps, relative to the SAVED Pass 1 value.')
+              : 'Pass 2 blocks run −9% to 0% in 1% steps, relative to the SAVED Pass 1 value.'),
+        // Methodology, the live shrinkage compensation, how to judge a slowly
+        // cooled block, and which feed path this number belongs to.
+        flowMethodCallouts(ctx).map(calloutEl)
       );
       return {
         el,
@@ -728,9 +1112,18 @@ const retractionController: TestController = {
     [start, end, step].forEach(i => i.addEventListener('input', refresh));
     refresh();
 
+    // The ordered lever list lives here because this is the ooze step EVERY
+    // project has: the dual-nozzle ooze step is only ever added to bowden-aux
+    // projects, so a single-nozzle user fighting drool would otherwise be
+    // handed the third lever and none of the two above it.
+    const levers = oozeLeverCallout({ material: ctx.material, printer: ctx.printer, feed: extruder });
+    const spool = spoolConditionCallout(ctx.material);
+
     const el = h('div', {},
       h('p', { class: 'field-help' }, `Suggested for ${sel.nozzle ? `${sel.nozzle.label} — ` : ''}${extruder === 'direct' ? 'direct drive' : 'Bowden'}: ${sug.start}–${sug.end} mm, step ${sug.step}.`),
       sug.warnings.length ? issueList(sug.warnings.map(w => ({ level: 'warning' as const, message: w }))) : null,
+      calloutEl(levers),
+      spool ? calloutEl(spool) : null,
       h('div', { class: 'field-row' },
         field('Start length (mm)', start), field('End length (mm)', end), field('Step (mm)', step)
       ),
@@ -1360,6 +1753,18 @@ const oozeControlController: TestController = {
 
     const el = h('div', {},
       h('p', {}, 'Confirm each mitigation below, then print a small two-filament model with several toolchanges to verify.'),
+      // The fork, stated on this side of it too. Everything in this step is a
+      // toolchange defence; none of it touches drool inside one filament, and a
+      // user who works the checklist for the wrong symptom finds that out only
+      // after another print.
+      calloutEl({
+        id: 'ooze-fork', tone: 'info',
+        title: 'This step covers toolchange ooze only',
+        body: [
+          'Every mitigation here — prime tower, per-extruder retraction override, aux K, ramming — acts at the hand-off between the two nozzles. If your blobs and strings appear during ordinary printing within a single filament, none of it will help.',
+          'That case belongs to the temperature step, which owns the dominant lever, and the retraction step, which carries the full ordered lever list. Both are in every project, single-nozzle included.'
+        ]
+      }),
       h('div', { class: 'six-pack six-pack-2' }, mainGauge.el, auxGauge.el),
       h('p', { class: 'field-help' },
         typeof mainRetraction === 'number'

@@ -12,8 +12,9 @@
 // browser build. Unknown fields must survive parse → clone → patch → serialize.
 // ---------------------------------------------------------------------------
 
+import type { ExtruderType } from '../types';
 import type {
-  DetectedFilamentProfile, IntegrationSlicerId, NormalizedMaterial,
+  DetectedFilamentProfile, HotendFlowClass, IntegrationSlicerId, NormalizedMaterial,
   ParsedFilamentProfile, ProfileFieldChange, ProfileSource, CalibratedFieldPatch,
   SkippedFieldNote
 } from './types';
@@ -122,14 +123,237 @@ export function printerModelsFromNames(names: string[]): string[] {
   return [...out];
 }
 
+/**
+ * Array-valued keys that are NOT indexed by extruder, so their length says
+ * nothing about how many value slots a preset has.
+ *
+ * The drying keys are indexed by AMS dryer device and are four wide in Bambu's
+ * own `fdm_filament_common`; a preset that carries them resolved would look
+ * like a four-slot preset even on a single-nozzle machine. Shape alone cannot
+ * tell them apart from a real four-slot variant array, so they have to be named.
+ */
+const NON_EXTRUDER_ARRAY_KEYS = new Set([
+  'compatible_printers', 'compatible_prints', 'filament_settings_id',
+  'filament_dev_ams_drying_temperature', 'filament_dev_ams_drying_time',
+  'filament_dev_ams_drying_ams_limitations', 'filament_flush_temp_fast'
+]);
+
 /** Widest per-extruder array length among setting values. */
 export function extruderCountOf(data: PresetJson): number {
   let max = 1;
   for (const [k, v] of Object.entries(data)) {
-    if (k === 'compatible_printers' || k === 'compatible_prints' || k === 'filament_settings_id') continue;
+    if (NON_EXTRUDER_ARRAY_KEYS.has(k)) continue;
     if (Array.isArray(v) && v.length > max && v.every(x => typeof x === 'string')) max = v.length;
   }
   return max;
+}
+
+// --- extruder-variant slot legend -------------------------------------------
+//
+// A Bambu-lineage filament preset's per-slot arrays are indexed by EXTRUDER
+// VARIANT, not by nozzle number. The legend that names each slot lives in
+// `filament_extruder_variant`. On the Bambu Lab X2D no filament preset declares
+// it — it arrives through `"include": ["fdm_filament_template_direct_bowden"]`,
+// where the four slots are
+//   0 Direct Drive Standard / 1 Direct Drive High Flow  → MAIN nozzle
+//   2 Bowden Standard       / 3 Bowden High Flow        → AUXILIARY nozzle
+// Reading that array by nozzle index puts a bowden calibration on a direct-drive
+// hotend, which is the whole reason this module resolves the legend by NAME.
+
+/**
+ * Legends supplied by Bambu's `include` templates. Copied verbatim from the
+ * template presets, which ship as fixtures (bambu-template-direct-bowden.json,
+ * bambu-template-direct-dual.json) and are asserted against this table by
+ * tests/slicerIntegration/x2dSlotMapping.test.ts. These two are the only
+ * `include` targets that exist across a full Bambu Studio filament library.
+ */
+export const BAMBU_INCLUDE_TEMPLATE_VARIANTS: Record<string, string[]> = {
+  fdm_filament_template_direct_bowden: [
+    'Direct Drive Standard', 'Direct Drive High Flow', 'Bowden Standard', 'Bowden High Flow'
+  ],
+  fdm_filament_template_direct_dual: [
+    'Direct Drive Standard', 'Direct Drive High Flow'
+  ]
+};
+
+/** One slot of the legend, read as hardware rather than as a position. */
+export interface ExtruderVariant {
+  name: string;
+  /** Feed path this slot describes; null when the name is not recognizable. */
+  feed: ExtruderType | null;
+  /** Hotend flow class; null when the name is not recognizable. */
+  flow: HotendFlowClass | null;
+}
+
+export interface SlotLegend {
+  names: string[];
+  variants: ExtruderVariant[];
+  /** Where the legend came from — a preset's own key wins over a template. */
+  source: 'declared' | 'include-template' | 'scanner';
+  /** True when the legend is exactly as wide as the preset's value slots. */
+  matchesSlotCount: boolean;
+  /** True when the legend describes more than one feed path (e.g. the X2D). */
+  mixedFeed: boolean;
+}
+
+/**
+ * Read one variant name as hardware. The name is the only meaning a slot has:
+ * `Bambu TPU 85A @BBL H2D 0.4 nozzle` ships a one-slot legend whose slot 0 is
+ * "Direct Drive TPU High Flow", so position carries nothing.
+ */
+export function classifyExtruderVariant(name: string): ExtruderVariant {
+  const n = name.trim().toLowerCase();
+  const feed: ExtruderType | null =
+    n.includes('bowden') ? 'bowden' : n.includes('direct drive') ? 'direct' : null;
+  const flow: HotendFlowClass | null =
+    n.includes('high flow') ? 'high' : n.includes('standard') ? 'standard' : null;
+  return { name, feed, flow };
+}
+
+function legendFrom(names: string[], source: SlotLegend['source'], slotCount: number): SlotLegend {
+  const variants = names.map(classifyExtruderVariant);
+  const feeds = new Set(variants.map(v => v.feed).filter((f): f is ExtruderType => f !== null));
+  return {
+    names: [...names],
+    variants,
+    source,
+    matchesSlotCount: names.length === slotCount,
+    mixedFeed: feeds.size > 1
+  };
+}
+
+/**
+ * The slot legend for a parsed preset, or null when none can be established.
+ *
+ * Order: a legend the scanner already resolved → the preset's own
+ * `filament_extruder_variant` → the legend of an `include`d Bambu template.
+ * Never invented: an unrecognized `include` yields null, and callers must
+ * refuse rather than guess (see resolveTargetSlot / cloneAndPatch).
+ */
+export function resolveSlotLegend(base: ParsedFilamentProfile): SlotLegend | null {
+  const slots = base.extruderCount;
+  const provided = base.resolvedExtruderVariants;
+  if (Array.isArray(provided) && provided.length > 0 && provided.every(x => typeof x === 'string')) {
+    return legendFrom(provided, 'scanner', slots);
+  }
+  const raw = base.profile.rawProfile as PresetJson;
+  const declared = raw?.filament_extruder_variant;
+  if (Array.isArray(declared) && declared.length > 0 && declared.every(x => typeof x === 'string')) {
+    return legendFrom(declared as string[], 'declared', slots);
+  }
+  // Bambu applies `include` templates in order, later entries winning.
+  const includes = stringArray(raw?.include);
+  for (let i = includes.length - 1; i >= 0; i--) {
+    const tpl = BAMBU_INCLUDE_TEMPLATE_VARIANTS[includes[i]];
+    if (tpl) return legendFrom(tpl, 'include-template', slots);
+  }
+  return null;
+}
+
+export type SlotTargetResolution =
+  | {
+      kind: 'variant';
+      slot: number;
+      variantName: string;
+      legend: SlotLegend;
+      /** Every slot that serves the calibrated nozzle's feed path. */
+      candidates: number[];
+    }
+  | { kind: 'positional'; slot: number; legend: SlotLegend | null }
+  | {
+      kind: 'unresolved';
+      code: 'FEED_UNKNOWN' | 'NO_SLOT_FOR_FEED' | 'VARIANT_UNRECOGNISED' | 'SLOT_SHARED_BY_NOZZLES';
+      reason: string;
+      legend: SlotLegend | null;
+    };
+
+/** "Direct Drive"/"Bowden" as the legend itself words it. */
+function feedWord(feed: ExtruderType): string {
+  return feed === 'bowden' ? 'Bowden' : 'Direct Drive';
+}
+
+/**
+ * Which value slot a calibration belongs in, resolved from the preset's own
+ * legend by NAME — never from the nozzle's index.
+ *
+ * Refuses (kind 'unresolved') rather than guessing when the legend describes
+ * more than one feed path and the calibrated nozzle's feed is unknown, or when
+ * no slot serves that feed path at all. A positional answer is only returned
+ * for presets that carry no legend to read.
+ */
+export function resolveTargetSlot(args: {
+  base: ParsedFilamentProfile;
+  /** Physical nozzle, in the SLICER's index space (0 = first/main). */
+  nozzleIndex: number;
+  /** How filament reaches that nozzle. Unknown = null/undefined. */
+  nozzleFeed?: ExtruderType | null;
+  /** Standard vs high-flow hotend on that nozzle. Defaults to standard. */
+  hotendFlow?: HotendFlowClass;
+  /** Printer-profile label for that nozzle, used in refusal messages. */
+  nozzleLabel?: string | null;
+  /**
+   * How many PHYSICAL nozzles the printer profile declares. A legend that
+   * describes only ONE feed path names hotend variants, not nozzles: on a
+   * machine with two nozzles both of them read whichever slot matches the
+   * hotend fitted to them, so no slot belongs to one nozzle alone. 0/undefined
+   * = the printer profile does not say, which asserts nothing.
+   */
+  physicalNozzleCount?: number;
+}): SlotTargetResolution {
+  const slots = Math.max(1, args.base.extruderCount);
+  const legend = resolveSlotLegend(args.base);
+  const positional = Math.max(0, Math.min(args.nozzleIndex, slots - 1));
+  const usable = legend && legend.matchesSlotCount ? legend : null;
+  const nozzleName = args.nozzleLabel ? ` (${args.nozzleLabel})` : '';
+  const nozzles = args.physicalNozzleCount ?? 0;
+
+  // One slot: there is nothing to choose. Whether that slot may legally hold
+  // this nozzle's value is a separate question, answered by cloneAndPatch's
+  // "base cannot address this nozzle" rule and by validation.
+  if (slots === 1) return { kind: 'positional', slot: 0, legend };
+  if (!usable) return { kind: 'positional', slot: positional, legend };
+
+  const feed = args.nozzleFeed ?? null;
+  const candidates = feed
+    ? usable.variants.map((v, i) => ({ v, i })).filter(({ v }) => v.feed === feed).map(({ i }) => i)
+    : [];
+
+  if (feed && candidates.length === 0) {
+    return {
+      kind: 'unresolved', code: 'NO_SLOT_FOR_FEED', legend: usable,
+      reason: `This preset has no value slot for a ${feedWord(feed)} feed path — its slots are ${usable.names.join(', ')}. Nozzle ${args.nozzleIndex + 1}${nozzleName} is ${feedWord(feed)}-fed, so nothing calibrated for it can be written here. Pick a base preset made for this machine.`
+    };
+  }
+
+  // Every slot is the same feed path, so the legend distinguishes HOTENDS, not
+  // nozzles — and this machine has more than one nozzle. The Bambu Lab H2D is
+  // the shipped example: two direct-drive toolheads, and its filament presets
+  // carry the two-slot "Direct Drive Standard / Direct Drive High Flow" legend
+  // that BOTH nozzles read. Its own machine preset says so —
+  // extruder_variant_list lists the same Standard/High Flow pair for each
+  // nozzle. There is no slot exclusive to one of them, so a per-nozzle answer
+  // would be a claim the legend cannot support.
+  if (!usable.mixedFeed && nozzles > 1) {
+    return {
+      kind: 'unresolved', code: 'SLOT_SHARED_BY_NOZZLES', legend: usable,
+      reason: `Every value slot in this preset describes the same feed path (${usable.names.join(', ')}), so its slots are hotend variants, not nozzles — but this printer profile declares ${nozzles} physical nozzles. Both nozzles read whichever slot matches the hotend fitted to them, so no slot belongs to nozzle ${args.nozzleIndex + 1}${nozzleName} alone and a value written for it would reach the other nozzle too. Set this value by hand in the slicer for the nozzle you calibrated, or apply it to every slot only if it really holds for both nozzles.`
+    };
+  }
+
+  if (!feed) {
+    if (usable.mixedFeed) {
+      return {
+        kind: 'unresolved', code: 'FEED_UNKNOWN', legend: usable,
+        reason: `This preset's value slots are per feed path (${usable.names.join(', ')}), but PerfectFit could not determine which feed path nozzle ${args.nozzleIndex + 1}${nozzleName} uses — the printer profile for this project does not describe that nozzle. Slot order is not nozzle order on this machine, so there is no safe guess. Add the nozzle's feed type to the printer profile, or pick the slot by hand below.`
+      };
+    }
+    return { kind: 'positional', slot: positional, legend: usable };
+  }
+
+  const wanted = args.hotendFlow ?? 'standard';
+  const exact = candidates.find(i => usable.variants[i].flow === wanted);
+  const slot = exact ?? candidates[0];
+  return { kind: 'variant', slot, variantName: usable.names[slot], legend: usable, candidates };
 }
 
 const MATERIAL_KEY = 'filament_type';
@@ -291,10 +515,29 @@ export function freshFilamentId(seed: string): string {
   return 'P' + h.toString(16).padStart(8, '0').slice(0, 7);
 }
 
-/** Slot legend for Bambu machines, in slot order. Observed on a real install:
- * H2S/P1S presets use [Standard, High Flow]; H2D TPU presets add a third
- * TPU High Flow slot; X1-era single-slot presets use [Standard]. */
-const BAMBU_EXTRUDER_VARIANTS = ['Direct Drive Standard', 'Direct Drive High Flow', 'Direct Drive TPU High Flow'];
+/**
+ * The one slot name a legend-less SINGLE-slot Bambu preset can be given.
+ *
+ * A single-slot preset has exactly one value that every nozzle reads, so there
+ * is no slot-to-hardware mapping to get wrong — the only question the legend
+ * answers there is "what is this one slot called", and every Bambu machine's
+ * first extruder variant is Direct Drive Standard. It exists because a user
+ * preset without `filament_extruder_variant` is not shown by variant-aware
+ * Bambu Studio at all (validation blocks one), and `include` — the key that
+ * supplied it — does not resolve from user directories.
+ *
+ * It is deliberately ONE entry and must never be extended into a list that gets
+ * stretched over a multi-slot preset. On a preset with two or more slots the
+ * legend is what says which nozzle each slot belongs to, and inventing one is
+ * exactly how a bowden auxiliary's calibration ends up labelled (and read) as a
+ * direct-drive main-nozzle variant. Real X2D shape proving it: "Generic PLA High
+ * Speed @BBL X2D 0.2 nozzle" ships TWO value slots, declares no legend and has
+ * no `include`; a fabricated ['Direct Drive Standard','Direct Drive High Flow']
+ * there is wrong twice over — that machine's slots span two feed paths. When no
+ * legend can be resolved for a multi-slot preset, nothing is written and the
+ * clone is left without the key, which validation blocks.
+ */
+export const BAMBU_SINGLE_SLOT_LEGEND = ['Direct Drive Standard'];
 
 export function cloneAndPatch(args: {
   base: ParsedFilamentProfile;
@@ -312,6 +555,26 @@ export function cloneAndPatch(args: {
    * `targetExtruderIndex` for callers that do not track a physical nozzle.
    */
   calibratedNozzleIndex?: number;
+  /**
+   * How filament reaches the calibrated nozzle. When the base preset's slots
+   * are per feed path (the X2D's Direct Drive / Bowden legend), this is what
+   * proves the chosen slot belongs to the nozzle that was calibrated. Unknown
+   * (undefined/null) is treated as "cannot prove it" and refuses the write on
+   * such a preset rather than falling back to the slot index.
+   */
+  calibratedNozzleFeed?: ExtruderType | null;
+  /** Hotend flow class on the calibrated nozzle. Defaults to standard. */
+  calibratedHotendFlow?: HotendFlowClass;
+  /** Printer-profile label for the calibrated nozzle, used in messages. */
+  calibratedNozzleLabel?: string | null;
+  /**
+   * How many PHYSICAL nozzles the machine has, from the printer profile. A
+   * legend that describes only hotend variants of one feed path cannot address
+   * one of two nozzles — both read whichever slot matches their fitted hotend —
+   * so a per-nozzle write on such a machine has to be refused. 0/undefined
+   * means "the printer profile does not say", which asserts nothing.
+   */
+  physicalNozzleCount?: number;
 }): ClonePatchResult {
   const { base, newName, patches, targetExtruderIndex, applyToAllExtruders } = args;
   const src = base.profile.rawProfile as PresetJson;
@@ -363,12 +626,31 @@ export function cloneAndPatch(args: {
   // `filament_extruder_variant` — the legend mapping each per-slot array
   // position to hardware; variant-aware Bambu Studio (2.7+) does not show a
   // user preset without it.
+  //
+  // The legend is the one thing `include` supplied that CANNOT be recovered
+  // from `inherits`, because a user-directory preset does not resolve template
+  // files at all. It is therefore materialized here from the resolved legend —
+  // verbatim, never stretched. When no legend can be resolved for a preset too
+  // wide for the direct-drive-only list, the key is left absent on purpose:
+  // validation blocks a Bambu preset without it, and an invented legend that
+  // mislabels a Bowden slot as direct drive is strictly worse than none.
+  const legend = resolveSlotLegend(base);
+  const usableLegend = legend && legend.matchesSlotCount ? legend : null;
+  // A slot legend is only ever WRITTEN when it was READ from the preset (or its
+  // include template), or when there is exactly one slot and therefore no
+  // mapping to get wrong. Slot count is not evidence of anything: a two-slot
+  // X2D preset with no legend is two feed paths, not two direct-drive hotends.
+  const canNameEverySlot = !!usableLegend || extruders <= 1;
   if (base.profile.slicerId === 'bambu') {
     delete data.type;
     delete data.instantiation;
     delete data.include;
     if (!Array.isArray(data.filament_extruder_variant)) {
-      data.filament_extruder_variant = BAMBU_EXTRUDER_VARIANTS.slice(0, Math.max(1, extruders));
+      if (usableLegend) {
+        data.filament_extruder_variant = [...usableLegend.names];
+      } else if (canNameEverySlot) {
+        data.filament_extruder_variant = [...BAMBU_SINGLE_SLOT_LEGEND];
+      }
     }
   }
 
@@ -396,6 +678,32 @@ export function cloneAndPatch(args: {
     return Array.from({ length: len }, (_, i) => i).filter(i => !t.has(i));
   };
 
+  // A VALUE SLOT is not a NOZZLE. They were the same number until the X2D's
+  // variant-indexed presets arrived (aux = nozzle 2 = slot 3 of 4), and every
+  // message below has to keep them apart or it reports hardware that does not
+  // exist — "nozzle 4" on a two-nozzle machine. "Nozzle N" is reserved for
+  // `calibratedNozzle`; anything derived from an array index says "value slot".
+  const slotWords = (i: number): string => {
+    const name = usableLegend?.names[i];
+    return name ? `value slot ${i + 1} (“${name}”)` : `value slot ${i + 1}`;
+  };
+  const targetSlotWords = (): string => slotWords(idx);
+  const untargetedSlotWords = (len: number): string => {
+    const list = untargetedSlots(len).map(slotWords);
+    if (list.length === 0) return 'no other value slot';
+    if (list.length === 1) return list[0];
+    return `${list.slice(0, -1).join(', ')} and ${list[list.length - 1]}`;
+  };
+  const plural = (n: number, one: string, many: string): string => (n === 1 ? one : many);
+  /**
+   * "Apply to all value slots" is a legitimate escape only when every slot is
+   * the same feed path. On a mixed-feed preset it is the thing that writes a
+   * bowden calibration onto direct-drive slots, so it is never suggested there.
+   */
+  const applyAllSuggestion = usableLegend?.mixedFeed
+    ? ' Do NOT use “apply to all value slots” here: this preset\'s slots span two different feed paths, so one calibration cannot be correct for all of them.'
+    : ' You can also re-run with “apply to all value slots” if this value really holds for every slot.';
+
   /** Every slot is written, so no untargeted slot can be silently invented. */
   const writesEverySlot = applyToAllExtruders || extruders === 1;
 
@@ -421,15 +729,91 @@ export function cloneAndPatch(args: {
    */
   const baseCannotAddressNozzle = !applyToAllExtruders && calibratedNozzle > extruders - 1;
   const cannotAddressReason = (label: string, key: string, valueNote: string): string =>
-    `${label} (${key}) was NOT written: this base preset carries only ${extruders} value slot(s), so it cannot hold a value for nozzle ${calibratedNozzle + 1} — the nozzle this project calibrated. Orca-family slicers read slot 1 for every nozzle a preset has no slot for, so ${valueNote} would have been applied to EVERY nozzle, including the main one. Pick a base preset for this machine that carries ${calibratedNozzle + 1} value slots, or set ${key} by hand in the slicer for nozzle ${calibratedNozzle + 1}.`;
+    `${label} (${key}) was NOT written: this base preset carries only ${extruders} value slot(s), so it cannot hold a value for nozzle ${calibratedNozzle + 1} — the nozzle this project calibrated. Orca-family slicers read slot 1 for every nozzle a preset has no slot for, so ${valueNote} would have been applied to EVERY nozzle, including the main one. Pick a base preset made for this machine — one whose value slots include the one that nozzle reads — or set ${key} by hand in the slicer for nozzle ${calibratedNozzle + 1}.`;
+
+  // --- does the chosen slot really belong to the calibrated nozzle? ---------
+  // The slots of a Bambu preset are extruder VARIANTS, so slot 2 of an X2D
+  // preset is "Direct Drive High Flow" — a MAIN-nozzle variant — even though
+  // the auxiliary nozzle is physical nozzle 2. Nothing above can catch that:
+  // the preset is wide enough, the index exists, the value simply lands on the
+  // wrong hardware. The legend is the only authority, so it is checked by name.
+  const nozzleFeed = args.calibratedNozzleFeed ?? null;
+  const nozzleName = args.calibratedNozzleLabel ? ` (${args.calibratedNozzleLabel})` : '';
+  const chosenVariant = usableLegend?.variants[idx] ?? null;
+  const physicalNozzles = args.physicalNozzleCount ?? 0;
+  let wrongSlotReason: ((label: string, key: string, valueNote: string) => string) | null = null;
+  if (applyToAllExtruders && extruders > 1 && usableLegend) {
+    // "Apply to every value slot" is an assertion the user is allowed to make
+    // about hotend variants of ONE feed path ("this filament runs the same
+    // numbers in Standard and High Flow"). It is not an assertion anybody can
+    // make across feed paths: a bowden retraction distance on a direct-drive
+    // slot is wrong as a matter of physics, not of preference, and the checkbox
+    // that offers it says nothing about feed paths. So the flag does NOT open
+    // this door — it is the one guard it must not be able to switch off.
+    const foreign = usableLegend.variants
+      .map((v, i) => ({ v, i }))
+      .filter(({ v }) => v.feed !== null && (nozzleFeed ? v.feed !== nozzleFeed : usableLegend.mixedFeed));
+    const foreignNames = foreign.map(({ v, i }) => `value slot ${i + 1} “${v.name}”`);
+    const foreignList = foreignNames.length > 1
+      ? `${foreignNames.slice(0, -1).join(', ')} and ${foreignNames[foreignNames.length - 1]}`
+      : foreignNames[0];
+    const foreignFeeds = [...new Set(foreign.map(({ v }) => feedWord(v.feed!)))].join(' and ');
+    if (foreign.length && nozzleFeed) {
+      wrongSlotReason = (label, key, valueNote) =>
+        `${label} (${key}) was NOT written: “apply to all value slots” would put ${valueNote} into ${foreignList}, which belong to the ${foreignFeeds} feed path, but this project calibrated the ${feedWord(nozzleFeed)}-fed nozzle ${calibratedNozzle + 1}${nozzleName}. A ${feedWord(nozzleFeed)} calibration is not transferable to ${foreignFeeds} hardware — the retraction distance and pressure advance a bowden path needs are several times what a direct-drive path can survive. Untick “apply to all value slots” so PerfectFit writes only the slot that belongs to this nozzle, or set ${key} by hand in the slicer.`;
+    } else if (foreign.length) {
+      wrongSlotReason = (label, key, valueNote) =>
+        `${label} (${key}) was NOT written: this preset's value slots are per feed path (${usableLegend.names.join(', ')}), “apply to all value slots” would write ${valueNote} into every one of them, and PerfectFit could not determine which feed path nozzle ${calibratedNozzle + 1}${nozzleName} uses — the project's printer profile does not describe that nozzle. Add the nozzle's feed type to the printer profile and re-generate, or set ${key} by hand in the slicer.`;
+    }
+  } else if (!applyToAllExtruders && extruders > 1 && usableLegend && chosenVariant) {
+    const candidates = nozzleFeed
+      ? usableLegend.variants.map((v, i) => ({ v, i })).filter(({ v }) => v.feed === nozzleFeed)
+      : [];
+    const suggestion = candidates.length
+      ? `Write to ${candidates.map(({ v, i }) => `slot ${i + 1} “${v.name}”`).join(' or ')} instead`
+      : `This preset has no slot for that feed path (its slots are ${usableLegend.names.join(', ')}) — pick a base preset made for this machine`;
+    if (nozzleFeed && chosenVariant.feed && chosenVariant.feed !== nozzleFeed) {
+      wrongSlotReason = (label, key, valueNote) =>
+        `${label} (${key}) was NOT written: value slot ${idx + 1} of this preset is “${chosenVariant.name}”, which belongs to the ${feedWord(chosenVariant.feed!)} feed path, but this project calibrated the ${feedWord(nozzleFeed)}-fed nozzle ${calibratedNozzle + 1}${nozzleName}. Writing ${valueNote} there would put a ${feedWord(nozzleFeed)} calibration on ${feedWord(chosenVariant.feed!)} hardware. ${suggestion}, or set ${key} by hand in the slicer for that slot.`;
+    } else if (nozzleFeed && !chosenVariant.feed) {
+      wrongSlotReason = (label, key, valueNote) =>
+        `${label} (${key}) was NOT written: PerfectFit does not recognize value slot ${idx + 1} of this preset (“${chosenVariant.name}”), so it cannot prove that slot belongs to the ${feedWord(nozzleFeed)}-fed nozzle ${calibratedNozzle + 1}${nozzleName}. ${valueNote} was withheld rather than written to unidentified hardware. ${suggestion}, or set ${key} by hand in the slicer.`;
+    } else if (!nozzleFeed && usableLegend.mixedFeed) {
+      wrongSlotReason = (label, key, valueNote) =>
+        `${label} (${key}) was NOT written: this preset's value slots are per feed path (${usableLegend.names.join(', ')}) and PerfectFit could not determine which feed path nozzle ${calibratedNozzle + 1}${nozzleName} uses — the project's printer profile does not describe that nozzle. Slot order is not nozzle order on this machine, so writing ${valueNote} into slot ${idx + 1} “${chosenVariant.name}” could not be shown to be correct. Add the nozzle's feed type to the printer profile and re-generate, or set ${key} by hand in the slicer.`;
+    } else if (!usableLegend.mixedFeed && physicalNozzles > 1) {
+      // Every slot describes the SAME feed path, so the legend distinguishes
+      // hotend variants — not nozzles. On a machine with two physical nozzles
+      // (the Bambu Lab H2D: two direct-drive toolheads, presets carrying the
+      // 2-slot direct-dual legend) both nozzles read whichever slot matches the
+      // hotend they currently carry, so slot 1 "Direct Drive Standard" is what
+      // BOTH read with standard hotends fitted. There is no slot that belongs
+      // to one of them, so a per-nozzle write cannot be honoured at all.
+      wrongSlotReason = (label, key, valueNote) =>
+        `${label} (${key}) was NOT written: every value slot of this preset describes the same feed path (${usableLegend.names.join(', ')}), so its slots are hotend variants, not nozzles — but the printer profile declares ${physicalNozzles} physical nozzles. Both nozzles read whichever slot matches the hotend fitted to them, so slot ${idx + 1} “${chosenVariant.name}” is not exclusive to nozzle ${calibratedNozzle + 1}${nozzleName}: writing ${valueNote} there would hand it to the other nozzle as well. Set ${key} by hand in the slicer for the nozzle you calibrated, or tick “apply to all value slots” only if this value really holds for every nozzle on the machine.`;
+    }
+  }
+
+  // A Bambu preset whose slots cannot all be named honestly must not be written
+  // either: the clone loses `include`, so an unnamed slot legend would either be
+  // absent (the slicer hides the preset) or invented (mislabelled hardware).
+  let cannotNameSlotsReason: ((label: string, key: string, valueNote: string) => string) | null = null;
+  if (base.profile.slicerId === 'bambu' && !canNameEverySlot && !Array.isArray(src.filament_extruder_variant)) {
+    cannotNameSlotsReason = (label, key, valueNote) =>
+      `${label} (${key}) was NOT written: this base preset carries ${extruders} value slots but PerfectFit could not establish what each slot means — it declares no filament_extruder_variant legend, and it pulls none in from an “include” template PerfectFit knows. Slot count is not evidence: on a Bambu Lab X2D a two-slot preset spans two FEED PATHS, so writing ${valueNote} into an unidentified slot could put a bowden calibration on a direct-drive nozzle this project never calibrated. Pick a base preset that declares its slot legend (Bambu's X2D 0.4 nozzle presets do), or set ${key} by hand in the slicer.`;
+  }
+
+  const withholdAll = baseCannotAddressNozzle
+    ? cannotAddressReason
+    : (cannotNameSlotsReason ?? wrongSlotReason);
 
   for (const patch of patches) {
     // Withhold everything before any slot maths: no honest write exists here.
-    if (baseCannotAddressNozzle) {
+    if (withholdAll) {
       const after = formatPresetNumber(patch.value) + (patch.valueSuffix ?? '');
       skipped.push({
         presetKey: patch.presetKey, label: patch.label,
-        reason: cannotAddressReason(patch.label, patch.presetKey,
+        reason: withholdAll(patch.label, patch.presetKey,
           `${after}${patch.unit ? ` ${patch.unit}` : ''}`)
       });
       // Companions are this value's plumbing; withheld with it, and reported
@@ -437,7 +821,7 @@ export function cloneAndPatch(args: {
       for (const comp of patch.companions ?? []) {
         skipped.push({
           presetKey: comp.presetKey, label: presetKeyLabel(comp.presetKey),
-          reason: cannotAddressReason(presetKeyLabel(comp.presetKey), comp.presetKey, `"${comp.value}"`) +
+          reason: withholdAll(presetKeyLabel(comp.presetKey), comp.presetKey, `"${comp.value}"`) +
             ` It belongs to ${patch.label} (${patch.presetKey}), which was withheld for the same reason.`
         });
       }
@@ -455,10 +839,10 @@ export function cloneAndPatch(args: {
     // (a bowden aux K on a direct-drive main nozzle, for example), so the key
     // is left out entirely unless a legal neutral value exists for those slots.
     if (absent && !writesEverySlot && neutralFill(key) === null) {
-      const others = untargetedSlots(extruders).map(i => i + 1).join(', ');
+      const others = untargetedSlotWords(extruders);
       skipped.push({
         presetKey: key, label: patch.label,
-        reason: `${patch.label} (${key}) was NOT written: the base preset does not set it, so nozzle ${others} has no existing value to keep and this setting does not accept the "nil" (no override) sentinel. Writing ${after}${patch.unit ? ` ${patch.unit}` : ''} would have applied nozzle ${idx + 1}'s calibration to nozzle ${others} as well. Pick a base preset that already sets ${key}, set it by hand in the slicer for nozzle ${idx + 1}, or re-run with "apply to all extruders" if every nozzle really should use this value.`
+        reason: `${patch.label} (${key}) was NOT written: the base preset does not set it, so ${others} ${plural(untargetedSlots(extruders).length, 'has', 'have')} no existing value to keep and this setting does not accept the "nil" (no override) sentinel. Writing ${after}${patch.unit ? ` ${patch.unit}` : ''} would have applied nozzle ${calibratedNozzle + 1}${nozzleName}'s calibration to ${others} as well. Pick a base preset that already sets ${key}, or set it by hand in the slicer for ${targetSlotWords()}.${applyAllSuggestion}`
       });
       // Companions are this value's plumbing (e.g. the flag that switches
       // pressure advance on). With the value itself withheld they must not be
@@ -469,7 +853,7 @@ export function cloneAndPatch(args: {
       for (const comp of patch.companions ?? []) {
         skipped.push({
           presetKey: comp.presetKey, label: presetKeyLabel(comp.presetKey),
-          reason: `${presetKeyLabel(comp.presetKey)} (${comp.presetKey}) was NOT written either: it belongs to ${patch.label} (${key}), which was withheld above. ${comp.presetKey} is left exactly as the base preset had it. Setting ${patch.label} by hand in the slicer for nozzle ${idx + 1} covers both.`
+          reason: `${presetKeyLabel(comp.presetKey)} (${comp.presetKey}) was NOT written either: it belongs to ${patch.label} (${key}), which was withheld above. ${comp.presetKey} is left exactly as the base preset had it. Setting ${patch.label} by hand in the slicer for ${targetSlotWords()} covers both.`
         });
       }
       continue;
@@ -534,10 +918,10 @@ export function cloneAndPatch(args: {
       // nozzle this project did not calibrate (e.g. enabling pressure advance
       // on the untargeted nozzle).
       if (compAbsent && !writesEverySlot && neutralFill(comp.presetKey) === null) {
-        const others = untargetedSlots(extruders).map(i => i + 1).join(', ');
+        const others = untargetedSlotWords(extruders);
         skipped.push({
           presetKey: comp.presetKey, label: presetKeyLabel(comp.presetKey),
-          reason: `${presetKeyLabel(comp.presetKey)} (${comp.presetKey}) was NOT written: the base preset does not set it, so nozzle ${others} has no existing value to keep and this setting does not accept the "nil" (no override) sentinel. Set it by hand in the slicer for nozzle ${idx + 1}, or re-run with "apply to all extruders".`
+          reason: `${presetKeyLabel(comp.presetKey)} (${comp.presetKey}) was NOT written: the base preset does not set it, so ${others} ${plural(untargetedSlots(extruders).length, 'has', 'have')} no existing value to keep and this setting does not accept the "nil" (no override) sentinel. Set it by hand in the slicer for ${targetSlotWords()}.${applyAllSuggestion}`
         });
         continue;
       }

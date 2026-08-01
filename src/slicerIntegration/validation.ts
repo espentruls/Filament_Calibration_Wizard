@@ -177,12 +177,20 @@ export function validateGeneratedProfile(
       errors.push(err('FILAMENT_ID_COLLISION', 'filament_id must differ from the base profile (the slicer hides id collisions).'));
     }
     if (generated.slicerId === 'bambu' && !Array.isArray(reparsed.filament_extruder_variant)) {
-      errors.push(err('EXTRUDER_VARIANT_MISSING', 'Bambu presets must declare filament_extruder_variant (the slicer does not show presets without it).'));
+      errors.push(err('EXTRUDER_VARIANT_MISSING', 'Bambu presets must declare filament_extruder_variant (the slicer does not show presets without it). PerfectFit could not establish what this preset\'s value slots mean, and will not invent a legend that could mislabel one nozzle\'s slot as another\'s — pick a base preset that declares its slot legend.'));
     }
 
     // Array shape: no per-extruder array may change length vs the base.
     const baseCount = extruderCountOf(baseRaw);
     const genCount = extruderCountOf(reparsed);
+    // The legend names the slots, so it must be exactly as wide as they are.
+    // A legend one entry short (the old three-entry direct-drive list stretched
+    // over a four-slot X2D preset) mislabels every slot after the gap.
+    const legend = reparsed.filament_extruder_variant;
+    if (generated.slicerId === 'bambu' && Array.isArray(legend) && legend.length !== genCount) {
+      errors.push(err('EXTRUDER_VARIANT_SHAPE',
+        `filament_extruder_variant names ${legend.length} slot(s) but this preset carries ${genCount} value slot(s). The legend is what says which nozzle each slot belongs to, so a mismatch means slots are mislabelled.`));
+    }
     if (genCount !== baseCount) {
       errors.push(err('EXTRUDER_SHAPE', `Extruder array shape changed (${baseCount} → ${genCount}).`));
     }
@@ -202,6 +210,12 @@ export function validateGeneratedProfile(
   const NON_NUMERIC_KEYS = new Set(['filament_start_gcode', 'filament_end_gcode']);
   for (const c of generated.changedFields) {
     if (NON_NUMERIC_KEYS.has(c.presetKey)) continue;
+    // "nil" is the no-filament-override sentinel, not a number. It is what an
+    // untargeted slot receives when a key is added from scratch (the base
+    // preset never set it), so it appears in the change list for every slot the
+    // calibration did NOT target. It imposes nothing on the printer — the same
+    // reason writtenValues() skips it in the limit checks below.
+    if (String(c.after).trim().toLowerCase() === 'nil') continue;
     // Percent-typed fields (e.g. filament_shrink "99.4%") carry a % suffix.
     const n = Number(String(c.after).replace(/%$/, ''));
     if (!Number.isFinite(n)) {
@@ -330,7 +344,7 @@ export function validateGeneratedProfile(
     const physicalNozzles = ctx.printer?.nozzles?.length ?? 0;
     if (baseSlots <= calibratedNozzle) {
       errors.push(err('BASE_CANNOT_ADDRESS_NOZZLE',
-        `This base preset carries only ${baseSlots} value slot(s), so it cannot hold a value for nozzle ${calibratedNozzle + 1} — the nozzle this project calibrated. Orca-family slicers apply a single-slot value to EVERY nozzle, so installing this would give every nozzle (including the main one) nozzle ${calibratedNozzle + 1}'s calibration. Pick a base preset for this machine that carries ${calibratedNozzle + 1} value slots.`));
+        `This base preset carries only ${baseSlots} value slot(s), so it cannot hold a value for nozzle ${calibratedNozzle + 1} — the nozzle this project calibrated. Orca-family slicers apply a single-slot value to EVERY nozzle, so installing this would give every nozzle (including the main one) nozzle ${calibratedNozzle + 1}'s calibration. Pick a base preset made for this machine — one whose value slots include the one that nozzle reads. (Slot count is not nozzle count: on a Bambu Lab X2D the auxiliary is nozzle 2 but its values live in slot 3 of 4.)`));
     } else if (physicalNozzles > baseSlots) {
       warnings.push(warn('BASE_NARROWER_THAN_PRINTER',
         `This base preset carries ${baseSlots} value slot(s) but the printer profile declares ${physicalNozzles} physical nozzles. The slicer will apply slot 1's values to every nozzle, including ones this project did not calibrate.`, true));

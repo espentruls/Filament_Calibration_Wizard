@@ -171,6 +171,14 @@ export interface SessionStep {
 
 export type SessionActionKind =
   | 'carry-forward'
+  /**
+   * Something to set on the MACHINE rather than in a preset — currently only the
+   * build chamber. Its wording comes from `src/data/materials.ts`, not from the
+   * slicer content, and its `source` says so; it carries a menu path only if the
+   * shipped slicer data names a chamber field, and otherwise the plan records a
+   * gap rather than inventing one.
+   */
+  | 'environment'
   | 'disable'
   | 'perform'
   | 'record'
@@ -183,6 +191,10 @@ export type ActionSeverity = 'info' | 'caution' | 'alert';
  * string is taken verbatim from `src/data/slicers.ts` — this module routes
  * shipped, version-aware, wiki-verified content and never writes slicer facts of
  * its own. `title` is app copy (sentence case).
+ *
+ * The single exception is the `environment` kind, whose `detail` comes verbatim
+ * from the material preset in `src/data/materials.ts`; it is still routed, never
+ * written here, and `source` names the file it came from either way.
  */
 export interface SessionAction {
   id: string;

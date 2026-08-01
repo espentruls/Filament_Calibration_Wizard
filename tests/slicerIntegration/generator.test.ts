@@ -569,6 +569,12 @@ describe('system-leaf clones carry Bambu-native identity (H2S visibility bug)', 
     const leaf = {
       type: 'filament', name: 'Generic ASA @BBL H2S 0.4 nozzle', from: 'system',
       instantiation: 'true', inherits: 'Generic ASA @base', setting_id: 'GFSA00_H2S',
+      // The real file carries this and no filament_extruder_variant of its own
+      // (verified against system/BBL/filament in a live Bambu Studio install:
+      // all 138 H2S presets resolve their legend through an include template,
+      // none declares one). The slot legend is what says which hardware each
+      // value slot belongs to, so it has to come from a real source here too.
+      include: ['fdm_filament_template_direct_dual'],
       compatible_printers: ['Bambu Lab H2S 0.4 nozzle'],
       nozzle_temperature: ['260', '260'],
       filament_max_volumetric_speed: ['12', '12']
@@ -612,10 +618,12 @@ describe('system-leaf clones carry Bambu-native identity (H2S visibility bug)', 
     expect(reparsed.version).toBe('2.3.0.2');
   });
 
-  it('strips Bambu system-preset plumbing and adds the slot legend', () => {
+  it('strips Bambu system-preset plumbing and materializes the RESOLVED slot legend', () => {
     // Every preset Bambu Studio itself writes into an account folder lacks
     // type/instantiation/include and declares filament_extruder_variant;
     // presets that deviate are not shown (verified on a real 2.7.x account).
+    // The legend written here is the one the `include` template supplied — it
+    // is copied, never invented (see the legend-less cases below).
     const parsed = parseSystemLeaf();
     const generated = generateProfile({
       slicerId: 'bambu', baseProfile: parsed.profile, newName: 'PF H2S ASA',

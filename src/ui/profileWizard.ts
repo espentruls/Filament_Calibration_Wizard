@@ -8,21 +8,23 @@
 
 import { h, clear, field, toast, confirmDialog, download } from './dom';
 import { getProject, getPrinter, saveProject, addTimeline, uid } from '../storage/store';
-import type { CalibrationProject, PrinterProfile } from '../types';
+import type { CalibrationProject, ExtruderType, PrinterProfile } from '../types';
 import type {
   DetectedFilamentProfile, GeneratedFilamentProfile, GeneratedProfileRecord,
-  IntegrationSlicerId, ParsedFilamentProfile, ProfileInstallResult,
+  HotendFlowClass, IntegrationSlicerId, ParsedFilamentProfile, ProfileInstallResult,
   ProfileValidationResult, ScoredProfile, SlicerInstallation, UserDataLocation
 } from '../slicerIntegration/types';
 import * as bridge from '../slicerIntegration/bridge';
 import { detectInstallations, scanProfiles, currentPlatform } from '../slicerIntegration/scanner';
 import { getAdapter } from '../slicerIntegration/adapters';
 import { recommendProfiles } from '../slicerIntegration/recommendations';
-import { buildPatchesFromProject, defaultTargetExtruder, generateProfile } from '../slicerIntegration/generator';
+import { buildPatchesFromProject, generateProfile } from '../slicerIntegration/generator';
 import { formatChange, summarizeDiff, fullJsonDiff } from '../slicerIntegration/diff';
 import { validateGeneratedProfile, unacknowledgedWarnings } from '../slicerIntegration/validation';
 import { exportProfile, installProfile } from '../slicerIntegration/installer';
-import { defaultProfileName } from '../slicerIntegration/orcaFamily';
+import {
+  defaultProfileName, resolveSlotLegend, resolveTargetSlot, type SlotLegend
+} from '../slicerIntegration/orcaFamily';
 import { slicerDisplayName, integrationIdsForProjectSlicer, findVerifiedVersion } from '../slicerIntegration/registry';
 import { loadExperimentalFeatures } from '../slicerIntegration/featureFlags';
 import { buildDiagnosticReport } from '../slicerIntegration/diagnostics';
@@ -44,6 +46,8 @@ interface WizState {
   manualSlicerId: IntegrationSlicerId;
   newName: string;
   targetExtruder: number;
+  /** True once the user picked a slot by hand, so re-renders stop overriding it. */
+  slotChosenByUser: boolean;
   applyAll: boolean;
   /** Bambu Studio only: bake pressure advance into start g-code (M900). */
   bakePaGcode: boolean;
@@ -64,7 +68,8 @@ function freshState(): WizState {
     stage: 'slicer', installations: null, installation: null, location: null,
     scan: null, advanced: false, filterText: '', filterSource: 'all',
     filterCompatibleOnly: true, selectedBase: null, manualSlicerId: 'orca',
-    newName: '', targetExtruder: 0, applyAll: false, bakePaGcode: false, enabledPatchKeys: null,
+    newName: '', targetExtruder: 0, slotChosenByUser: false,
+    applyAll: false, bakePaGcode: false, enabledPatchKeys: null,
     generated: null, validation: null, acknowledged: new Set(),
     installResult: null, exportedTo: null,
     syncedAt: new Date().toISOString()
@@ -188,8 +193,18 @@ async function renderSlicerStage(
       h('p', { class: 'field-help' }, 'Supported: Orca Slicer, Bambu Studio, Snapmaker Orca, ElegooSlicer, Flash Studio Desktop (Orca-Flashforge). You can still use a profile file directly below.'));
   }
 
+  // The real platform, resolved once. It used to be hard-coded to 'windows'
+  // here, which made `findVerifiedVersion` match our Windows-only registry
+  // entries on macOS and Linux too — so the "not yet verified for automatic
+  // installation, you can still export for manual import" paragraph was
+  // SUPPRESSED on exactly the platforms where direct install is unverified,
+  // while the capability line right below it (computed from the real platform)
+  // still said "not yet verified". We ship macOS and Linux builds, so that
+  // contradiction was reaching real users and taking the export fallback
+  // guidance with it.
+  const platform = await currentPlatform();
+
   for (const inst of sorted) {
-    const platform = 'windows' as const; // desktop build platform is resolved natively; registry lookup below re-checks
     const verified = findVerifiedVersion(inst.slicerId, inst.version, platform);
     const canInstall = inst.capabilities.canInstallDirectly;
     const locations = inst.userDataLocations;
@@ -296,7 +311,9 @@ function manualSelectionBlock(st: WizState, project: CalibrationProject, rerende
       }
       st.installation = null; st.location = null; st.scan = null;
       st.selectedBase = parsed;
-      st.targetExtruder = defaultTargetExtruder(project, parsed.extruderCount);
+      // The slot is resolved in the configure stage, where the printer profile
+      // (and therefore the calibrated nozzle's feed path) is in scope.
+      st.targetExtruder = 0; st.slotChosenByUser = false;
       st.newName = ''; // configure stage fills in the default (with printer suffix)
       st.stage = 'configure';
       rerender();
@@ -368,8 +385,9 @@ async function renderProfilesStage(
     st.selectedBase = st.scan!.parsed.get(p.id) ?? null;
     if (!st.selectedBase) { toast('Internal error: profile not parsed.', 'error'); return; }
     st.newName = defaultName(project, printer);
-    // Multi-extruder bases default to the nozzle/slot this project calibrated.
-    st.targetExtruder = defaultTargetExtruder(project, st.selectedBase.extruderCount);
+    // The slot is resolved from the preset's own variant legend in the
+    // configure stage — never from the nozzle index (see resolveTargetSlot).
+    st.targetExtruder = 0; st.slotChosenByUser = false;
     st.applyAll = false; st.bakePaGcode = false; st.enabledPatchKeys = null;
     st.stage = 'configure';
     rerender();
@@ -493,6 +511,100 @@ function recommendedCard(s: ScoredProfile, best: boolean, choose: (p: DetectedFi
 
 // --- stage 3: configure -----------------------------------------------------
 
+/**
+ * The physical nozzle this project calibrated, as hardware rather than as a
+ * number. `feed` is what proves a preset slot belongs to this nozzle; when the
+ * printer profile cannot say, it stays null and the write path refuses rather
+ * than reading a variant array by nozzle index.
+ */
+interface CalibratedNozzle {
+  index: number;
+  feed: ExtruderType | null;
+  label: string | null;
+  hotendFlow: HotendFlowClass;
+}
+
+function calibratedNozzleOf(
+  project: CalibrationProject, printer: PrinterProfile | undefined
+): CalibratedNozzle {
+  const index = project.nozzleIndex ?? 0;
+  const listed = printer?.nozzles?.[index];
+  // A legacy single-nozzle printer profile carries no `nozzles` array; its one
+  // feed path is the profile's own extruderType. Any other index has no source.
+  const fallback = !printer?.nozzles?.length && index === 0 ? printer?.extruderType ?? null : null;
+  return {
+    index,
+    feed: listed?.feed ?? fallback,
+    label: listed?.label ?? null,
+    // PerfectFit does not yet record which hotend variant a nozzle has, and
+    // Bambu ships different values for Standard vs High Flow. Standard is the
+    // shipped default; the slot picker below names the variant it selected so
+    // a high-flow owner can move it.
+    hotendFlow: 'standard'
+  };
+}
+
+/**
+ * What this preset's value slots MEAN, in the user's words.
+ *
+ * This paragraph is the app's own explanation of the model, and getting it
+ * wrong is what produced this bug class four times over. It used to read "on
+ * dual-nozzle printers each slot is a tool" — which on a Bambu Lab X2D is
+ * exactly backwards. There, four slots span two feed paths, and the auxiliary
+ * is physical nozzle 2 while its values live in slot 3. A user who believed the
+ * old sentence would "correct" PerfectFit's pre-selection from slot 3 to slot 2
+ * and be pointing at a MAIN-nozzle variant.
+ *
+ * So the wording is derived from the resolved legend rather than asserted, and
+ * it is a pure function so it can be read back in a test.
+ */
+export function slotMeaningParagraph(legend: SlotLegend | null, slots: number): string {
+  if (legend?.mixedFeed) {
+    return `This profile carries ${slots} value slots, and they are EXTRUDER VARIANTS spanning two different feed paths (${legend.names.join(', ')}) — not nozzle numbers. On this machine slot order is not nozzle order: the bowden auxiliary is physical nozzle 2, but its values live in the Bowden slots, which come after both Direct Drive ones. PerfectFit picks the slot by NAME from that legend, never by nozzle index. Slots you do not pick keep their existing values.`;
+  }
+  if (legend) {
+    return `This profile carries ${slots} value slots, named by the preset itself: ${legend.names.join(', ')}. They are extruder VARIANTS — a feed path plus a hotend class — so pick the one describing the hardware you calibrated with, which is not necessarily the one matching your nozzle's number. Slots you do not pick keep their existing values.`;
+  }
+  return `This profile carries ${slots} value slots but does not say what they mean. A slot is an extruder VARIANT (feed path plus hotend class), which is not necessarily a nozzle number — pick the one matching the hardware you calibrated with. Slots you do not pick keep their existing values.`;
+}
+
+/** One entry of the slot dropdown. Named from the legend whenever there is one. */
+export function slotOptionLabel(legend: SlotLegend | null, i: number): string {
+  return legend?.names[i] ? `Slot ${i + 1} — ${legend.names[i]}` : `Value slot ${i + 1}`;
+}
+
+/**
+ * Whether "apply to all value slots" may be offered at all.
+ *
+ * It is a legitimate assertion about hotend variants of ONE feed path ("this
+ * filament runs the same numbers in Standard and High Flow"). It is not one
+ * anybody can make across feed paths, and it is not an answer to "which
+ * hardware does this value belong to" — yet it used to be the only enabled
+ * control on the refusal screen, sitting beside the blocking error under a
+ * label that mentions tools and hotends and never mentions feed paths. Ticking
+ * it cleared the refusal and switched off every cross-nozzle guard in the write
+ * path at once.
+ *
+ * Returned as a reason rather than a boolean so the screen can say why.
+ */
+export function applyToAllAvailability(
+  legend: SlotLegend | null, slotResolved: boolean
+): { available: boolean; reason?: string } {
+  if (legend?.mixedFeed) {
+    return {
+      available: false,
+      reason: 'Applying to all value slots is not available on this preset: its slots span two different feed paths, and a calibration measured on one of them is not transferable to the other. A bowden retraction distance on a direct-drive path drags soft plastic into the cold zone; PerfectFit refuses that write however it is asked for.'
+    };
+  }
+  if (!slotResolved) {
+    return {
+      available: false,
+      reason: 'Applying to all value slots is not available while PerfectFit cannot tell which slot belongs to this nozzle — writing to more slots does not answer which hardware the value belongs to.'
+    };
+  }
+  return { available: true };
+}
+
 function defaultName(project: CalibrationProject, printer: PrinterProfile | undefined): string {
   const mat = project.filament.material === 'OTHER' ? (project.filament.materialOther ?? 'Custom') : project.filament.material;
   return defaultProfileName({
@@ -542,37 +654,95 @@ function renderConfigureStage(
     }
   }
 
+  // Which value slot the calibration belongs in. A preset's slots are extruder
+  // VARIANTS ("Direct Drive Standard", "Bowden High Flow", …), not nozzle
+  // numbers, so this is resolved from the preset's own legend by name.
+  const nozzle = calibratedNozzleOf(project, printer);
+  const legend = resolveSlotLegend(base);
+  const physicalNozzleCount = printer?.nozzles?.length ?? 0;
+  const slotPick = resolveTargetSlot({
+    base, nozzleIndex: nozzle.index, nozzleFeed: nozzle.feed,
+    hotendFlow: nozzle.hotendFlow, nozzleLabel: nozzle.label,
+    physicalNozzleCount
+  });
+  if (!st.slotChosenByUser) {
+    st.targetExtruder = slotPick.kind === 'unresolved' ? 0 : slotPick.slot;
+  }
+  const usableLegend = legend && legend.matchesSlotCount ? legend : null;
+  /**
+   * Ticking "apply to all value slots" must NOT clear this. It used to, which
+   * made one checkbox beside the blocking error the way to write a bowden
+   * calibration onto the direct-drive main nozzle — every cross-nozzle guard in
+   * the write path was gated on the same flag. The refusal is about which
+   * hardware a value belongs to; writing it to MORE slots cannot answer that.
+   */
+  const slotUnresolved = slotPick.kind === 'unresolved';
+
   if (base.extruderCount > 1) {
-    // Bambu presets index these arrays by (tool × hotend variant), so on
-    // single-nozzle printers with interchangeable hotends (P1S, H2S, …) the
-    // two slots are Standard vs High Flow — NOT two nozzles. Only the machine
-    // preset (which we don't scan) can say which meaning applies, so label
-    // both honestly and let the user pick the slot matching their hardware.
-    const rawVariants = (base.profile.rawProfile as Record<string, unknown>).filament_extruder_variant;
-    const variantNames = Array.isArray(rawVariants)
-      ? rawVariants.filter((x): x is string => typeof x === 'string') : [];
-    const twoSlots = base.extruderCount === 2;
-    const slotLabel = (i: number) => variantNames[i]
-      ? `Slot ${i + 1} — ${variantNames[i]}`
-      : twoSlots
-        ? (i === 0 ? 'Slot 1 — nozzle 1, or the STANDARD hotend on single-nozzle printers'
-                   : 'Slot 2 — nozzle 2, or the HIGH FLOW hotend on single-nozzle printers')
-        : `Value slot ${i + 1}`;
-    const toolSel = h('select', {},
-      Array.from({ length: base.extruderCount }, (_, i) =>
-        h('option', { value: String(i), selected: st.targetExtruder === i }, slotLabel(i)))) as HTMLSelectElement;
-    toolSel.addEventListener('change', () => { st.targetExtruder = Number(toolSel.value); });
-    const allCb = h('input', { type: 'checkbox', checked: st.applyAll }) as HTMLInputElement;
-    allCb.addEventListener('change', () => { st.applyAll = allCb.checked; toolSel.disabled = allCb.checked; });
-    card.append(h('h3', {}, 'Per-tool / per-hotend values'),
-      h('p', { class: 'field-help' },
-        `This profile carries ${base.extruderCount} value slots. On dual-nozzle printers each slot is a tool; on single-nozzle Bambu printers with interchangeable hotends (e.g. P1S, H2S) the slots are hotend variants — slot 1 is Standard, slot 2 is High Flow. Calibrated values are written only to the slot you pick (choose the one matching the hardware you calibrated with); other slots keep their existing values.`),
-      ...(project.nozzleIndex !== undefined
-        ? [h('p', { class: 'field-help' }, `Pre-selected slot ${st.targetExtruder + 1} — the nozzle this project calibrated. Confirm it matches your hardware.`)]
+    // The legend is the authority on what each slot means; it may live in the
+    // preset itself or in a Bambu `include` template. Without one, the slots
+    // are unlabelled and the user has to say which hardware they calibrated.
+    const slotLabel = (i: number) => slotOptionLabel(usableLegend, i);
+    // Nothing is pre-selected when the mapping could not be determined: a slot
+    // shown as chosen would be a claim PerfectFit cannot make.
+    const toolSel = h('select', {}, [
+      ...(slotUnresolved
+        ? [h('option', { value: '', selected: true, disabled: true }, 'Not determined — see the note below')]
         : []),
+      ...Array.from({ length: base.extruderCount }, (_, i) =>
+        h('option', { value: String(i), selected: !slotUnresolved && st.targetExtruder === i }, slotLabel(i)))
+    ]) as HTMLSelectElement;
+    toolSel.addEventListener('change', () => {
+      st.targetExtruder = Number(toolSel.value); st.slotChosenByUser = true;
+    });
+    const applyAll = applyToAllAvailability(usableLegend, !slotUnresolved);
+    const allDisabled = !applyAll.available;
+    if (allDisabled) st.applyAll = false;
+    const allCb = h('input', {
+      type: 'checkbox', checked: st.applyAll, disabled: allDisabled ? true : undefined
+    }) as HTMLInputElement;
+    allCb.addEventListener('change', () => { st.applyAll = allCb.checked; rerender(); });
+    // Picking a slot cannot rescue an unresolved mapping: the write path refuses
+    // for the same reason the wizard could not resolve it, so offering the
+    // control would be offering a button that does nothing.
+    toolSel.disabled = st.applyAll || slotUnresolved;
+
+    // What the wizard actually decided, named as hardware. "Slot 3" is not
+    // checkable by a human; "Bowden Standard — the auxiliary nozzle" is.
+    const nozzleWords = nozzle.label ?? `nozzle ${nozzle.index + 1}`;
+    const preselection = slotPick.kind === 'variant'
+      ? h('p', { class: 'field-help' },
+          `Pre-selected slot ${slotPick.slot + 1}, ${slotPick.variantName} — the variant this preset uses for ${nozzleWords}, the nozzle this project calibrated. `,
+          slotPick.candidates.length > 1
+            ? `This preset also carries ${slotPick.candidates.filter(i => i !== slotPick.slot).map(i => `“${slotPick.legend.names[i]}”`).join(' and ')} for the same feed path — they are different HOTENDS on it, and PerfectFit assumes a STANDARD one. Change it here if yours is high flow.`
+            : 'Confirm it matches your hardware.')
+      : slotPick.kind === 'positional' && project.nozzleIndex !== undefined
+        ? h('p', { class: 'field-help' },
+            `This preset does not say what its value slots mean, so PerfectFit could not match one to ${nozzleWords}. Slot ${st.targetExtruder + 1} is pre-selected by position only — confirm it is the hardware you calibrated before generating.`)
+        : null;
+
+    card.append(h('h3', {}, 'Per-variant values'),
+      h('p', { class: 'field-help' }, slotMeaningParagraph(usableLegend, base.extruderCount)),
+      ...(preselection ? [preselection] : []),
       h('div', { class: 'field-row' },
         field('Apply calibration to', toolSel),
-        h('label', { class: 'check-item', style: 'align-self:end' }, allCb, h('span', {}, 'Apply to ALL slots (only if the calibrated values hold for every tool/hotend)'))));
+        h('label', { class: 'check-item', style: 'align-self:end' }, allCb,
+          h('span', {}, 'Apply to ALL value slots (only if the calibrated values hold for every variant this preset carries)'))),
+      ...(applyAll.reason ? [h('p', { class: 'field-help' }, applyAll.reason)] : []));
+  }
+
+  // No slot could be matched to the calibrated nozzle. Say so plainly and stop:
+  // a value written to a slot we cannot identify is a value on hardware this
+  // project never calibrated.
+  if (slotUnresolved && slotPick.kind === 'unresolved') {
+    card.append(h('div', { class: 'callout callout-bad' },
+      h('p', { class: 'co-title' }, 'PerfectFit cannot tell which value slot belongs to this nozzle'),
+      h('p', {}, slotPick.reason),
+      h('p', {}, slotPick.code === 'FEED_UNKNOWN'
+        ? 'Open the printer profile for this project and set the feed type (direct drive or bowden) for each nozzle, then come back.'
+        : slotPick.code === 'SLOT_SHARED_BY_NOZZLES'
+          ? 'This is a property of the preset format, not a mistake you made: a filament preset stores one value per extruder VARIANT, and on this machine both nozzles use the same variants. Set the calibrated values by hand in the slicer for the nozzle you calibrated.'
+          : 'Go back and pick a base preset made for this printer, or set these values by hand in the slicer for the nozzle you calibrated.')));
   }
 
   // A base preset narrower than the machine cannot address the nozzle this
@@ -622,15 +792,25 @@ function renderConfigureStage(
 
   card.append(h('div', { class: 'btn-row' },
     h('button', {
-      class: 'btn btn-primary', onClick: () => {
+      class: 'btn btn-primary',
+      disabled: slotUnresolved ? true : undefined,
+      onClick: () => {
         const name = st.newName.trim();
         if (!name) { toast('Enter a profile name.', 'error'); return; }
+        if (slotUnresolved) {
+          toast('PerfectFit cannot tell which value slot belongs to the nozzle this project calibrated — see the note above.', 'error');
+          return;
+        }
         const patches = allPatches.filter(p => st.enabledPatchKeys!.has(p.presetKey));
         try {
           st.generated = generateProfile({
             slicerId: base.profile.slicerId, baseProfile: base.profile, newName: name,
             patches, targetExtruderIndex: st.targetExtruder,
             applyToAllExtruders: st.applyAll,
+            calibratedNozzleFeed: nozzle.feed,
+            calibratedHotendFlow: nozzle.hotendFlow,
+            calibratedNozzleLabel: nozzle.label,
+            physicalNozzleCount,
             bakePressureAdvanceGcode: st.bakePaGcode, project
           }, base);
         } catch (e) {
@@ -682,8 +862,13 @@ function renderPreviewStage(
   // carries an explicit (non-nil) retraction at the bowden index — the patch is
   // only emitted when the retraction step completed, and the user can deselect
   // it in the configure stage. Otherwise this must be a warning, not a promise.
-  const targetNozzle = printer?.nozzles?.[st.targetExtruder];
-  if (gen.slicerId === 'bambu' && base.extruderCount > 1 && targetNozzle?.feed === 'bowden') {
+  //
+  // The nozzle is the PROJECT's, never printer.nozzles[targetExtruder]: the
+  // target is a value-slot index (an extruder variant), and on a 4-slot X2D
+  // preset it runs past the end of a 2-entry nozzles array — which used to make
+  // both callouts vanish exactly when the bowden slot was finally targeted.
+  const targetNozzle = calibratedNozzleOf(project, printer);
+  if (gen.slicerId === 'bambu' && base.extruderCount > 1 && targetNozzle.feed === 'bowden') {
     const retrRaw = (gen.data as Record<string, unknown>).filament_retraction_length;
     const retrAt = Array.isArray(retrRaw) ? retrRaw[st.targetExtruder] : undefined;
     const retrExplicit = typeof retrAt === 'string' && retrAt.trim() !== '' && retrAt.trim().toLowerCase() !== 'nil';

@@ -18,6 +18,142 @@ export const DEFAULT_ORDER: CalibrationId[] = [
   'final-verification'
 ];
 
+// ---------------------------------------------------------------------------
+// Material-conditioned guidance data
+//
+// Everything below is GUIDANCE. None of it is measured by a test, carried in
+// FinalValues, or written into a slicer preset — PerfectFit never calibrates a
+// chamber temperature and never patches chamber_temperatures. The values exist
+// so the wizard can say something true and material-specific instead of a
+// generic sentence that is right for ABS and harmful for PLA.
+//
+// Every number was read out of a real Bambu Studio installation
+// (…/BambuStudio/system/BBL/filament, …/machine, …/printers) with the
+// inheritance chain resolved, on 2026-08-01. The source key is named beside
+// each value so it can be re-verified rather than believed.
+// ---------------------------------------------------------------------------
+
+// Chamber guidance is NOT here. It lives on `MaterialPreset.chamber` in
+// src/data/materials.ts, and the machine-clamped number comes from
+// `suggestChamberTemp` in src/logic/ranges.ts. A chamber setpoint is a
+// temperature a printer executes, and it is right for ABS and harmful for
+// PLA — so it gets exactly one source of truth, next to the printer profile
+// that has to cap it. Do not add a second table here.
+
+export interface DryingSchedule {
+  /** Vendor drying temperature (°C) and its duration (h). */
+  temperatureC: number;
+  hours: number;
+  /** The faster, hotter schedule Bambu also publishes, where one exists. */
+  altTemperatureC?: number;
+  altHours?: number;
+  /** The temperature at which this material starts to soften (°C). */
+  softeningC: number;
+  /** The temperature at which it heat-distorts (°C). */
+  heatDistortionC: number;
+}
+
+/**
+ * Drying schedules PerfectFit is willing to quote, with the ceiling that makes
+ * them safe.
+ *
+ * Deliberately sparse: an entry exists only where the numbers were read out of
+ * Bambu's shipped configuration. Materials whose drying guidance already lives
+ * in their own preset warnings (PETG, TPU, nylon…) are absent on purpose —
+ * quoting a second, differently-sourced schedule at the user is how two parts
+ * of an app come to disagree.
+ */
+export const DRYING_SCHEDULES: Record<string, DryingSchedule> = {
+  // fdm_filament_abs.json: filament_dev_ams_drying_temperature ["65","80","65","75"],
+  // filament_dev_ams_drying_time ["12","8.0","12","8.0"] (indexed by dryer
+  // device, slot 0 = AMS 2 Pro, slot 1 = AMS HT), softening 80, distortion 90.
+  ABS: { temperatureC: 65, hours: 12, altTemperatureC: 80, altHours: 8, softeningC: 80, heatDistortionC: 90 },
+  // Generic ASA @BBL X2D chain: same drying schedule, softening 85, distortion 100.
+  ASA: { temperatureC: 65, hours: 12, altTemperatureC: 80, altHours: 8, softeningC: 85, heatDistortionC: 100 }
+};
+
+export interface VendorNozzleWindow {
+  /** Vendor's documented minimum nozzle temperature (°C). */
+  low: number;
+  /** Vendor's documented maximum (°C). */
+  high: number;
+  /** What the vendor's own preset actually runs (°C). */
+  bambuDefault: number;
+}
+
+/**
+ * The nozzle-temperature window the filament vendor documents, versus what its
+ * preset actually runs.
+ *
+ * This exists for one reason: on ABS the preset default sits at the top of the
+ * documented window, which makes it the first thing to suspect when a spool
+ * oozes — while the bottom of the tower sits BELOW the documented window,
+ * where layer bonds fail invisibly. Both facts have to be sayable.
+ */
+export const VENDOR_NOZZLE_WINDOW: Record<string, VendorNozzleWindow> = {
+  // fdm_filament_abs.json: range_low 240, range_high 280;
+  // Generic ABS @BBL X2D 0.4 nozzle.json: nozzle_temperature 270.
+  ABS: { low: 240, high: 280, bambuDefault: 270 },
+  // Generic ASA @BBL X2D chain: range 240–280, nozzle_temperature 260.
+  ASA: { low: 240, high: 280, bambuDefault: 260 }
+};
+
+export function vendorNozzleWindowFor(materialId: string): VendorNozzleWindow | null {
+  return VENDOR_NOZZLE_WINDOW[materialId] ?? null;
+}
+
+export interface OozeLever {
+  /** Position in the list; 1 is the first thing to try. */
+  rank: number;
+  name: string;
+  detail: string;
+}
+
+/**
+ * The levers that reduce ooze, ordered by effect size rather than by how easy
+ * they are to reach.
+ *
+ * Ordering matters more than the contents: the common failure is a user
+ * spending a weekend on retraction distance when the nozzle is 30 °C too hot
+ * or the spool is wet, because retraction is the setting everyone has heard
+ * of. Coasting is deliberately absent — see OOZE_LEVER_EXCLUSIONS.
+ */
+export const OOZE_LEVERS: OozeLever[] = [
+  {
+    rank: 1, name: 'Dry the filament',
+    detail: 'Absorbed water flashes to steam in the melt zone and pushes plastic out when nothing is commanding extrusion. That pressure is generated downstream of the extruder, so no retraction value can retract it — a wet spool defeats every lever below.'
+  },
+  {
+    rank: 2, name: 'Nozzle temperature',
+    detail: 'The dominant lever. Drop in 5 °C steps. If the melt is roughly 10 °C too hot it is simply too fluid to hold under residual pressure, and no retraction setting eliminates the stringing.'
+  },
+  {
+    rank: 3, name: 'Retraction length, then speed',
+    detail: 'Find the SHORTEST distance that travels clean. More is not better: over-retraction drags soft plastic into the cold zone and causes heat-creep jams and grinding. Change length first, speed only if problems remain.'
+  },
+  {
+    rank: 4, name: 'Travel speed',
+    detail: 'Faster travel gives a string less time to form. Genuinely effective and free — where headroom exists.'
+  },
+  {
+    rank: 5, name: 'Wipe',
+    detail: 'A polish, not a fix. Around one nozzle width (0.4–0.8 mm) is effective without leaving artifacts.'
+  },
+  {
+    rank: 6, name: 'Z-hop — last, and usually counterproductive',
+    detail: 'Lifting the nozzle draws a thread that cools in open air and is never re-absorbed, so z-hop typically makes stringing worse. Use it to protect delicate top surfaces from nozzle drag, not to fight ooze.'
+  }
+];
+
+/**
+ * Levers people will look for and not find, and the reason. Saying this is
+ * cheaper than letting someone hunt a settings tree for twenty minutes.
+ */
+export const OOZE_LEVER_EXCLUSIONS: string[] = [
+  'Coasting is not available here. Neither Bambu Studio nor Orca ships a coasting parameter — there is no such key anywhere in Bambu Studio\'s shipped configuration, and Orca\'s is an open feature request (OrcaSlicer #3325). The classic Cura advice to "add coasting" does not apply to either slicer this wizard targets.',
+  'Pressure advance is not an ooze lever. It retimes when pressure arrives; it does not change the total volume extruded. It fixes corner bulge and seam blobs — it is not what makes a printer string across open air.'
+];
+
 export const CALIBRATIONS: Record<CalibrationId, CalibrationDef> = {
   temperature: {
     id: 'temperature',
@@ -39,7 +175,7 @@ export const CALIBRATIONS: Record<CalibrationId, CalibrationDef> = {
       'so you can compare them side by side on one print instead of printing many separate tests.',
     dependencies: [],
     prerequisites: [
-      { id: 'dry', label: 'Filament is dry — dried by YOU, not assumed dry because it\'s new', coachNote: 'Wet filament pops, strings and looks bad at every temperature — you\'d be calibrating the moisture instead of the filament. Don\'t trust "fresh from a sealed bag": hygroscopic materials like PETG, TPU and nylon often arrive wet from the factory, even sealed with desiccant. If the material is moisture-sensitive, dry it before calibrating, full stop.' },
+      { id: 'dry', label: 'Filament is dry — dried by YOU, not assumed dry because it\'s new', coachNote: 'Wet filament pops, strings and looks bad at every temperature — you\'d be calibrating the moisture instead of the filament. Don\'t trust "fresh from a sealed bag": PETG, TPU, nylon, ABS and ASA all arrive wet from the factory often enough to assume it, even sealed with desiccant. An OLD open spool should simply be assumed wet. If the material is moisture-sensitive, dry it before calibrating, full stop — nothing calibrated on a wet spool transfers to the same spool once dry, so the hours are genuinely wasted.' },
       { id: 'clean-nozzle', label: 'Nozzle is clean and not partially clogged', coachNote: 'A partial clog mimics under-extrusion and will mislead every test.' },
       { id: 'adhesion', label: 'First layer / bed adhesion is reliable on this printer', coachNote: 'If first layers regularly fail, fix bed leveling and Z-offset before calibrating filament.' },
       { id: 'profile-selected', label: 'A sensible starting filament profile is selected in the slicer', coachNote: 'Start from the closest generic profile (e.g. "Generic PETG") for your material.' },
@@ -50,7 +186,7 @@ export const CALIBRATIONS: Record<CalibrationId, CalibrationDef> = {
     ],
     evaluationGuide: [
       { title: 'Layer adhesion (most important)', look: 'Try to snap each block by flexing the tower with pliers or fingers (wear eye protection). Blocks that crack easily along layer lines were printed too cold.', meaning: 'Higher temperature = stronger layer welding. Never pick a temperature only because it looks cleanest — a pretty but weak print fails in use.', severity: 'bad' },
-      { title: 'Stringing / fine hairs', look: 'Wisps or hairs between the tower\'s towers or across gaps.', meaning: 'More stringing usually means too hot (or wet filament).', severity: 'adjust' },
+      { title: 'Stringing / fine hairs', look: 'Wisps or hairs between the tower\'s towers or across gaps.', meaning: 'More stringing usually means too hot (or wet filament). Temperature is the BIGGEST ooze lever there is — bigger than retraction. If a nozzle runs roughly 10 °C above what the filament actually wants, no retraction value will clean up the travels, so a drooling printer gets fixed here first and in the retraction step second.', severity: 'adjust' },
       { title: 'Overhangs', look: 'The sloped/overhang section: drooping, curling edges, or rough undersides.', meaning: 'Sagging overhangs suggest too hot; rough but stiff overhangs can also be a cooling issue.', severity: 'adjust' },
       { title: 'Bridging', look: 'The horizontal bridge span: sagging or broken strands underneath.', meaning: 'Cleaner bridges usually happen at the cooler end of the workable range.', severity: 'adjust' },
       { title: 'Surface finish & gloss', look: 'Shiny vs matte bands; blobs and zits.', meaning: 'Gloss changes with temperature. Pick the finish you prefer, but only within the range that passed the adhesion check.', severity: 'good' },
@@ -82,11 +218,18 @@ export const CALIBRATIONS: Record<CalibrationId, CalibrationDef> = {
       'It is a small decimal near 1.0 (like 0.98), NOT a percentage. It is different from Pressure Advance ' +
       '(which times pressure changes but doesn\'t change total volume) and from Max Volumetric Speed ' +
       '(which caps how fast plastic can flow, not how much). Line width is a geometry setting, not a correction. ' +
-      'Keep these separate — fixing one with another is the most common calibration mistake.',
+      'Keep these separate — fixing one with another is the most common calibration mistake. ' +
+      'One methodological point that decides how much you can trust the answer: this test is judged BY EYE, on ' +
+      'top-surface quality. Nothing is measured with calipers, which is exactly why shrinkage cannot bias it — ' +
+      'shrinkage scales a whole part uniformly and does not change the ratio of deposited volume to swept volume ' +
+      'inside a layer. If you ever calibrate flow by measuring a single wall instead, that protection disappears: ' +
+      'a cooled ABS wall measures roughly 0.3–0.7% thin from shrinkage alone, you would read it as under-extrusion, ' +
+      'raise the flow ratio, and bake permanent over-extrusion into the profile.',
     dependencies: ['temperature'],
     prerequisites: [
       { id: 'temp-done', label: 'Nozzle temperature is calibrated (or a known-good temp is set)', coachNote: 'Flow tests printed at a bad temperature give misleading surfaces.' },
       { id: 'profile', label: 'The filament profile you\'re calibrating is active in the slicer', coachNote: 'The test bases its math on the profile\'s CURRENT flow ratio — the wrong profile ruins the math.' },
+      { id: 'shrink-known', label: 'Shrinkage compensation is 100% (off) for this test, or you know the value that is applied', coachNote: 'A live shrinkage value scales the geometry under the blocks. It does not spoil a SURFACE judgement — but it does mean any caliper reading you take off these blocks is scaled, so never convert one into a flow correction without dividing the shrinkage back out.' },
       { id: 'plate-clean', label: 'Build plate is clean (top surfaces show fingerprint grease)', coachNote: 'You\'ll judge top surfaces — grease and dust show up as defects that aren\'t flow related.' }
     ],
     methods: [
@@ -97,7 +240,8 @@ export const CALIBRATIONS: Record<CalibrationId, CalibrationDef> = {
       { title: 'Top surface smoothness', look: 'Look across each block\'s top at a shallow angle in good light; run a fingernail across it.', meaning: 'The best block feels smooth and shows no valleys between lines (under-extrusion) and no ridges or roughness (over-extrusion).', severity: 'good' },
       { title: 'Gaps between lines', look: 'Tiny parallel grooves or pinholes between extrusion lines.', meaning: 'Under-extrusion — flow too low on that block.', severity: 'bad' },
       { title: 'Ridges / rough weave', look: 'Raised lines, a bumpy "corduroy" texture, or material pushed up at line crossings.', meaning: 'Over-extrusion — flow too high on that block.', severity: 'bad' },
-      { title: 'Archimedean pattern: spiral joint line', look: 'On the YOLO blocks, check the line where the inner spiral meets the outer arcs.', meaning: 'A strongly visible joint or material build-up means too much flow; gaps opening between arcs mean too little.', severity: 'adjust' }
+      { title: 'Archimedean pattern: spiral joint line', look: 'On the YOLO blocks, check the line where the inner spiral meets the outer arcs.', meaning: 'A strongly visible joint or material build-up means too much flow; gaps opening between arcs mean too little.', severity: 'adjust' },
+      { title: 'Enclosure materials: the tie-break', look: 'ABS and ASA printed in a heated chamber cool slowly and self-level, so several neighbouring blocks can look equally smooth.', meaning: 'Judge at a shallow raking angle in strong light, and by fingernail. If two adjacent blocks genuinely tie, take the LOWER one — under-extrusion is the louder defect on these materials, so a real tie means the lower block is safe.', severity: 'adjust' }
     ],
     resultPrecision: 3,
     slicerDestination: { scope: 'filament', note: 'Filament settings → Filament → Flow ratio. A decimal near 1.0 — never enter a percentage here.' },
@@ -127,7 +271,8 @@ export const CALIBRATIONS: Record<CalibrationId, CalibrationDef> = {
     dependencies: ['flow-pass1'],
     prerequisites: [
       { id: 'pass1-saved', label: 'Pass 1 result is saved in the filament profile', coachNote: 'Pass 2\'s blocks are computed from the CURRENT profile value — if you didn\'t save Pass 1\'s result, Pass 2 tests the wrong range.' },
-      { id: 'same-conditions', label: 'Same temperature, plate, and cooling as Pass 1', coachNote: 'Changing conditions between passes makes the two results incomparable.' }
+      { id: 'same-conditions', label: 'Same temperature, plate, and cooling as Pass 1', coachNote: 'Changing conditions between passes makes the two results incomparable.' },
+      { id: 'shrink-known2', label: 'Shrinkage compensation is unchanged since Pass 1 (ideally still 100% / off)', coachNote: 'Shrinkage scales the geometry under the blocks. It does not spoil a surface judgement, but changing it between the two passes changes what you are comparing — and any caliper reading taken off these blocks is scaled by it.' }
     ],
     methods: [
       { id: 'pass2', label: 'Pass 2 — fine (−9% to 0%, 1% steps)', description: 'Ten blocks; pick the smoothest and apply new = old × (100 + modifier) / 100.', slicers: ['orca', 'bambu'], recommended: true }
@@ -214,7 +359,8 @@ export const CALIBRATIONS: Record<CalibrationId, CalibrationDef> = {
     prerequisites: [
       { id: 'pa-saved', label: 'Pressure Advance is calibrated AND saved in the filament profile', coachNote: 'The whole point of this re-check is testing flow under the new PA — an unsaved PA value means you\'re re-testing the old conditions.' },
       { id: 'flow-saved', label: 'Your current flow ratio is saved in the filament profile', coachNote: 'The test blocks are computed from the profile\'s CURRENT value.' },
-      { id: 'same-conditions2', label: 'Same temperature, plate, and cooling as the earlier flow test', coachNote: 'Changing conditions makes the comparison meaningless.' }
+      { id: 'same-conditions2', label: 'Same temperature, plate, and cooling as the earlier flow test', coachNote: 'Changing conditions makes the comparison meaningless.' },
+      { id: 'shrink-known3', label: 'Shrinkage compensation is unchanged since the earlier flow test', coachNote: 'This re-check exists to isolate what Pressure Advance changed. A shrinkage value that moved in between adds a second variable — and if the shrinkage step already ran, its result is now live under these blocks, so any caliper reading you take off them is scaled.' }
     ],
     methods: [
       { id: 'pass2', label: 'Fine flow pass (−9% to 0%, 1% steps)', description: 'The same fine test you ran before: ten blocks; the app applies new = old × (100 + modifier) / 100.', slicers: ['orca', 'bambu'], recommended: true }
@@ -238,10 +384,14 @@ export const CALIBRATIONS: Record<CalibrationId, CalibrationDef> = {
     purpose:
       'Finds the smallest amount of filament pull-back that stops stringing and oozing when the print head ' +
       'travels between parts. Too little leaves hairs and blobs; too much causes clogs, grinding, and gaps ' +
-      'when printing resumes.',
+      'when printing resumes. This step also owns general in-print drool on ANY printer, single- or ' +
+      'multi-nozzle: it carries the full ordered list of ooze levers, of which retraction is only the third.',
     whyThisOrder:
       'Retraction is tuned near the end because temperature (ooze), flow (pressure), and PA all change how much ' +
-      'the nozzle oozes during travel. Tuning retraction first would bake those errors into the distance.',
+      'the nozzle oozes during travel. Tuning retraction first would bake those errors into the distance. ' +
+      'If your ooze appears at TOOLCHANGES rather than during ordinary travel within one filament, that is a ' +
+      'different problem with different fixes — see the Dual-Nozzle Ooze Control step (prime tower, ramming, ' +
+      'per-extruder overrides) instead of pushing retraction distance up here.',
     whyExpanded:
       'When the print head moves without printing, melted plastic keeps dripping out of the nozzle unless it\'s ' +
       'pulled back — retracted — first. The retraction DISTANCE is how many millimeters of filament get pulled; ' +
@@ -249,12 +399,21 @@ export const CALIBRATIONS: Record<CalibrationId, CalibrationDef> = {
       'Bowden systems must also take up the slack in the long PTFE tube, needing 1–6 mm. ' +
       'More is not better: every retraction drags soft plastic up into the cool zone of the hotend. Excessive distance ' +
       'causes heat creep jams, grinds the filament, and leaves under-extruded gaps after each travel. ' +
-      'The goal is the SHORTEST distance that gives an acceptably clean tower.',
+      'The goal is the SHORTEST distance that gives an acceptably clean tower. ' +
+      'Retraction is only lever 3 of 6, though, and reaching for it first is how people lose days. In order of ' +
+      'effect size: (1) dry the filament — steam generated inside the melt is ooze no retraction can retract, ' +
+      'because the pressure driving it is created downstream of the extruder; (2) nozzle temperature, the ' +
+      'dominant lever; (3) retraction length, then speed; (4) travel speed — less dwell time for a string to ' +
+      'form; (5) wipe, a polish rather than a fix; (6) z-hop LAST, and usually counterproductive, because ' +
+      'lifting the nozzle draws a thread that cools in air and is never re-absorbed. Two things that are NOT on ' +
+      'the list: coasting, because neither Bambu Studio nor Orca ships a coasting parameter, and pressure ' +
+      'advance, which retimes pressure without changing the volume extruded.',
     dependencies: ['temperature', 'pressure-advance'],
     prerequisites: [
-      { id: 'temp-done2', label: 'Temperature is calibrated (stringing is temperature-sensitive)', coachNote: 'If you skipped the temp tower, strings may be a temperature problem — you\'d be fixing the wrong thing.' },
-      { id: 'dry2', label: 'Filament is dry (dried by you — "new in bag" doesn\'t count)', coachNote: 'Moisture boils in the nozzle and causes stringing no retraction can fix. PETG and TPU frequently arrive wet even in sealed packaging. If drying is impossible right now, expect limited results.' },
-      { id: 'pa-done', label: 'Pressure advance is set (or consciously skipped)', coachNote: 'PA affects ooze pressure at travel starts.' }
+      { id: 'ooze-kind', label: 'You know WHICH ooze you have: blobs at toolchanges/colour changes, or drool during ordinary travel within one filament', coachNote: 'They are different problems. Toolchange ooze lives in the prime-tower / ramming / extruder-change-retraction domain — the Dual-Nozzle Ooze Control step. Travel ooze inside one material lives in the drying / temperature / retraction domain, which is this step. Sending yourself down the wrong branch costs hours.' },
+      { id: 'temp-done2', label: 'Temperature is calibrated (stringing is temperature-sensitive)', coachNote: 'If you skipped the temp tower, strings may be a temperature problem — you\'d be fixing the wrong thing. A nozzle roughly 10 °C too hot cannot be retracted clean at any distance.' },
+      { id: 'dry2', label: 'Filament is dry (dried by you — "new in bag" doesn\'t count)', coachNote: 'Moisture boils in the nozzle and causes stringing no retraction can fix. PETG, TPU, nylon, ABS and ASA all frequently arrive wet even in sealed packaging, and an old open spool should be assumed wet. If drying is impossible right now, expect limited results.' },
+      { id: 'pa-done', label: 'Pressure advance is set (or consciously skipped)', coachNote: 'PA affects ooze pressure at travel starts. It is not an ooze lever in itself — it retimes pressure without changing how much plastic leaves the nozzle.' }
     ],
     methods: [
       { id: 'tower', label: 'Built-in retraction tower', description: 'Twin towers with travel moves between them; retraction length increases with height. Find the lowest height that\'s clean.', slicers: ['orca'], recommended: true },
@@ -266,10 +425,11 @@ export const CALIBRATIONS: Record<CalibrationId, CalibrationDef> = {
       { title: 'Blobs and nozzle scars', look: 'Blobs where travels begin, or dragged scar marks on surfaces.', meaning: 'Ooze at travel start; more retraction (or slightly faster retraction speed) helps.', severity: 'adjust' },
       { title: 'Gaps after travel (over-retraction)', look: 'Missing or thin extrusion right where printing resumes after a travel move.', meaning: 'Too much retraction — the nozzle re-primes late. Prefer a lower section that\'s clean.', severity: 'bad' },
       { title: 'Grinding / clicking during the print', look: 'Listen: rhythmic clicking, or filament with chewed-out divots.', meaning: 'The extruder is struggling — retraction distance or speed too high for this setup. Stop increasing.', severity: 'bad' },
-      { title: 'Already clean at the bottom?', look: 'Tower looks clean from the very first sections.', meaning: 'Low-ooze filament (common for dry PLA/ABS): pick a small value like 0.2–0.4 mm (direct drive) instead of zero, per the official guide.', severity: 'good' }
+      { title: 'Already clean at the bottom?', look: 'Tower looks clean from the very first sections.', meaning: 'Low-ooze filament (common for dry PLA/ABS): pick a small value like 0.2–0.4 mm (direct drive) instead of zero, per the official guide. ABS is intrinsically low-ooze — it strings noticeably less than PETG — so conspicuous ABS drool is an out-of-band signal pointing at moisture or a nozzle above the material\'s real window, not at retraction geometry.', severity: 'good' },
+      { title: 'Drool that is not travel stringing', look: 'Blobs and threads that appear during ordinary printing rather than between features, or a nozzle that keeps extruding for several seconds after the command stops.', meaning: 'Retraction cannot fix either. Continued extrusion after the command stops is the signature of steam pressure inside the melt — dry the spool. Ooze during printing is a temperature problem first. After those, the remaining slicer levers are travel speed (less dwell time for a thread to form), wipe (0.4–0.8 mm, about one nozzle width, is enough — more just smears), and z-hop LAST, which usually makes stringing worse because the lift draws a thread that cools in air and is never re-absorbed.', severity: 'adjust' }
     ],
     resultPrecision: 2,
-    slicerDestination: { scope: 'printer', note: 'Printer settings → Extruder → Retraction (length, speed). NOTE: retraction lives in the PRINTER profile, not the filament profile — Orca can also override it per-filament under Filament → Setting overrides.' },
+    slicerDestination: { scope: 'printer', note: 'Printer settings → Extruder → Retraction (length, speed). NOTE: retraction lives in the PRINTER profile, not the filament profile — Orca can also override it per-filament under Filament → Setting overrides. The other ooze levers live elsewhere and are settings to CHECK, not values PerfectFit computes: travel speed and wipe / wipe distance in the process profile, z-hop in the printer profile. PerfectFit deliberately does not write them — there is no measurement behind them.' },
     versionNotes: [
       'Orca v2.x defaults: 0→2 mm step 0.1 (direct drive); the wiki suggests 1→6 mm step 0.2 for Bowden.',
       'Find the best height, then read the exact length from the G-code preview: search for the Calib_Retraction_tower comment (the plain "retract" lines can be misleading with wipe settings).',
@@ -334,7 +494,9 @@ export const CALIBRATIONS: Record<CalibrationId, CalibrationDef> = {
     purpose:
       'Measures how much this filament shrinks as it cools, so the slicer can scale parts up to compensate. ' +
       'Without it, holes come out tight, pegs come out loose, and parts designed to fit… don\'t. ' +
-      'Semi-crystalline materials (PETG, ABS, ASA, nylon, PP) shrink noticeably; even PLA shrinks a little.',
+      'Every thermoplastic contracts as it cools. Semi-crystalline materials (nylon, PP, PE) shrink most and ' +
+      'unevenly, because their molecules re-order as they cool. Amorphous materials (ABS, ASA, PETG, PC) shrink ' +
+      'less and far more uniformly — typically 0.3–0.7% — and even PLA shrinks a little.',
     whyThisOrder:
       'Near the end, because dimensions depend on temperature and flow: over-extrusion masquerades as ' +
       '"too little shrinkage" and a different print temperature changes how much the part contracts. ' +
@@ -363,7 +525,7 @@ export const CALIBRATIONS: Record<CalibrationId, CalibrationDef> = {
       { title: 'Measure after full cooldown', look: 'Let the part reach room temperature — for ABS/ASA out of an enclosure, give it 30+ minutes.', meaning: 'Warm parts haven\'t finished shrinking; measuring early understates the compensation you need.', severity: 'adjust' },
       { title: 'Measure X and Y separately', look: 'Take the X-axis and Y-axis dimensions (or read both scales on the tool).', meaning: 'They\'re usually close; a large X/Y difference points at a printer mechanical issue (belt tension, skewed frame), not the filament.', severity: 'adjust' },
       { title: 'Elephant foot ≠ shrinkage', look: 'Measure above the first few layers, not across the base flare.', meaning: 'First-layer squish widens the bottom of the part; measuring there corrupts the reading.', severity: 'bad' },
-      { title: 'Sanity range', look: 'Typical values: PLA ~99.6–100%, PETG ~99.2–99.8%, ABS/ASA ~98.5–99.5%, nylon can go lower.', meaning: 'A reading far outside these bands usually means a measurement or flow problem, not record-breaking shrinkage.', severity: 'good' }
+      { title: 'Sanity range', look: 'Typical values: PLA ~99.6–100%, PETG ~99.2–99.8%, ABS/ASA ~98.5–99.5%, nylon can go lower.', meaning: 'A reading far outside these bands usually means a measurement or flow problem, not record-breaking shrinkage. ABS and ASA are amorphous, so they usually land at the TIGHT end of their band (0.3–0.7% shrink = 99.3–99.7%); a reading near 98.5% is worth re-measuring before you compensate for it.', severity: 'good' }
     ],
     resultPrecision: 2,
     slicerDestination: { scope: 'filament', note: 'Filament settings → Filament → Shrinkage (Orca 2.x labels it "Shrinkage (XY)"; Bambu Studio: "Shrinkage"). Enter as a percentage — e.g. 99.4 mm measured on a 100 mm part = 99.4%.' },
@@ -382,10 +544,15 @@ export const CALIBRATIONS: Record<CalibrationId, CalibrationDef> = {
     purpose:
       'Tames the drips, blobs, and color smears that dual-nozzle printers add on top of normal stringing: ' +
       'while one nozzle prints, the idle nozzle sits hot, oozes, and can drag its leftovers into your part ' +
-      'at every toolchange. This step is a structured checklist plus one verification print — not a single number to find.',
+      'at every toolchange. This step is a structured checklist plus one verification print — not a single number to find. ' +
+      'It covers TOOLCHANGE ooze only. Drool during ordinary printing within one filament belongs to the ' +
+      'temperature step (the dominant lever) and the retraction step (which carries the full ordered lever list) — ' +
+      'both of which every project has, single-nozzle included.',
     whyThisOrder:
       'Runs after pressure advance and retraction because both change how much each nozzle oozes. ' +
-      'It is only added to projects that calibrate the bowden-fed auxiliary nozzle of a multi-nozzle printer.',
+      'It is only added to projects that calibrate the bowden-fed auxiliary nozzle of a multi-nozzle printer. ' +
+      'If your blobs are not appearing at toolchanges, this is the wrong step — go back to the temperature step ' +
+      'and the retraction step.',
     whyExpanded:
       'On toolchange, Bambu Studio cools the nozzle it is leaving — it emits M104 S0 for the inactive nozzle, ' +
       'letting it fall toward ~60 °C — then reheats it when it is needed again. That reheat expands the melt ' +
@@ -398,7 +565,7 @@ export const CALIBRATIONS: Record<CalibrationId, CalibrationDef> = {
       'steam in the hotend and pushes plastic out no matter what you configure.',
     dependencies: ['pressure-advance', 'retraction'],
     prerequisites: [
-      { id: 'dry-ooze', label: 'Filament is dry (both filaments, if two are loaded)', coachNote: 'Moisture flashing to steam in the hotend is the #1 non-obvious ooze cause — no retraction or ramming setting can fix a wet spool.' },
+      { id: 'dry-ooze', label: 'Filament is dry (both filaments, if two are loaded)', coachNote: 'Moisture flashing to steam in the hotend is the #1 non-obvious ooze cause — no retraction or ramming setting can fix a wet spool, because the pressure pushing plastic out is generated downstream of the extruder. Ten-minute triage: extrude ~100 mm at print temperature into open air and LISTEN for popping, crackling or sizzling; LOOK for bubbles, foam, or a matte rough strand instead of a glossy one; and watch whether extrusion carries on by itself for several seconds after you stop commanding it — that last one is the ooze signature of steam specifically, not of bad retraction.' },
       { id: 'aux-retraction-set', label: 'Per-extruder retraction is calibrated AND the bowden override is explicitly set (not blank)', coachNote: 'Bambu Studio bug #10404: an unset ("nil") Bowden Extruder override silently falls back to the 0.8 mm MAIN default on the auxiliary nozzle — far too little for a bowden path.' },
       { id: 'aux-k-done', label: 'Pressure advance (K) is calibrated for the nozzle this project targets', coachNote: 'Automatic Flow Dynamics covers the MAIN hotend only — the auxiliary nozzle needs the manual test (run the Pressure Advance step with this project\'s nozzle selected in the calibration dialog).' }
     ],

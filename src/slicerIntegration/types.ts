@@ -7,7 +7,14 @@
 // detection and installation only run in the Tauri desktop build.
 // ---------------------------------------------------------------------------
 
-import type { CalibrationProject, MaterialId } from '../types';
+import type { CalibrationProject, ExtruderType, MaterialId } from '../types';
+
+/**
+ * Hotend flow class on one physical nozzle. Bambu's slot legends name both
+ * ("Bowden Standard" vs "Bowden High Flow") and ship different values for them,
+ * so it selects WHICH slot a nozzle's calibration belongs in.
+ */
+export type HotendFlowClass = 'standard' | 'high';
 
 /** Slicers supported by the integration subsystem (superset of the wizard's SlicerId). */
 export type IntegrationSlicerId =
@@ -101,6 +108,14 @@ export interface ParsedFilamentProfile {
   isDelta: boolean;
   /** Whether the format was recognized as Orca-family filament JSON. */
   schemaRecognized: boolean;
+  /**
+   * The `filament_extruder_variant` legend after inheritance/include resolution,
+   * when the scanner was able to resolve it. Optional: `resolveSlotLegend()`
+   * falls back to the preset's own key and then to the known `include`
+   * templates. Never write it into `rawProfile` — round-trip validation depends
+   * on rawProfile being the file's own keys.
+   */
+  resolvedExtruderVariants?: string[] | null;
 }
 
 export interface ProfileSource {
@@ -157,10 +172,33 @@ export interface ProfileGenerationRequest {
   baseProfile: DetectedFilamentProfile;
   newName: string;
   patches: CalibratedFieldPatch[];
-  /** 0-based extruder/tool index the calibration applies to. */
+  /**
+   * 0-based VALUE SLOT index the calibration is written to. On Bambu presets
+   * this indexes the extruder-variant legend, which is NOT the nozzle number —
+   * resolve it with `resolveTargetSlot()`, never from `project.nozzleIndex`.
+   */
   targetExtruderIndex: number;
   /** Apply to every extruder position instead of only targetExtruderIndex. */
   applyToAllExtruders: boolean;
+  /**
+   * How filament reaches the calibrated nozzle (from the printer profile's
+   * `nozzles[project.nozzleIndex].feed`). Proves the chosen slot belongs to the
+   * calibrated nozzle on presets whose slots are per feed path. Absent = not
+   * known, which makes such a preset refuse the write instead of guessing.
+   */
+  calibratedNozzleFeed?: ExtruderType | null;
+  /** Hotend flow class on the calibrated nozzle. Defaults to standard. */
+  calibratedHotendFlow?: HotendFlowClass;
+  /** Printer-profile label for the calibrated nozzle, used in messages. */
+  calibratedNozzleLabel?: string | null;
+  /**
+   * How many PHYSICAL nozzles the printer profile declares
+   * (`printer.nozzles.length`). A preset legend that names only hotend variants
+   * of one feed path cannot address one nozzle of two — both read whichever
+   * slot matches their fitted hotend — so a per-nozzle write on such a machine
+   * is refused. Absent = the printer profile does not say.
+   */
+  physicalNozzleCount?: number;
   /**
    * Bambu Studio only: bake the calibrated pressure advance into the filament
    * start g-code as `M900 K<v> L1000 M10`. Bambu Studio ignores the native

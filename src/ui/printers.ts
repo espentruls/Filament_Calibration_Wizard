@@ -21,6 +21,60 @@ export const FALLBACK_MAX_NOZZLE_TEMP = 260;
 /** Conservative stand-in when nothing publishes a bed limit. Not a spec. */
 export const FALLBACK_MAX_BED_TEMP = 100;
 
+/**
+ * The Bambu Lab X2D quick-fill, as DATA rather than as a sequence of writes
+ * into form inputs.
+ *
+ * It exists as its own exported function for two reasons. The first is that the
+ * button's job is dual-nozzle detail the printer database does not carry — a
+ * direct-drive main plus a bowden-fed auxiliary with its own speed/accel
+ * ceiling — so the resulting profile is hand-made: `extruderCount` 2 (so the
+ * multi-filament callout fires), `isManual` true and no database linkage (so
+ * the spec-refresh callout does not offer to overwrite values no record backs).
+ *
+ * The second is that everything it does NOT fill is invisible until something
+ * downstream goes quiet. It shipped without a chamber, and on that profile
+ * `printerCanHeatChamber()` reads false, which silences the entire per-material
+ * chamber model: no chamber number for ABS, and — the part that can cost
+ * hardware — no PLA/PETG/TPU heat-creep warning on any surface, on the exact
+ * machine this fork exists for. So the chamber values are taken from the same
+ * `bambu-lab-x2d` database record the combo-box path fills from, and a test
+ * asserts the two agree.
+ */
+export function x2dTemplateValues(): {
+  name: string;
+  manufacturer: string;
+  maxNozzleTemp: number;
+  maxChamberTemp?: number;
+  heatedChamber?: boolean;
+  extruderType: ExtruderType;
+  retractionRange: { start: number; end: number };
+  extruderCount: number;
+  nozzles: NozzleProfile[];
+} {
+  const spec = getPrinterSpec('bambu-lab-x2d');
+  return {
+    name: 'Bambu Lab X2D',
+    manufacturer: 'Bambu Lab',
+    // Official X2D spec sheet: 300 °C max nozzle temp (bambulab.com/en-us/x2d/specs).
+    maxNozzleTemp: 300,
+    maxChamberTemp: spec?.maxChamberTempC ?? undefined,
+    heatedChamber: spec?.heatedChamber ?? undefined,
+    // The main (left) nozzle is direct drive on the toolhead.
+    extruderType: 'direct',
+    // Main/direct path; the bowden aux gets its own 2–6 mm suggestion.
+    retractionRange: { start: 0, end: 2 },
+    extruderCount: 2, // two physical nozzles
+    nozzles: [
+      { label: 'Main (direct drive)', feed: 'direct' },
+      {
+        label: 'Auxiliary (bowden)', feed: 'bowden', maxSpeed: 200, maxAccel: 1000,
+        notes: 'Remote stepper at the rear panel feeding via PTFE tube. Supports-oriented; no flexible filaments; nozzle size must match the main; ~4 mm Z loss while it prints.'
+      }
+    ]
+  };
+}
+
 export interface LimitProvenance {
   key: 'maxNozzleTemp' | 'maxBedTemp' | 'maxVolumetricFlow';
   label: string;
@@ -498,32 +552,24 @@ function openEditor(root: HTMLElement, existing: PrinterProfile | null): void {
     }
   }, 'My printer is not listed — enter manually');
 
-  /**
-   * One-click Bambu Lab X2D profile. The dual-nozzle detail the calibration
-   * workflow needs — a direct-drive main plus a bowden-fed auxiliary with its
-   * own speed/accel ceiling — isn't in the printer database, so this writes a
-   * hand-made profile: extruderCount 2 (so the multi-filament callout fires),
-   * isManual true and no database linkage (so the spec-refresh callout doesn't
-   * offer to overwrite values no database record backs).
-   */
   const applyX2dTemplate = (): void => {
-    if (!name.value.trim()) name.value = 'Bambu Lab X2D';
-    manufacturer.value = 'Bambu Lab';
-    maxNozzleTemp.value = '300'; // official X2D spec sheet: 300 °C max nozzle temp (bambulab.com/en-us/x2d/specs)
+    const t = x2dTemplateValues();
+    if (!name.value.trim()) name.value = t.name;
+    manufacturer.value = t.manufacturer;
+    maxNozzleTemp.value = String(t.maxNozzleTemp);
     setLimitNote('maxNozzleTemp', false); // a cited spec, not a fallback
-    extruder.value = 'direct'; // the main (left) nozzle is direct drive on the toolhead
-    retrStart.value = '0';
-    retrEnd.value = '2'; // main/direct path; the bowden aux gets its own 2–6 mm suggestion
-    extruderCount.value = '2'; // two physical nozzles
+    maxChamber.value = t.maxChamberTemp !== undefined ? String(t.maxChamberTemp) : '';
+    heatedChamber.value = t.heatedChamber === true ? 'yes' : t.heatedChamber === false ? 'no' : '';
+    extruder.value = t.extruderType;
+    retrStart.value = String(t.retractionRange.start);
+    retrEnd.value = String(t.retractionRange.end);
+    extruderCount.value = String(t.extruderCount);
     nozzleState.length = 0;
-    nozzleState.push(
-      { label: 'Main (direct drive)', feed: 'direct' },
-      {
-        label: 'Auxiliary (bowden)', feed: 'bowden', maxSpeed: 200, maxAccel: 1000,
-        notes: 'Remote stepper at the rear panel feeding via PTFE tube. Supports-oriented; no flexible filaments; nozzle size must match the main; ~4 mm Z loss while it prints.'
-      });
+    nozzleState.push(...t.nozzles.map(n => ({ ...n })));
     renderNozzleRows();
-    p.extruderCount = 2;
+    p.extruderCount = t.extruderCount;
+    p.maxChamberTemp = t.maxChamberTemp;
+    p.heatedChamber = t.heatedChamber;
     p.databasePrinterId = null;
     p.isManual = true;
     combo.input.value = '';
@@ -564,7 +610,7 @@ function openEditor(root: HTMLElement, existing: PrinterProfile | null): void {
         h('div', { class: 'btn-row', style: 'margin-top:var(--s-2)' },
           h('button', { class: 'btn btn-sm', type: 'button', onClick: applyX2dTemplate }, '⚡ Quick-fill: Bambu Lab X2D')),
         h('p', { class: 'field-help', style: 'margin:var(--s-2) 0 0' },
-          'Fills name, 300 °C limit, 2 extruders, and both nozzles (direct-drive main + 200 mm/s / 1000 mm/s² bowden aux).')),
+          'Fills name, 300 °C nozzle limit, the 65 °C heated chamber, 2 extruders, and both nozzles (direct-drive main + 200 mm/s / 1000 mm/s² bowden aux).')),
       dbBadge,
       h('hr', { class: 'rule-ticks' }),
       field('Profile name *', name),

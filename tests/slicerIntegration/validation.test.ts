@@ -515,6 +515,68 @@ describe('diff', () => {
       .toBe('Retraction length (slot 1): (printer default) → (no filament override)');
   });
 
+  // The legend is what says which nozzle each value slot belongs to, so a
+  // legend of the wrong LENGTH mislabels every slot after the gap. This is the
+  // only backstop against that, and until now nothing exercised it.
+  describe('EXTRUDER_VARIANT_SHAPE — the legend must be exactly as wide as the slots', () => {
+    /** A 4-slot Bambu preset carrying `legend` as its declared slot legend. */
+    function generateWithLegend(legend: string[]) {
+      const body = {
+        type: 'filament', name: 'Fake ABS @BBL X2D 0.4 nozzle', from: 'system',
+        inherits: 'Fake ABS @base', filament_id: 'GFB99', version: '2.3.0.2',
+        filament_type: ['ABS'],
+        filament_extruder_variant: legend,
+        nozzle_temperature: ['270', '270', '270', '270'],
+        filament_flow_ratio: ['0.95', '0.95', '0.95', '0.95']
+      };
+      const parsed = parseFixture('bambu-user-full-pctg-dualnozzle.json', 'bambu', {
+        dir_kind: 'system', vendor: 'BBL', writable: false,
+        file_name: 'Fake ABS @BBL X2D 0.4 nozzle.json', json: JSON.stringify(body)
+      });
+      const project = makeProject();
+      project.nozzleIndex = 0;
+      const generated = generateProfile({
+        slicerId: 'bambu', baseProfile: parsed.profile, newName: 'PF legend shape',
+        patches: buildPatchesFromProject(project), targetExtruderIndex: 0,
+        applyToAllExtruders: false, calibratedNozzleFeed: 'direct', project
+      }, parsed);
+      return validateGeneratedProfile(generated, {
+        project, printer, baseProfile: parsed.profile
+      });
+    }
+
+    const FOUR = ['Direct Drive Standard', 'Direct Drive High Flow', 'Bowden Standard', 'Bowden High Flow'];
+
+    it('accepts a legend exactly as wide as the value slots', () => {
+      expect(generateWithLegend(FOUR).errors.map(e => e.code)).not.toContain('EXTRUDER_VARIANT_SHAPE');
+    });
+
+    it('rejects a legend SHORTER than the slot count', () => {
+      // The exact shape of the old bug: a three-entry direct-drive list
+      // stretched over a four-slot X2D preset.
+      const r = generateWithLegend(FOUR.slice(0, 3));
+      expect(r.valid).toBe(false);
+      const e = r.errors.find(x => x.code === 'EXTRUDER_VARIANT_SHAPE');
+      expect(e?.message).toContain('names 3 slot(s)');
+      expect(e?.message).toContain('4 value slot(s)');
+    });
+
+    it('a legend LONGER than every value array widens the preset instead of desyncing', () => {
+      // Documented asymmetry, not an untested branch: `extruderCountOf` counts
+      // filament_extruder_variant among the per-slot arrays, so a legend with
+      // more entries than any value array RAISES the slot count to its own
+      // length rather than sitting above it. The two therefore cannot disagree
+      // in that direction. Verified against a real Bambu library: of the 17
+      // presets that declare a legend, zero have one wider than their value
+      // arrays. The check's live direction is the one above — a legend too
+      // SHORT, which is exactly the shape the old three-entry direct-drive list
+      // took over a four-slot X2D preset.
+      const r = generateWithLegend([...FOUR, 'Direct Drive TPU High Flow']);
+      expect(r.errors.map(e => e.code)).not.toContain('EXTRUDER_VARIANT_SHAPE');
+      expect(r.errors.map(e => e.code)).not.toContain('EXTRUDER_SHAPE');
+    });
+  });
+
   it('fullJsonDiff reports added/removed/changed only', () => {
     const d = fullJsonDiff({ a: 1, b: 2, c: 3 }, { a: 1, b: 9, d: 4 });
     expect(d).toEqual([

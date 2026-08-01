@@ -42,9 +42,27 @@ export function validateTestRange(start: number, end: number, step: number, opts
   return issues;
 }
 
-export function validateAgainstPrinter(kind: 'nozzleTemp' | 'bedTemp' | 'mvs', value: number, printer: PrinterProfile | undefined): ValidationIssue[] {
+/**
+ * Check a value against the machine that will execute it.
+ *
+ * Chamber temperature is in the same union as nozzle and bed on purpose: it is a
+ * temperature the printer physically holds, so anything the app suggests or
+ * displays goes through the same gate rather than a parallel one. Its limit is
+ * the only OPTIONAL one — `maxChamberTemp` is absent on every profile that never
+ * learned it, and absent means "not stated", never "zero".
+ */
+export function validateAgainstPrinter(kind: 'nozzleTemp' | 'bedTemp' | 'mvs' | 'chamberTemp', value: number, printer: PrinterProfile | undefined): ValidationIssue[] {
   if (!printer) return [];
   const issues: ValidationIssue[] = [];
+  if (kind === 'chamberTemp') {
+    const limit = printer.maxChamberTemp;
+    if (typeof limit === 'number' && Number.isFinite(limit) && value > limit) {
+      issues.push({ level: 'error', message: `${value} °C exceeds this printer's max chamber temperature (${limit} °C).` });
+    } else if (printer.heatedChamber === false && value > 0) {
+      issues.push({ level: 'warning', message: `This printer profile has no heated chamber, so ${value} °C cannot be held. A passive enclosure still reduces warping.` });
+    }
+    return issues;
+  }
   if (kind === 'nozzleTemp' && value > printer.maxNozzleTemp) {
     issues.push({ level: 'error', message: `${value} °C exceeds this printer's max nozzle temperature (${printer.maxNozzleTemp} °C). Printing hotter than the rating can destroy the hotend or release fumes.` });
   }

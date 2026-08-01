@@ -17,8 +17,71 @@ const BAMBU_K_SCALE_WARNING =
 const BAMBU_BUG_10404 =
   'KNOWN BUG (BambuStudio #10404): a filament preset whose "Bowden Extruder" retraction override is left unset ("nil") silently falls back to the MAIN 0.8 mm default on the auxiliary nozzle — under-retracting it. Always tick Length and set an explicit value for the bowden path.';
 
+/**
+ * Retraction speed for the X2D's bowden-fed auxiliary nozzle.
+ *
+ * Read from the owner's own install:
+ *   …/BambuStudio/system/BBL/machine/Bambu Lab X2D 0.4 nozzle.json
+ *     retraction_length   ["0.8","0.8","2","2"]
+ *     retraction_speed    ["30","30","20","20"]
+ *     deretraction_speed  ["30","30","20","20"]
+ *
+ * Those arrays are indexed by EXTRUDER VARIANT, not by physical nozzle: the
+ * first two entries are the direct-drive variants (Direct Drive Standard /
+ * High Flow) and the last two are the bowden variants (Bowden Standard /
+ * High Flow). So 30 mm/s is the MAIN nozzle's figure and the auxiliary ships
+ * 20 mm/s — the wizard previously told users the opposite.
+ */
+const BAMBU_X2D_BOWDEN_SPEED =
+  'Speeds differ per feed path too: the bowden (auxiliary) variants ship 2 mm at 20 mm/s retract and 20 mm/s deretract, while 30 mm/s is the direct-drive main-nozzle figure. Change length before speed.';
+
+/**
+ * Neither slicer this wizard targets has a coasting setting. Verified for
+ * Bambu Studio by searching its entire shipped configuration for any key
+ * containing "coast" (zero hits across system/BBL); for Orca, coasting remains
+ * an open feature request (OrcaSlicer #3325) rather than a shipped parameter.
+ */
+const NO_COASTING_NOTE =
+  'Do not go looking for a "coasting" setting: neither Bambu Studio nor Orca ships one (Orca has an open feature request for it). The classic Cura anti-stringing advice to add coasting simply does not apply here — spend the effort on drying, temperature and retraction length instead.';
+
+/**
+ * The ordered lever list, kept identical in both slicers' retraction pages so
+ * the instruction the user reads does not depend on which slicer they picked.
+ */
+const OOZE_LEVER_ORDER_NOTE =
+  'If ooze is your actual complaint, work the levers in order of effect size, not convenience: (1) dry the filament, (2) nozzle temperature in 5 °C steps — the dominant lever, (3) retraction length then speed, (4) travel speed, (5) wipe at about one nozzle width, (6) z-hop last and usually counterproductive. Pressure advance is not on the list: it retimes pressure without changing the volume extruded.';
+
 const BAMBU_X2D_AUX_CONSTRAINTS =
   'X2D auxiliary-nozzle limits: 200 mm/s and 1000 mm/s² caps, no flexible filaments (TPU), the aux nozzle size must match the main, and about 4 mm of Z height is lost while the auxiliary nozzle prints. It is intended mainly for support material — X2D "Quality mode" slicing automatically assigns the right (aux) nozzle only support material.';
+
+/**
+ * Which ooze belongs to which step. Repeated on both sides of the fork so a
+ * user who lands on the wrong one is sent back rather than left tuning the
+ * setting that cannot fix their symptom.
+ */
+const OOZE_FORK_NOTE =
+  'This step is for TOOLCHANGE ooze — blobs, smears and colour bleed that appear where one nozzle hands over to the other. Drool during ordinary printing within a single filament is a different problem: it belongs to the temperature step (the dominant lever) and the retraction step (which carries the full ordered lever list), both of which every project has.';
+
+/**
+ * Bambu's own toolchange anti-ooze baseline on the X2D, so a user can tell
+ * whether their profile is already at the vendor default or has drifted.
+ *
+ * Read from the owner's install, with inheritance resolved:
+ *   filament/Generic ABS @BBL X2D 0.4 nozzle.json
+ *     retraction_distances_when_ec   ["3","3","4","4"]   (3 mm direct-drive slots, 4 mm bowden slots)
+ *     filament_cooling_before_tower  ["10","10","10","10"]
+ *     filament_ramming_travel_time   ["0","0","0","0"]
+ *     filament_tower_interface_print_temp ["270"]
+ *   filament/fdm_filament_template_direct_bowden.json
+ *     long_retractions_when_ec       ["1","1","1","1"]
+ *     filament_cooling_before_tower  ["0","0","0","0"]   (X2D deliberately raises this to 10)
+ *   machine/fdm_bbl_3dp_002_common.json
+ *     wipe ["1"…], wipe_distance ["2"…], retract_before_wipe ["0%"…],
+ *     z_hop ["0.4"…] z_hop_types ["Auto Lift"…], retract_length_toolchange ["2"…],
+ *     machine_switch_extruder_time 5
+ */
+const BAMBU_X2D_TOOLCHANGE_DEFAULTS =
+  'Bambu\'s own X2D baseline, for comparison against your profile: retraction on extruder change is 3 mm on the direct-drive slots and 4 mm on the bowden slots for every rigid material (0 for TPU and PVA), long retraction on extruder change is on, and cooling-before-tower is 10 — the shared template defaults that last one to 0, so Bambu deliberately pre-cools before the prime tower on this machine. Machine side: wipe on at 2 mm, retract-before-wipe 0%, z-hop 0.4 mm "Auto Lift", toolchange retract 2 mm, and about 5 s per extruder switch. Note 2 mm of wipe is already well beyond the 0.4–0.8 mm that stays artifact-free, so wipe is not where your remaining ooze is coming from.';
 
 /**
  * Orca disables Resonance avoidance for EVERY calibration test — verified in
@@ -184,6 +247,7 @@ export const SLICER_CONTENT: SlicerVersionContent[] = [
           'Slice and print the twin-tower test.',
           'Find the LOWEST height where the towers stay clean (strings stop).',
           'Measure that height with calipers, then read the true retraction length at that height from the sliced G-code preview: search the G-code for the "Calib_Retraction_tower" comments (don\'t trust raw retract commands — wipe settings distort them). This app also computes it from start + step × height.',
+          OOZE_LEVER_ORDER_NOTE,
         ],
         saveTo: {
           path: 'Printer settings → Extruder → Retraction  (or per-filament: Filament settings → Setting overrides)',
@@ -194,6 +258,8 @@ export const SLICER_CONTENT: SlicerVersionContent[] = [
         gotchas: [
           'If the tower is clean from the very bottom, set a small nonzero value (0.2–0.4 mm direct drive) rather than 0.',
           'If the top is STILL stringy, dry the filament and check the nozzle for leaks — more retraction won\'t fix moisture.',
+          NO_COASTING_NOTE,
+          'Travel speed, wipe and z-hop live in the process/printer profile, not here. They are settings to CHECK when ooze survives a good retraction value — PerfectFit does not compute them, because it has no measurement behind them.',
           ORCA_RESONANCE_AVOIDANCE_NOTE
         ]
       },
@@ -245,6 +311,7 @@ export const SLICER_CONTENT: SlicerVersionContent[] = [
         available: true, builtIn: false,
         menuPath: 'Checklist — prime tower + per-filament retraction overrides',
         steps: [
+          OOZE_FORK_NOTE,
           'Dry the filament(s) first — moisture is the top non-obvious ooze cause and defeats every setting below.',
           'Enable the prime tower for multi-filament/multi-tool prints, and give leaky filaments more prime volume.',
           'Set a per-filament retraction override for the ooze-prone extruder under the filament profile\'s setting overrides. Orca-family slicers expose the same prime-tower and per-extruder override concepts as Bambu Studio; exact menu wording varies by version.',
@@ -408,8 +475,9 @@ export const SLICER_CONTENT: SlicerVersionContent[] = [
           'Select the Bambu printer, filament preset, and normal process profile.',
           BAMBU_DEVELOPER_MODE_BEST_PATH,
           'Open the title-bar Calibration menu and choose "Retraction test" (Bambu Studio kept this name; Orca 2.4 shortened its own entry to just "Retraction").',
-          'Dual-nozzle machines (X2D): retraction is per-extruder — machine defaults are 0.8 mm for the main (direct drive) nozzle and 2 mm for the auxiliary (bowden) nozzle. Calibrate the nozzle this project targets; for the aux, start at 2 mm and raise in ~0.5 mm steps (most filaments land between 2 and 4 mm, up to 6). The 30 mm/s default retraction speed is fine.',
+          'Dual-nozzle machines (X2D): retraction is per-extruder — machine defaults are 0.8 mm for the main (direct drive) nozzle and 2 mm for the auxiliary (bowden) nozzle. Calibrate the nozzle this project targets; for the aux, start at 2 mm and raise in ~0.5 mm steps (most filaments land between 2 and 4 mm, up to 6). ' + BAMBU_X2D_BOWDEN_SPEED,
           'Run the generated stringing/retraction test, changing one variable at a time: distance first, then speed if needed.',
+          OOZE_LEVER_ORDER_NOTE,
           'If Developer mode is not available, fall back to Orca Slicer or an external stringing test model and copy the resulting distance/speed into Bambu Studio.'
         ],
         saveTo: {
@@ -418,7 +486,12 @@ export const SLICER_CONTENT: SlicerVersionContent[] = [
           scope: 'printer',
           note: 'Printer-scoped by default. Dual-nozzle filament presets store values as per-extruder ARRAYS; to override per filament, open Filament settings → Setting Overrides, switch the selector to "Direct Drive Extruder" or "Bowden Extruder", then tick Length under Retraction and enter the value. ' + BAMBU_BUG_10404
         },
-        gotchas: [BAMBU_NON_BAMBU_FALLBACK, BAMBU_BUG_10404]
+        gotchas: [
+          BAMBU_NON_BAMBU_FALLBACK,
+          BAMBU_BUG_10404,
+          NO_COASTING_NOTE,
+          'Travel speed and wipe live in the process profile and z-hop in the printer profile — settings to CHECK when ooze survives a good retraction value, not values PerfectFit computes. On the X2D there is little left to win there: the stock process profile already travels at 1000 mm/s and the machine already wipes 2 mm with a 0.4 mm "Auto Lift" z-hop.'
+        ]
       },
       'max-volumetric-speed': {
         available: true, builtIn: true,
@@ -461,6 +534,7 @@ export const SLICER_CONTENT: SlicerVersionContent[] = [
         available: true, builtIn: false,
         menuPath: 'Checklist — Process settings (prime tower) + Filament Setting Overrides + Developer Mode parameters',
         steps: [
+          OOZE_FORK_NOTE,
           'Dry both filaments first — moisture flashing to steam in the hotend is the top non-obvious ooze cause, and no setting compensates for a wet spool.',
           'Enable the prime tower (the primary mitigation): every toolchange wipes and re-primes on the tower instead of on your part. Set per-filament prime volumes and give leaky pairings (PETG especially) more volume.',
           'Verify the bowden retraction override is SET: Filament settings → Setting Overrides → switch the selector to "Bowden Extruder" → Retraction → tick Length and enter your calibrated aux value. ' + BAMBU_BUG_10404,
@@ -476,6 +550,8 @@ export const SLICER_CONTENT: SlicerVersionContent[] = [
         },
         gotchas: [
           'Why the idle nozzle oozes: on toolchange Bambu Studio emits M104 S0 for the inactive nozzle (letting it cool toward ~60 °C) and reheats it when needed again — the reheat causes a melt-zone pressure spike that oozes on resume, PETG worst. There is no official standby-temperature field.',
+          BAMBU_X2D_TOOLCHANGE_DEFAULTS,
+          'Some of the X2D\'s anti-ooze defence is mechanical, not a setting: Bambu documents a flow blocker under the toolhead that blocks the nozzle while it is idle, plus a silicone wiping pad on the purge wiper. If the auxiliary nozzle is smearing ooze during its own wipe routine, that routine can be turned off — no calibration number fixes a mechanical path.',
           'Advanced users only: editing the change-filament G-code to hold the idle nozzle at ~160–180 °C avoids the full cool/reheat cycle — at the cost of some standing ooze. Only go there after the checklist above.',
           BAMBU_GEAR_OFF_CAVEAT,
           BAMBU_K_SCALE_WARNING,

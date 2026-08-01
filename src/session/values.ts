@@ -23,9 +23,11 @@
 // the existing test forms already use.
 // ---------------------------------------------------------------------------
 
-import type { CalibrationId, CalibrationProject, MaterialPreset, PrinterProfile } from '../types';
+import type { ChamberAdvice, CalibrationId, CalibrationProject, MaterialPreset, PrinterProfile } from '../types';
 import { CALIBRATIONS, DEFAULT_ORDER } from '../data/calibrations';
 import { getMaterial } from '../data/materials';
+import { printerCanHeatChamber, suggestChamberTemp } from '../logic/ranges';
+import { validateAgainstPrinter } from '../logic/validation';
 import {
   WORKFLOW_STEPS,
   getWorkingProfile,
@@ -470,4 +472,91 @@ export function resolveStepValues(ctx: ValueContext, stepId: CalibrationId): Ste
 /** Every value known for this nozzle right now, canonical order. */
 export function resolveAllValues(ctx: ValueContext): ResolvedValue[] {
   return CANONICAL_KEYS.map((k) => resolveValue(ctx, k, false));
+}
+
+// --- the build chamber ------------------------------------------------------
+
+/**
+ * The chamber recommendation for this session, shaped like a resolved value but
+ * deliberately NOT one.
+ *
+ * It is not a `NormalizedProfileKey`, so it can never enter `finals`, a working
+ * profile, an installed preset or the confidence score. That is the whole point:
+ * there is no chamber calibration, no measurement behind the number, and nothing
+ * to install — only an instruction the user carries out on the machine. Keeping
+ * it out of the key space is what stops it from ever being written somewhere a
+ * measured value belongs.
+ *
+ * The number itself is `suggestChamberTemp`'s, which clamps to the machine's own
+ * stated ceiling; it is then put through the SAME `validateAgainstPrinter` gate a
+ * nozzle or bed temperature goes through, and dropped if that gate objects. A
+ * displayed temperature and an installed one get the same scrutiny.
+ */
+export interface ChamberAdvisory {
+  advice: ChamberAdvice;
+  label: string;
+  unit: string;
+  /** Absent when nothing could be sourced and clamped. 0 means "heater off". */
+  value?: number;
+  display?: string;
+  /**
+   * Where the number came from: `printer-default` when the machine's own ceiling
+   * decided it, `material-default` when the material did, `unset` when there is
+   * no number to explain.
+   */
+  provenance: 'printer-default' | 'material-default' | 'unset';
+  explanation: string;
+  warnings: string[];
+  /** True when there is something to change on the machine right now. */
+  actionable: boolean;
+  /**
+   * Machine-limit errors that made the number unusable. Non-empty means the
+   * value was withheld rather than shown — it should always be empty in
+   * practice, since the suggestion clamps first; it exists so a future change to
+   * either side fails loudly instead of shipping an out-of-range temperature.
+   */
+  blockingIssues: string[];
+}
+
+export function resolveChamberAdvisory(ctx: ValueContext): ChamberAdvisory {
+  const printer = ctx.printer;
+  const s = suggestChamberTemp(ctx.material.id, printer);
+  const label = 'Chamber temperature';
+  const unit = '°C';
+
+  const canHeat = printerCanHeatChamber(printer);
+
+  let value = s.suggestedC;
+  const blockingIssues: string[] = [];
+  if (value !== undefined) {
+    const errors = validateAgainstPrinter('chamberTemp', value, printer)
+      .filter((i) => i.level === 'error');
+    if (errors.length) {
+      blockingIssues.push(...errors.map((i) => i.message));
+      value = undefined;
+    }
+  }
+
+  // A "leave it off" instruction is only worth showing when there is a heater to
+  // leave off; a hot-chamber number is always worth showing.
+  const actionable = value !== undefined && (s.advice === 'hot' || canHeat);
+
+  const provenance = value === undefined
+    ? 'unset'
+    : s.advice === 'hot' && !s.clamped
+      ? 'printer-default'
+      : 'material-default';
+
+  return {
+    advice: s.advice,
+    label,
+    unit,
+    value,
+    display: value === undefined ? undefined : `${value} ${unit}`,
+    provenance,
+    explanation: s.headline,
+    warnings: [...s.warnings, ...blockingIssues],
+    actionable,
+    blockingIssues
+  };
 }

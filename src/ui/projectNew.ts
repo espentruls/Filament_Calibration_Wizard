@@ -1,6 +1,9 @@
 import { h, field, numberInput, issueList, clear, toast } from './dom';
 import { listPrinters, createProject, saveProject, loadSettings } from '../storage/store';
 import { MATERIALS, getMaterial } from '../data/materials';
+import { CALIBRATIONS } from '../data/calibrations';
+import { printerCanHeatChamber, suggestChamberTemp } from '../logic/ranges';
+import { withOptionalStep } from '../logic/stepPlan';
 import { slicerVersionOptions } from '../data/slicers';
 import { navigate } from '../app';
 import * as bridge from '../slicerIntegration/bridge';
@@ -133,7 +136,7 @@ export async function renderNewProject(root: HTMLElement): Promise<void> {
     const group = h('div', { class: 'grid grid-2' }, nozzles.map((n, i) => {
       const radio = h('input', {
         type: 'radio', name: 'nozzle-choice', value: String(i), checked: i === 0,
-        onChange: () => { nozzleChoice = i; }
+        onChange: () => { nozzleChoice = i; refreshOoze(); }
       });
       const caps = [
         n.maxSpeed ? `≤ ${n.maxSpeed} mm/s` : null,
@@ -149,7 +152,7 @@ export async function renderNewProject(root: HTMLElement): Promise<void> {
           caps.map(c => h('span', { class: 'placard' }, c))),
         h('p', { class: 'rc-desc' },
           n.feed === 'bowden'
-            ? 'Wider K (0–1) and retraction (2–6 mm) ranges, no flexible filaments, and a dual-nozzle ooze-control step is added to the plan.'
+            ? 'Wider K (0–1) and retraction (2–6 mm) ranges, no flexible filaments, and the ooze-control step is pre-selected below.'
             : 'Standard test ranges — the extruder motor sits on the toolhead, so the pressure response is short and predictable.'));
     }));
     nozzleHost.append(h('fieldset', {},
@@ -158,8 +161,43 @@ export async function renderNewProject(root: HTMLElement): Promise<void> {
         'Which nozzle does this project calibrate? Each physical nozzle needs its own calibration — the feed path changes pressure advance and retraction completely.'),
       group));
   };
-  printerSel.addEventListener('change', refreshNozzles);
+  // --- optional steps -------------------------------------------------------
+  // The ooze-control checklist is NOT in DEFAULT_ORDER and must never be: it
+  // would rewrite the plan of every project already saved and drop every one of
+  // their confidence scores. It is opt-in per project instead — pre-ticked for a
+  // bowden-fed auxiliary nozzle, which is exactly the rule that used to be the
+  // only way to get it, and now reachable on any machine, because drool during
+  // an ordinary single-material print is not a dual-nozzle problem.
+  let oozeChoice = false;
+  let oozeTouched = false;
+  const oozeHost = h('div', {});
+  const refreshOoze = (): void => {
+    clear(oozeHost);
+    const printer = printers.find(pp => pp.id === printerSel.value);
+    const nozzles = printer?.nozzles ?? [];
+    const auto = nozzles.length >= 2 && nozzles[nozzleChoice]?.feed === 'bowden';
+    if (!oozeTouched) oozeChoice = auto;
+    const def = CALIBRATIONS['ooze-control'];
+    const box = h('input', {
+      type: 'checkbox', checked: oozeChoice,
+      onChange: () => { oozeChoice = box.checked; oozeTouched = true; }
+    });
+    oozeHost.append(h('fieldset', {},
+      h('legend', {}, 'Optional step'),
+      h('div', { class: 'check-item' }, box,
+        h('div', {},
+          h('strong', {}, `${def.icon} ${def.name}`),
+          h('p', { class: 'field-help', style: 'margin:.2rem 0 0' },
+            auto
+              ? 'Added by default for a bowden-fed auxiliary nozzle. It is a checklist and one verification print, not a number to find.'
+              : 'A checklist and one verification print for drips, blobs and smears. It is written around dual-nozzle toolchanges, so some of its checks will not apply on a single-nozzle machine — the drying and retraction ones do. Untick it and the plan is unchanged.'))),
+      h('p', { class: 'field-help', style: 'margin-top:var(--s-2)' },
+        'Optional steps can be reordered or skipped later, and they only count toward this project\'s progress.')));
+  };
+
+  printerSel.addEventListener('change', () => { refreshNozzles(); refreshOoze(); });
   refreshNozzles();
+  refreshOoze();
 
   const materialInfo = h('div', {});
   const refreshMaterialInfo = () => {
@@ -179,15 +217,35 @@ export async function renderNewProject(root: HTMLElement): Promise<void> {
     if (printer && m.enclosureRecommended && printer.heatedChamber === false) {
       warnings.push(`${m.label} warps without a warm, enclosed build space, and "${printer.name}" has no heated chamber. An enclosure (even passive) helps; expect warping otherwise.`);
     }
+    // The chamber is guidance, never a step and never a written value — but the
+    // one instruction that damages hardware if generalised, so it is per
+    // material and it is stated here where the material is chosen.
+    const chamber = suggestChamberTemp(m.id, printer);
+    const canHeat = printerCanHeatChamber(printer);
+    const chamberWorthSaying = chamber.advice !== 'ambient' || canHeat;
+    if (chamber.advice === 'ambient' && canHeat) {
+      warnings.push(chamber.warnings.join(' '));
+    }
+    const chamberPlacard = !chamberWorthSaying
+      ? null
+      : chamber.advice === 'ambient'
+        ? 'Chamber off'
+        : chamber.suggestedC !== undefined
+          ? `Chamber ${chamber.suggestedC} °C`
+          : null;
     materialInfo.append(
       h('div', { class: 'panel' },
         h('p', { style: 'margin:.2rem 0' }, h('strong', {}, m.label), ` — ${m.description}`),
         tempBand(m.label, m.nozzleTemp.min, m.nozzleTemp.max),
         h('p', { class: 'proj-vals', style: 'gap:var(--s-2);margin:var(--s-3) 0 0' },
           h('span', { class: 'placard' }, `Bed ${m.bedTemp.min}–${m.bedTemp.max} °C`),
+          chamberPlacard ? h('span', { class: 'placard' }, chamberPlacard) : null,
           m.hygroscopic ? h('span', { class: 'placard' }, 'Moisture-sensitive') : null,
           m.enclosureRecommended ? h('span', { class: 'placard' }, 'Enclosure recommended') : null,
           m.flexible ? h('span', { class: 'placard' }, 'Flexible') : null),
+        chamberWorthSaying
+          ? h('p', { class: 'field-help', style: 'margin-top:var(--s-2)' }, chamber.headline)
+          : null,
         h('p', { class: 'field-help' }, 'These are suggested starting points, not guarantees — spool labels and datasheets win. Every range stays editable later.'),
         warnings.length ? h('ul', { class: 'issues' }, warnings.map(w =>
           h('li', { class: 'issue issue-warning' }, h('span', { class: 'issue-icon' }, '⚠'), w))) : null
@@ -225,6 +283,7 @@ export async function renderNewProject(root: HTMLElement): Promise<void> {
         field('Nozzle type / material', nozzleType, 'Abrasive filaments (CF/GF) need hardened nozzles.')
       ),
       nozzleHost,
+      oozeHost,
       h('div', { class: 'field-row' },
         field('Slicer & version *', slicerSel, 'Instructions are version-aware; pick what you actually run.'),
         field('Starting filament profile', startingProfile, 'The preset you\'ll be modifying as you calibrate — usually a "Generic <material>" profile. Each test will remind you to save values into THIS preset. (Desktop app: suggestions come from the profiles detected in your slicer.)'),
@@ -274,16 +333,13 @@ export async function renderNewProject(root: HTMLElement): Promise<void> {
             project.calibrationDate = dateInput.value || project.calibrationDate;
 
             // Multi-nozzle printers: record which nozzle this project calibrates.
-            // Only aux/bowden-nozzle projects get the ooze-control step —
-            // single-nozzle and main-nozzle plans stay exactly as before.
             const printer = printers.find(pp => pp.id === printerSel.value);
-            if ((printer?.nozzles?.length ?? 0) >= 2) {
-              project.nozzleIndex = nozzleChoice;
-              if (printer!.nozzles![nozzleChoice]?.feed === 'bowden') {
-                const fv = project.stepOrder.indexOf('final-verification');
-                project.stepOrder.splice(fv === -1 ? project.stepOrder.length : fv, 0, 'ooze-control');
-              }
-            }
+            if ((printer?.nozzles?.length ?? 0) >= 2) project.nozzleIndex = nozzleChoice;
+            // The ooze-control step is opt-in and stays out of DEFAULT_ORDER, so
+            // no existing project's plan or confidence score is touched by its
+            // existence. Pre-ticked for a bowden aux nozzle, which reproduces
+            // the old automatic behaviour exactly.
+            if (oozeChoice) project.stepOrder = withOptionalStep(project.stepOrder, 'ooze-control');
 
             await saveProject(project);
             toast('Project created — let\'s calibrate.', 'success');

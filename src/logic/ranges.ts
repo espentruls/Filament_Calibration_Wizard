@@ -1,4 +1,4 @@
-import type { CalibrationId, CalibrationProject, ExtruderType, MaterialPreset, NozzleProfile, PrinterProfile } from '../types';
+import type { ChamberAdvice, CalibrationId, CalibrationProject, ExtruderType, MaterialPreset, NozzleProfile, PrinterProfile } from '../types';
 import { getMaterial } from '../data/materials';
 
 /**
@@ -72,16 +72,171 @@ export function flexibleRetractionCaution(
   return `Above the ${FLEXIBLE_RETRACTION_MAX_MM} mm limit PerfectFit applies to flexible filament — long retractions pull soft filament into the cold zone and jam the extruder. Use the lowest acceptable distance at or under ${FLEXIBLE_RETRACTION_MAX_MM} mm.`;
 }
 
+/**
+ * A machine limit worth clamping against: present, finite, and above zero.
+ *
+ * A saved profile can carry 0 or a non-number for a limit it never learned —
+ * `undefined` from a database record with no value, or a corrupted import.
+ * Clamping to those produces suggestions no printer can execute (a temperature
+ * tower running from 0 °C down to -20 °C), so a limit like that is treated as
+ * "not stated" and simply not applied. The value is still checked at entry by
+ * `validateAgainstPrinter`, which is where a genuinely impossible machine has to
+ * surface — a suggestion layer must not invent negative temperatures.
+ */
+function statedLimit(value: number | undefined): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
 export function suggestTempRange(materialId: string, printer?: PrinterProfile): RangeSuggestion {
   const m = getMaterial(materialId);
   let { start, end, step } = m.towerRange;
   const warnings: string[] = [];
-  if (printer && start > printer.maxNozzleTemp) {
-    warnings.push(`The suggested start (${start} °C) exceeds this printer's max nozzle temperature (${printer.maxNozzleTemp} °C). Clamped — but verify this material is printable on this machine at all.`);
-    start = printer.maxNozzleTemp;
-    if (end > start - 15) end = start - 20; // keep a usable descending span (≥20 °C) after clamping
+  const limit = statedLimit(printer?.maxNozzleTemp);
+  if (limit !== undefined && start > limit) {
+    warnings.push(`The suggested start (${start} °C) exceeds this printer's max nozzle temperature (${limit} °C). Clamped — but verify this material is printable on this machine at all.`);
+    start = limit;
+    // Keep a usable descending span (≥20 °C) after clamping, without ever
+    // descending below a temperature a hotend could actually hold.
+    if (end > start - 15) end = Math.max(Math.round(start / 2), start - 20);
   }
   return { start, end, step, warnings };
+}
+
+/**
+ * What to do with the build chamber for this material on this machine.
+ *
+ * Chamber temperature is GUIDANCE, not a calibration: there is no measurable
+ * optimum to search for, so PerfectFit never adds a step for it and never writes
+ * it into a preset. What it does do is refuse to let one instruction ("run the
+ * chamber hot") be applied to a material it damages.
+ *
+ * The number, when there is one, is the hottest the MACHINE allows, capped by
+ * the material's own ceiling — never a vendor setpoint copied blind, and never
+ * a number at all when either side is unknown.
+ */
+export interface ChamberSuggestion {
+  advice: ChamberAdvice;
+  /**
+   * The chamber temperature to set (°C), or undefined when nothing can be
+   * sourced and clamped. 0 means "heater off", which is a real instruction.
+   */
+  suggestedC?: number;
+  /** One sentence, sentence case: the instruction itself. */
+  headline: string;
+  /** Reasons and caveats. Amber material — cautions, not decoration. */
+  warnings: string[];
+  /**
+   * True when the MATERIAL's own ceiling held the number below what the machine
+   * could have done — i.e. PerfectFit is deliberately not using the whole range.
+   */
+  clamped: boolean;
+}
+
+/**
+ * True when this printer profile is known to be able to heat its chamber.
+ *
+ * Deliberately three-state-ish: an absent `heatedChamber` with an absent
+ * `maxChamberTemp` means "not specified", which reads as false here — the app
+ * says nothing about a chamber it has no evidence exists. The one definition,
+ * shared by the suggestion layer, the session advisory and the New Project
+ * screen, so those three cannot disagree about whether there is a heater to talk
+ * about at all.
+ */
+export function printerCanHeatChamber(printer?: PrinterProfile): boolean {
+  if (!printer || printer.heatedChamber === false) return false;
+  if (printer.maxChamberTemp === 0) return false;
+  return printer.heatedChamber === true || statedLimit(printer.maxChamberTemp) !== undefined;
+}
+
+export function suggestChamberTemp(materialId: string, printer?: PrinterProfile): ChamberSuggestion {
+  const m = getMaterial(materialId);
+  const g = m.chamber;
+  const warnings: string[] = [];
+  const rawMax = typeof printer?.maxChamberTemp === 'number' && Number.isFinite(printer.maxChamberTemp)
+    ? printer.maxChamberTemp
+    : undefined;
+  const machineMax = statedLimit(rawMax);
+  /** The profile positively says there is no chamber heating to use. */
+  const noChamber = printer !== undefined && (printer.heatedChamber === false || rawMax === 0);
+  const canHeat = printerCanHeatChamber(printer);
+
+  if (g.advice === 'unknown') {
+    return {
+      advice: 'unknown', clamped: false, warnings: [g.why],
+      headline: `No chamber guidance exists for ${m.label} — take the number from the spool label or datasheet.`
+    };
+  }
+
+  if (g.advice === 'ambient') {
+    // The correctness trap. "As hot as it goes" is right for ABS and wrong here,
+    // so this branch always answers with a number: zero.
+    warnings.push(g.why);
+    if (canHeat) {
+      const named = printer?.name ? `"${printer.name}"` : 'This printer';
+      const upto = machineMax !== undefined ? ` to ${machineMax} °C` : '';
+      const ceiling = g.maxC !== undefined
+        ? ` If your machine heats the chamber whether you ask it to or not, keep it at or below ${g.maxC} °C.`
+        : '';
+      warnings.push(`${named} can heat its chamber${upto}. Leave that off for ${m.label}.${ceiling}`);
+    }
+    return {
+      advice: 'ambient', suggestedC: 0, clamped: false, warnings,
+      headline: `Leave chamber heating off for ${m.label} — set the chamber target to 0 °C.`
+    };
+  }
+
+  // advice === 'hot'
+  if (noChamber) {
+    const named = printer?.name ? `"${printer.name}"` : 'this printer profile';
+    return {
+      advice: 'hot', clamped: false,
+      headline: `${m.label} wants a warm chamber, but ${named} states no heated chamber. A passive enclosure still helps — expect more warping without one.`,
+      warnings: [g.why]
+    };
+  }
+
+  // A number needs BOTH ends: a machine ceiling to stay under and a material
+  // ceiling to stay under. Missing either, the advice is given in words. An
+  // unstated machine limit is not permission to name a temperature — nothing
+  // here knows what that chamber can hold.
+  if (machineMax === undefined || g.maxC === undefined) {
+    const vendor = g.vendorC !== undefined
+      ? ` The slicer vendor ships ${g.vendorC} °C for it.`
+      : '';
+    const ceiling = g.maxC !== undefined
+      ? ` Never above ${g.maxC} °C for this material.`
+      : '';
+    const reason = machineMax === undefined
+      ? 'this printer profile does not state a chamber limit'
+      : 'PerfectFit has no sourced ceiling for this material';
+    return {
+      advice: 'hot', clamped: false,
+      headline: `${m.label} wants the chamber as warm as the machine allows, but ${reason} — so PerfectFit names no number here.${ceiling}${vendor}`,
+      warnings: [g.why]
+    };
+  }
+
+  const suggestedC = Math.floor(Math.min(machineMax, g.maxC));
+  const clamped = g.maxC < machineMax;
+  warnings.push(g.why);
+  if (g.vendorC !== undefined) {
+    if (suggestedC > g.vendorC) {
+      warnings.push(`The slicer vendor ships ${g.vendorC} °C for ${m.label}; anything from there up to this machine's ${suggestedC} °C is normal. Higher is not automatically better — it is the warping that decides.`);
+    } else if (suggestedC < g.vendorC) {
+      warnings.push(`The slicer vendor ships ${g.vendorC} °C for ${m.label}, which this machine cannot reach — ${suggestedC} °C is its ceiling. Expect a little more warping.`);
+    } else {
+      warnings.push(`This matches the ${g.vendorC} °C the slicer vendor ships for ${m.label}.`);
+    }
+  }
+  return {
+    advice: 'hot', suggestedC, clamped, warnings,
+    // Which of the two ceilings actually decided the number is the whole point
+    // of `clamped`, and saying "as warm as this machine allows" when the
+    // MATERIAL held it back misreports the machine's capability.
+    headline: clamped
+      ? `Run the chamber at ${suggestedC} °C for ${m.label} — the ceiling for this material, below the ${machineMax} °C this machine could reach.`
+      : `Run the chamber at ${suggestedC} °C for ${m.label} — as warm as this machine allows.`
+  };
 }
 
 export function suggestPaRange(extruder: ExtruderType, material: MaterialPreset, highFlow = false, nozzle?: NozzleProfile): RangeSuggestion {
@@ -123,7 +278,12 @@ export function suggestRetractionRange(extruder: ExtruderType, material: Materia
     return {
       start: 2, end: 6, step: 0.5,
       warnings: [
-        'Bowden-fed auxiliary nozzle: start at the 2 mm machine default and raise in ~0.5 mm steps — most filaments land between 2 and 4 mm (up to 6 for stubborn ones). The 30 mm/s default retraction speed is fine.',
+        // Speeds are per feed path, and quoting the main nozzle's figure here
+        // was wrong: the X2D machine preset declares retraction_speed and
+        // deretraction_speed as ["30","30","20","20"], indexed by extruder
+        // variant — slots 0/1 are the direct-drive variants, 2/3 the bowden
+        // ones. 30 mm/s is the direct-drive value; the auxiliary ships 20.
+        'Bowden-fed auxiliary nozzle: start at the 2 mm machine default and raise in ~0.5 mm steps — most filaments land between 2 and 4 mm (up to 6 for stubborn ones). The X2D ships 20 mm/s retract and 20 mm/s deretract on its bowden slots; the 30 mm/s figure is the direct-drive main-nozzle value. Change length before speed.',
         'Bambu Studio bug #10404: leaving the "Bowden Extruder" retraction override unset ("nil") silently falls back to the 0.8 mm MAIN default on the auxiliary nozzle — always tick Length and set it explicitly.'
       ]
     };

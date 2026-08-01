@@ -80,7 +80,7 @@ describe('routing the shipped instructions', () => {
   it('keeps the actions in working order: carry, disable, perform, record, trap', () => {
     const plan = planFor('pressure-advance', tempAndFlowDone());
     const kinds = [...new Set(plan.actions.map((a) => a.kind))];
-    const rank = ['carry-forward', 'disable', 'perform', 'record', 'trap'];
+    const rank = ['carry-forward', 'environment', 'disable', 'perform', 'record', 'trap'];
     expect(kinds).toEqual(rank.filter((k) => kinds.includes(k as never)));
     expect(plan.actions.map((a) => a.order)).toEqual(plan.actions.map((_, i) => i));
   });

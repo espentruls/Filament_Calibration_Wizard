@@ -27,11 +27,12 @@ export {
   isSatisfying,
   keysProducedBy,
   resolveAllValues,
+  resolveChamberAdvisory,
   resolveStepValues,
   resolveValue,
   stepsProducing
 } from './values';
-export type { ValueContext, ValueMeta } from './values';
+export type { ChamberAdvisory, ValueContext, ValueMeta } from './values';
 
 export {
   buildPlan,

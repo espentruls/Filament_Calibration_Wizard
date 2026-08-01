@@ -165,6 +165,26 @@ function valuesTable(entries: { label: string; value: string }[]): HTMLElement {
           h('td', {}, h('span', { class: 'value-chip' }, e.value)))))));
 }
 
+/**
+ * Keep `--gs-pin-top` equal to the sticky app-header's height, so the condensed
+ * plan strip pins EXACTLY beneath it — in either theme and at any width the
+ * header wraps to. Read from the header itself rather than hard-coded, and kept
+ * live by one ResizeObserver on that persistent element (set up once, never per
+ * render — the header outlives every route).
+ */
+let headerHeightSync: ResizeObserver | null = null;
+function syncPinTop(): void {
+  const header = document.querySelector('.app-header');
+  if (!header) return;
+  const set = (): void => document.documentElement.style.setProperty(
+    '--gs-pin-top', `${Math.round(header.getBoundingClientRect().height)}px`);
+  set();
+  if (!headerHeightSync && 'ResizeObserver' in window) {
+    headerHeightSync = new ResizeObserver(set);
+    headerHeightSync.observe(header);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
@@ -208,6 +228,12 @@ export async function renderGuidedSession(
   const view = h('div', {});
   root.append(view);
 
+  // The condensed plan strip pins beneath the app header; keep the offset it
+  // uses honest, and hold the one observer that toggles its condensed state so a
+  // redraw re-wires the new sentinel instead of leaking the old one.
+  syncPinTop();
+  let stripObserver: IntersectionObserver | null = null;
+
   /** Move the guided screen to another step without leaving the route. */
   function select(next: CalibrationId): void {
     focusId = next;
@@ -241,6 +267,7 @@ export async function renderGuidedSession(
     clear(view);
     view.append(
       sessionHeader(session, allProjects),
+      progressStrip(session, printer, resolved, select),
       clusterCard(session, printer, resolved, select),
       installCard(session),
       resolved
@@ -250,6 +277,23 @@ export async function renderGuidedSession(
           h('p', {}, 'This project has no calibration steps yet. Add them from the project page.'),
           h('a', { class: 'btn btn-primary', href: `#/project/${project.id}` }, 'Open the project'))
     );
+
+    // Toggle the strip's condensed state from ONE IntersectionObserver on the
+    // 1px sentinel that sits just below the full route — no scroll listener, no
+    // per-frame measurement. The fold it watches for is the header's lower edge,
+    // not the top of the viewport, so the bar pins the instant the full route
+    // clears the header. Re-wired each draw against the freshly built sentinel.
+    stripObserver?.disconnect();
+    const sentinel = view.querySelector('.gs-plan-sentinel');
+    const pin = view.querySelector<HTMLElement>('.gs-pin');
+    if (sentinel && pin && 'IntersectionObserver' in window) {
+      const pinTop = parseInt(
+        getComputedStyle(document.documentElement).getPropertyValue('--gs-pin-top'), 10) || 64;
+      stripObserver = new IntersectionObserver(
+        entries => pin.classList.toggle('is-condensed', !entries[0].isIntersecting),
+        { rootMargin: `${-pinTop}px 0px 0px 0px`, threshold: 0 });
+      stripObserver.observe(sentinel);
+    }
   }
 
   // --- the current step ----------------------------------------------------
@@ -285,7 +329,7 @@ export async function renderGuidedSession(
     });
     syncGuard();
 
-    const card = h('div', { class: 'instrument' });
+    const card = h('div', { class: 'instrument gs-step-card' });
     const workArea = h('div', {});
 
     card.append(
@@ -860,7 +904,132 @@ function nozzlePanels(session: GuidedSession, allProjects: CalibrationProject[])
 }
 
 // ---------------------------------------------------------------------------
-// The cluster — one instrument per step, and the only progress indicator
+// The progress strip — the plan drawn as a route
+//
+// Two views of the SAME plan, built from one pass over `session.plan`:
+//  • a full route card in the page flow — every step named, measured steps lit
+//    and carrying the value they logged, the open step raised in a lit bay,
+//    pending steps dark;
+//  • a condensed bar that pins under the app header once the full card scrolls
+//    away — the same waypoints as marks, the open step named on the left with
+//    its number and status, and how many steps remain.
+//
+// NO TIME OR ETA is shown anywhere. The app records no print-duration data, so
+// the only honest "how much is left" is a step count. Measured values come from
+// the same `clusterReadings` the six-pack reads, so the strip and the cluster
+// always agree about whose nozzle they describe and what it measures.
+// ---------------------------------------------------------------------------
+
+/** A completed step's logged value, formatted exactly as its dial rounds it. */
+function fmtReading(reading: GaugeReading): { value: string; unit?: string } {
+  const v = reading.value;
+  if (v === undefined || !Number.isFinite(v)) return { value: '—' };
+  return { value: String(Number(v.toFixed(reading.digits))), unit: reading.unit };
+}
+
+function progressStrip(
+  session: GuidedSession,
+  printer: PrinterProfile | undefined,
+  focusId: CalibrationId | null,
+  select: (id: CalibrationId) => void
+): DocumentFragment {
+  const plan = session.plan;
+  const total = plan.length;
+  const byKey = clusterReadings(session, printer);
+  const current = plan.find(s => s.id === focusId) ?? null;
+
+  // The honest substitute for the mockup's ETA: steps still ahead. Consistent
+  // with "Step N of M" — N + (steps left) === M.
+  const stepsLeft = current
+    ? Math.max(0, total - current.position)
+    : Math.max(0, total - session.completedStepIds.length);
+  const leftLabel = stepsLeft === 0 ? 'Last step'
+    : stepsLeft === 1 ? '1 step left'
+      : `${stepsLeft} steps left`;
+
+  const legs: HTMLElement[] = [];
+  const marks: HTMLElement[] = [];
+
+  for (const step of plan) {
+    const complete = step.status === 'completed';
+    const isCurrent = step.id === focusId;
+    // Only a completed step shows a value, and only via the cluster's readings —
+    // an unmeasured step is an em dash, never a fabricated zero (product rule).
+    const key = complete ? step.produces.find(k => byKey.has(k)) : undefined;
+    const reading = key ? byKey.get(key) : undefined;
+    const measured = complete && reading ? fmtReading(reading) : { value: '—' as string };
+    // Optional pending steps read "Optional"; everything else uses the session's
+    // own status vocabulary.
+    const status = complete || !step.optional ? phaseWord(step) : 'Optional';
+
+    const stateCls = complete ? 'is-done' : isCurrent ? 'is-current' : 'is-pending';
+    const legCls = ['gs-leg', stateCls, step.optional ? 'is-optional' : '']
+      .filter(Boolean).join(' ');
+    const a11y = `Step ${step.position} of ${total}, ${step.name}, ${status.toLowerCase()}`
+      + (measured.value !== '—' ? `, ${measured.value}${measured.unit ? ' ' + measured.unit : ''}` : '')
+      + (step.optional ? ', optional' : '');
+
+    const valEl = h('span', { class: 'gs-val' },
+      measured.value, measured.unit ? h('i', {}, measured.unit) : null);
+    const statusEl = h('span', { class: 'gs-status' }, status);
+
+    legs.push(h('button', {
+      type: 'button', class: legCls, 'aria-label': a11y,
+      'aria-current': isCurrent ? 'step' : null,
+      onClick: () => select(step.id)
+    },
+      h('span', { class: 'gs-cursor', 'aria-hidden': 'true' }, '▲'),
+      h('span', { class: 'gs-name' }, step.shortName),
+      h('span', { class: 'gs-mark', 'aria-hidden': 'true' }),
+      isCurrent ? h('span', { class: 'gs-bay' }, valEl, statusEl) : [valEl, statusEl]));
+
+    marks.push(h('button', {
+      type: 'button',
+      class: ['gs-pin-mark', stateCls, step.optional ? 'is-optional' : '']
+        .filter(Boolean).join(' '),
+      'aria-label': a11y,
+      'aria-current': isCurrent ? 'step' : null,
+      onClick: () => select(step.id)
+    }));
+  }
+
+  // `position` is 1-based, so `plan[position]` is the step AFTER the open one.
+  const nextStep = current ? plan[current.position] ?? null : null;
+  const footCaption = nextStep
+    ? frag('Next after this is ', h('strong', {}, nextStep.shortName), '.')
+    : current ? 'This is the last step in the plan.'
+      : 'Every step in this plan is done.';
+
+  const fullCard = h('div', { class: 'instrument gs-plan', style: 'margin-top:var(--s-5)' },
+    h('div', { class: 'gs-plan-head' },
+      h('span', { class: 'placard' }, 'Calibration plan'),
+      h('span', { class: 'readout-label' }, 'Lit = measured · dark = not yet run')),
+    h('nav', { class: 'gs-route', 'aria-label': 'Calibration plan' }, legs),
+    h('div', { class: 'rule-ticks', 'aria-hidden': 'true' }),
+    h('div', { class: 'gs-foot' },
+      h('p', { class: 'field-help', style: 'margin:0' }, footCaption),
+      h('span', { class: 'readout-label', style: 'white-space:nowrap' }, leftLabel)));
+
+  const pin = h('div', { class: 'gs-pin' },
+    h('div', { class: 'gs-slim' },
+      h('div', { class: 'gs-slim-inner' },
+        current
+          ? h('p', { class: 'gs-now' },
+            h('span', { class: 'gs-now-idx' }, `Step ${current.position} of ${total}`),
+            h('span', { class: 'gs-now-name' }, current.shortName),
+            h('span', { class: 'gs-now-state' }, phaseWord(current)))
+          : h('span', { class: 'gs-now-idx' }, `${total} steps`),
+        h('span', { class: 'gs-pin-sep', 'aria-hidden': 'true' }),
+        h('nav', { class: 'gs-pin-route', 'aria-label': 'Calibration plan' }, marks),
+        h('span', { class: 'header-spacer' }),
+        h('span', { class: 'gs-slim-right' }, leftLabel))));
+
+  return frag(pin, fullCard, h('div', { class: 'gs-plan-sentinel', 'aria-hidden': 'true' }));
+}
+
+// ---------------------------------------------------------------------------
+// The cluster — one instrument per step. The progress strip above is the plan's
+// primary route; the cluster is the per-step dial face you work against.
 // ---------------------------------------------------------------------------
 
 /**
@@ -1060,6 +1229,9 @@ function actionItem(a: SessionAction): HTMLElement {
         h('span', {}, a.title),
         a.severity === 'alert' ? h('span', { class: 'badge badge-bad' }, 'Known trap') : null,
         a.kind === 'disable' ? h('span', { class: 'badge badge-warn' }, 'Turn off first') : null,
+        // A machine setting rather than a preset one — set on the printer, and
+        // not something this session measures or installs anywhere.
+        a.kind === 'environment' ? h('span', { class: 'badge' }, 'On the machine') : null,
         a.kind === 'carry-forward' ? h('span', { class: 'badge badge-ok' }, 'Carried forward') : null),
       a.path ? h('p', {}, h('span', { class: 'placard' }, 'Where'), ' ', a.path) : null,
       a.field ? h('p', {}, h('span', { class: 'placard' }, 'Field'), ' ', h('strong', {}, a.field)) : null,
