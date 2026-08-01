@@ -1,4 +1,4 @@
-# Trim — Filament Calibration
+# Trim: Filament Calibration
 
 Create a calibrated filament profile for Orca Slicer or Bambu Studio in one guided workflow, on
 single-nozzle, dual-nozzle and multi-nozzle printers. No tutorials, no guesswork, no spreadsheets.

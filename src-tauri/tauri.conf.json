@@ -14,7 +14,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "Trim — Filament Calibration",
+        "title": "Trim: Filament Calibration",
         "width": 1100,
         "height": 800,
         "minWidth": 700,
